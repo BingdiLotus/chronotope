@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -113,14 +114,47 @@ class OpenAIProvider(LLMProvider):
 
 
 class FakeProvider(LLMProvider):
-    """e2e/演示实现：流式回放固定回复（模拟 delta 帧，可配延迟）。"""
+    """e2e/演示实现：流式回放固定回复（模拟 delta 帧，可配延迟）。
 
-    def __init__(self, reply: str = "你好，我是 Chronotope 演示助手。", chunk_ms: int = 20) -> None:
+    脚本模式（script 非空）：按轮产出工具调用/终答——
+    第 n 次 stream() 消费第 n 轮；tool_call 轮发交棒帧，final 轮流式终答。
+    """
+
+    def __init__(
+        self,
+        reply: str = "你好，我是 Chronotope 演示助手。",
+        chunk_ms: int = 20,
+        script: list[dict] | None = None,
+    ) -> None:
         self.reply = reply
         self.chunk_ms = chunk_ms
+        self.script = script
+        self.turn = 0
 
     async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
-        for i in range(0, len(self.reply), 3):  # 每 3 字符一个 delta
+        if self.script is not None:
+            # 脚本循环消费（turn 对 len 取模）：多次 run 可重复演示，无需重启
+            turn = self.script[self.turn % len(self.script)]
+            self.turn += 1
+            if "tool_call" in turn:
+                tc = turn["tool_call"]
+                yield StreamChunk(tool_calls=[{
+                    "index": 0,
+                    "id": tc.get("id", "t_fake"),
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc.get("arguments", {})),
+                    },
+                }])
+                return
+            final = turn.get("final", self.reply)
+            for i in range(0, len(final), 3):  # 每 3 字符一个 delta
+                await asyncio.sleep(self.chunk_ms / 1000)
+                yield StreamChunk(delta=final[i : i + 3])
+            yield StreamChunk(usage={"tokens_in": 4, "tokens_out": len(final) // 3})
+            return
+        for i in range(0, len(self.reply), 3):
             await asyncio.sleep(self.chunk_ms / 1000)
             yield StreamChunk(delta=self.reply[i : i + 3])
         yield StreamChunk(usage={"tokens_in": 4, "tokens_out": len(self.reply) // 3})
@@ -129,8 +163,12 @@ class FakeProvider(LLMProvider):
 def build_provider() -> LLMProvider:
     """按环境构造 provider：HARNESS_FAKE_MODEL=1 → Fake（e2e/演示），否则 LiteLLM 网关。"""
     if os.environ.get("HARNESS_FAKE_MODEL") == "1":
+        script = None
+        if raw := os.environ.get("HARNESS_FAKE_SCRIPT"):
+            script = json.loads(raw)  # [{"tool_call":{...}} | {"final":"..."}, ...]
         return FakeProvider(
-            reply=os.environ.get("HARNESS_FAKE_REPLY", "你好，我是 Chronotope 演示助手。")
+            reply=os.environ.get("HARNESS_FAKE_REPLY", "你好，我是 Chronotope 演示助手。"),
+            script=script,
         )
     api_key = os.environ.get("LITELLM_API_KEY", "")
     if not api_key:

@@ -7,7 +7,8 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/chronotope-executor ./cmd/executor
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 65532 chronotope
+# docker-cli：docker driver 经挂载的 /var/run/docker.sock 编排宿主机沙箱容器
+RUN apk add --no-cache ca-certificates tzdata docker-cli && adduser -D -u 65532 chronotope
 USER chronotope
 COPY --from=build /out/chronotope-executor /usr/local/bin/chronotope-executor
 EXPOSE 9082

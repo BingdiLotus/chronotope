@@ -37,6 +37,9 @@ register-worker: ## 注册 worker 端点到 Restate（dev 用；生产由发布�
 e2e: ## W1 闭环 e2e（前置：make dev-up + register-worker + 三服务运行中）
 	bash test/e2e/w1-loop.sh
 
+e2e-w2: ## W2 沙箱闭环 e2e（前置：同上 + executor 运行 + harness 脚本模式，见脚本头注释）
+	bash test/e2e/w2-sandbox.sh
+
 up: ## 全量构建并启动（api/worker/executor/harness + 基础设施；web 属 W4 profile）
 	$(DC) up -d --build
 

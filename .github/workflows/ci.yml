@@ -49,13 +49,13 @@ jobs:
         run: GOWORK=off go build ./...
 
   e2e:
-    name: e2e（compose 全链路 W1 闭环，fake 模型无密钥）
+    name: e2e（compose 全链路 W1/W2 闭环，fake 模型无密钥）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: 启动全栈（api/worker/harness/executor + postgres/restate/minio/litellm）
         run: |
-          HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker api
+          HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker executor api
       - name: 等待 api 就绪
         run: |
           for i in $(seq 1 90); do
@@ -69,6 +69,16 @@ jobs:
             -d '{"uri":"http://worker:9080","version":"v1","use_http_11":true,"force":true}'
       - name: W1 闭环 e2e
         run: bash test/e2e/w1-loop.sh http://localhost:8080
+      - name: W2 沙箱闭环 e2e（harness 切脚本模式 → 重启容器）
+        env:
+          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/hello.py","content":"print(42)"}}},{"tool_call":{"name":"bash","arguments":{"command":"python3 /workspace/hello.py"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/hello.py"}}},{"final":"沙箱闭环完成，输出 42。"}]'
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w2-sandbox.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

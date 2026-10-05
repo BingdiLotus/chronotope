@@ -86,7 +86,7 @@ async def test_code_tool_hands_off():
     frames = await collect(provider, base_request())
     assert frames[-1].type == "tool_call", "代码工具必须交棒（不内联执行）"
     assert frames[-1].payload["name"] == "bash"
-    assert frames[-1].payload["arguments"] == '{"command":"pytest"}'
+    assert frames[-1].payload["arguments"] == {"command": "pytest"}, "arguments 应为 JSON 对象（契约样例）"
     assert frames[-1].payload["id"] == "t_9"
 
 

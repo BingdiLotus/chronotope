@@ -111,10 +111,14 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
                 name = tc["function"]["name"]
                 if name in p.CODE_TOOLS:
                     # 代码类工具：发 tool_call 帧交棒（worker → executor），本段循环结束
+                    # 契约样例（runs-protocol.md）：arguments 为 JSON 对象（OpenAI 字符串形态在此转换）
+                    try:
+                        arguments = json.loads(tc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        arguments = {}
                     yield _sse(
                         p.frame("tool_call", seq, {
-                            "id": tc["id"], "name": name,
-                            "arguments": tc["function"]["arguments"],
+                            "id": tc["id"], "name": name, "arguments": arguments,
                         })
                     )
                     return
