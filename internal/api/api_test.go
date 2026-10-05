@@ -454,3 +454,35 @@ func waitFor(t *testing.T, done <-chan struct{}, cond func() bool) {
 	}
 	t.Fatal("等待条件超时")
 }
+
+func TestSessionActionPause(t *testing.T) {
+	h, fs, ing := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/actions", `{"action":"pause"}`, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("pause 应 202，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); !strings.HasPrefix(last, "POST /session_object/"+sessionID+"/Pause") {
+		t.Fatalf("应转发 session_object.Pause: %q", last)
+	}
+}
+
+func TestSessionActionUnknown(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/actions", `{"action":"teleport"}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("未知动作应 422，得 %d", rec.Code)
+	}
+}
+
+func TestApprovalWebhook(t *testing.T) {
+	h, _, ing := setup(t)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/webhooks/approval/r_1", `{"payload":"approve"}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("审批回调应 200，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); last != "POST /webhook/Resolve" {
+		t.Fatalf("应转发 webhook.Resolve: %q", last)
+	}
+}

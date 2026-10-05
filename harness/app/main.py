@@ -109,8 +109,9 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
             )
             for tc in ordered:
                 name = tc["function"]["name"]
-                if name in p.CODE_TOOLS:
-                    # 代码类工具：发 tool_call 帧交棒（worker → executor），本段循环结束
+                if name in p.CODE_TOOLS or name in p.CONTROL_TOOLS:
+                    # 代码类工具 → worker 转 executor；控制类工具 → worker awakeable/子 Agent。
+                    # 两者皆交棒（tool_call 帧），本段循环结束。
                     # 契约样例（runs-protocol.md）：arguments 为 JSON 对象（OpenAI 字符串形态在此转换）
                     try:
                         arguments = json.loads(tc["function"]["arguments"] or "{}")

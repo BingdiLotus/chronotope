@@ -16,6 +16,8 @@ type Store interface {
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (seq int64, err error)
 	AppendMessage(ctx context.Context, sessionID, runID string, step int, role string, content json.RawMessage) error
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
+	// GetRun 供 webhook 解析 run → session（HITL 审批回调按 run_id 定位 awakeable）。
+	GetRun(ctx context.Context, runID string) (*store.Run, error)
 }
 
 // SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object
@@ -24,6 +26,8 @@ type SessionSource interface {
 	GetState(ctx restate.Context, sessionID string) (SessionState, error)
 	// AttachSandbox 回填会话作用域沙箱 id（懒创建后调用；幂等）。
 	AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error
+	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
+	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error
 }
 
 // Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
@@ -48,5 +52,12 @@ func (RestateSessionSource) GetState(ctx restate.Context, sessionID string) (Ses
 func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "AttachSandbox").
 		Request(sandboxID)
+	return err
+}
+
+// SetPendingAwakeable 记录挂起的审批 awakeable（HITL）。
+func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "SetPendingAwakeable").
+		Request(awakeableID)
 	return err
 }

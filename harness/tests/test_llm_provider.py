@@ -89,23 +89,23 @@ def test_openai_tools_conversion():
 
 
 async def test_fake_provider_script_turns():
-    """脚本模式：第 n 次 stream() 消费第 n 轮（W2 e2e 的模型替身）。"""
+    """脚本模式：按 run 内 step 索引（确定性/重放安全/并发安全，W2/W3 e2e 的模型替身）。"""
     from app.llm import FakeProvider
 
     provider = FakeProvider(script=[
         {"tool_call": {"name": "write_file", "arguments": {"path": "/workspace/h.py", "content": "print(42)"}}},
         {"final": "完成"},
     ])
-    req = p.RunRequest(
+    # step=0 → 工具调用（交棒）；step=1 → 流式终答
+    req0 = p.RunRequest(
         protocol="1.0", run_id="r_1", session_id="s_1", step=0, model="m",
         messages=[p.Message(role="user", content="x")],
     )
-    # 第 1 轮：工具调用（交棒）
-    chunks1 = [c async for c in provider.stream(req)]
+    chunks1 = [c async for c in provider.stream(req0)]
     assert chunks1[-1].tool_calls[0]["function"]["name"] == "write_file"
     assert chunks1[-1].tool_calls[0]["function"]["arguments"] == '{"path": "/workspace/h.py", "content": "print(42)"}'
-    # 第 2 轮：流式终答
-    chunks2 = [c async for c in provider.stream(req)]
+    req1 = req0.model_copy(update={"step": 1})
+    chunks2 = [c async for c in provider.stream(req1)]
     texts = "".join(c.delta for c in chunks2 if c.delta)
     assert texts == "完成"
     assert any(c.usage for c in chunks2)

@@ -26,6 +26,6 @@ func BuildEndpoint(deps *Deps) (http.Handler, error) {
 	ep.Bind(sessionObjectDef()).
 		Bind(runWorkflowDef(deps)).
 		Bind(schedulerDef()).
-		Bind(webhookDef())
+		Bind(webhookDef(deps))
 	return ep.Handler()
 }

@@ -36,6 +36,7 @@ type fakeStore struct {
 		sessionID, runID, role, content string
 		step                            int
 	}
+	runs map[string]*store.Run
 }
 
 func (f *fakeStore) AppendEvent(_ context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error) {
@@ -53,6 +54,13 @@ func (f *fakeStore) AppendMessage(_ context.Context, sessionID, runID string, st
 
 func (f *fakeStore) ListMessages(context.Context, string, int) ([]store.Message, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) GetRun(_ context.Context, runID string) (*store.Run, error) {
+	if r, ok := f.runs[runID]; ok {
+		return r, nil
+	}
+	return nil, store.ErrNotFound
 }
 
 // fakeHarness 按脚本顺序返回结果，并记录每次请求（断言消息组装）。
@@ -73,6 +81,7 @@ func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error
 type fakeSessions struct {
 	state    SessionState
 	attached []string
+	pending  string
 }
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
@@ -81,6 +90,11 @@ func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, erro
 
 func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) error {
 	f.attached = append(f.attached, sandboxID)
+	return nil
+}
+
+func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID string) error {
+	f.pending = awakeableID
 	return nil
 }
 

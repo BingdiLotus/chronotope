@@ -81,13 +81,15 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/", h.getSession)            // session 状态 + 最近事件
 		r.Get("/events", h.streamEvents)    // SSE 时间轴，after=seq 断线续读
 		r.Post("/runs", h.submitRun)        // 提交任务；Idempotency-Key 必带
-		r.Post("/actions", notImplemented)  // pause|resume|wake|cancel|steer（W3）
+		r.Post("/actions", h.sessionAction) // pause|resume|wake|cancel|steer
 		r.Post("/messages", notImplemented) // 人类消息注入（W5+）
 		r.Post("/skills", notImplemented)   // skill 安装（W6）
 		r.Post("/mcp", notImplemented)      // MCP 连接（W6）
 		r.Delete("/", h.deleteSession)      // tombstone 两段式删除（边界语义 §4）
 		r.Get("/export", notImplemented)    // 标准 tar 导出（W8）
 	})
+	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
+	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)
 	return r
 }
 

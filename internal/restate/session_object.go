@@ -42,7 +42,8 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("Wake", restate.NewObjectHandler[WakeInput, SessionState](wakeSession)).
 		Handler("Pause", restate.NewObjectHandler[restate.Void, SessionState](pauseSession)).
 		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession)).
-		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox))
+		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
+		Handler("SetPendingAwakeable", restate.NewObjectHandler[string, SessionState](setPendingAwakeable))
 }
 
 // attachSandbox 记录会话作用域沙箱（懒创建后回填；幂等：同值重复设置无害）。
@@ -53,6 +54,19 @@ func attachSandbox(ctx restate.ObjectContext, sandboxID string) (SessionState, e
 	}
 	if state.SandboxID != sandboxID {
 		state.SandboxID = sandboxID
+		restate.Set(ctx, sessionStateKey, state)
+	}
+	return state, nil
+}
+
+// setPendingAwakeable 记录挂起的审批 awakeable（HITL；webhook resolve 前可查）。
+func setPendingAwakeable(ctx restate.ObjectContext, awakeableID string) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	if state.PendingAwakeable != awakeableID {
+		state.PendingAwakeable = awakeableID
 		restate.Set(ctx, sessionStateKey, state)
 	}
 	return state, nil

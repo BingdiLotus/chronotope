@@ -194,3 +194,54 @@ func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// POST /sessions/{sessionID}/actions —— 控制动作（契约规范 §2；经 worker 控制面转发）。
+func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req sessionapi.ActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, 422, "invalid action request")
+		return
+	}
+	switch req.Action {
+	case sessionapi.ActionPause, sessionapi.ActionResume, sessionapi.ActionWake:
+		// 状态机迁移在 session_object（单写者串行）；handler 名与动作一一对应
+		handler := map[sessionapi.ActionName]string{
+			sessionapi.ActionPause:  "Pause",
+			sessionapi.ActionResume: "Resume",
+			sessionapi.ActionWake:   "Wake",
+		}[req.Action]
+		var state struct {
+			Phase string `json:"phase"`
+		}
+		err := h.Ingress.Call(r.Context(), "/session_object/"+sessionID+"/"+handler,
+			http.MethodPost, nil, &state)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, 502, "session_object action failed: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": sessionID, "action": req.Action, "phase": state.Phase})
+	case sessionapi.ActionCancel, sessionapi.ActionSteer:
+		writeError(w, http.StatusNotImplemented, 501, "action "+string(req.Action)+" 未实现（W3+）")
+	default:
+		writeError(w, http.StatusUnprocessableEntity, 422, "unknown action: "+string(req.Action))
+	}
+}
+
+// POST /webhooks/approval/{runID} —— HITL 审批回调：转发 worker webhook 服务 resolve awakeable（幂等）。
+func (h *Handler) approvalWebhook(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	var req struct {
+		Payload string `json:"payload"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	var out string // webhook 服务返回 JSON 字符串 "resolved"
+	err := h.Ingress.Call(r.Context(), "/webhook/Resolve", http.MethodPost,
+		map[string]any{"run_id": runID, "payload": req.Payload}, &out)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, 502, "webhook resolve failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "status": out})
+}

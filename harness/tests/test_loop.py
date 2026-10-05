@@ -90,6 +90,17 @@ async def test_code_tool_hands_off():
     assert frames[-1].payload["id"] == "t_9"
 
 
+async def test_control_tool_hands_off():
+    """控制工具（request_approval）同样交棒——worker awakeable，harness 绝不内联。"""
+    provider = ScriptedProvider([[
+        StreamChunk(delta="需要审批。", tool_calls=[tc(0, "t_2", "request_approval", '{"question":"允许吗？"}')]),
+    ]])
+    frames = await collect(provider, base_request())
+    assert frames[-1].type == "tool_call"
+    assert frames[-1].payload["name"] == "request_approval"
+    assert frames[-1].payload["arguments"] == {"question": "允许吗？"}
+
+
 async def test_api_tool_inline_then_done(monkeypatch):
     """API 工具内联执行 → 结果回喂 → 下一轮终答（两轮流式脚本）。"""
     async def fake_http_request(name, arguments):

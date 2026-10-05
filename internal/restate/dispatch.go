@@ -78,12 +78,35 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), nil
 
 	case runs.ToolRequestApproval:
-		// 控制类工具：W3 awakeable（HITL）
-		return "", restate.ToTerminalError(fmt.Errorf("request_approval 未接入（W3 HITL）"))
+		// 控制类工具：awakeable 挂起（零进程占用），webhook resolve 后继续（W3 HITL）
+		return awaitApproval(ctx, deps, in, runID, step, tc, emit)
 
 	default:
 		return "", restate.ToTerminalError(fmt.Errorf("工具 %q 不支持（四类路由：代码→executor / 控制→awakeable / MCP→W6 / API→harness 内联）", tc.Name))
 	}
+}
+
+// awaitApproval 是 HITL 控制工具的挂起/恢复路径（worker-架构设计 §3 的 ControlTool 分支）：
+// 建 awakeable（journaled）→ id 存入会话状态 → awaiting_approval 事件 →
+// 直接阻塞在 Result()（挂起 = 零进程占用；SDK 1.x 禁在 Run 闭包内使用 Context 操作，
+// 阻塞本身即挂起点）→ webhook resolve 后从 journal 恢复 → resumed 事件 → 结果回喂。
+func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall, emit *Emitter) (string, error) {
+	awakeable := restate.Awakeable[string](ctx)
+	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id()); err != nil {
+		return "", err
+	}
+	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunAwaitingApproval, "await", "", map[string]any{
+		"step": step, "awakeable_id": awakeable.Id(),
+		"tool": tc.Name, "arguments": json.RawMessage(tc.Arguments),
+	})
+	result, err := awakeable.Result() // 挂起：零进程占用，直到跨 HTTP resolve
+	if err != nil {
+		return "", err
+	}
+	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunResumed, "resume", "", map[string]any{
+		"step": step, "result": result,
+	})
+	return fmt.Sprintf(`{"name":%q,"result":{"approved":%s}}`, tc.Name, mustJSONString(result)), nil
 }
 
 // ensureSandbox 会话作用域沙箱懒创建（journaled：重放返回缓存 sandbox_id，不重复创建）

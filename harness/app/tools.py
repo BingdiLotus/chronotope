@@ -8,7 +8,9 @@ from typing import Any
 
 import httpx
 
-# API 类工具（harness 内联执行）；web_search 需要检索密钥（W1 后置，见 run_api_tool）
+# API 类工具（harness 内联执行）；web_search 需要检索密钥（W1 后置，见 run_api_tool）。
+# 注意：控制类工具（request_approval/spawn_subagent）与代码类工具一样交棒，
+# 定义在 protocol.CONTROL_TOOLS / protocol.CODE_TOOLS，不在此处内联。
 API_TOOLS = {"http_request", "web_search"}
 
 

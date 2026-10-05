@@ -129,13 +129,12 @@ class FakeProvider(LLMProvider):
         self.reply = reply
         self.chunk_ms = chunk_ms
         self.script = script
-        self.turn = 0
 
     async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
         if self.script is not None:
-            # 脚本循环消费（turn 对 len 取模）：多次 run 可重复演示，无需重启
-            turn = self.script[self.turn % len(self.script)]
-            self.turn += 1
+            # 脚本按 (run 内 step) 索引——确定性 + 重放安全 + 并发安全：
+            # 同一步重发恒得同一轮脚本；不同 run 的 step 序列各自推进。
+            turn = self.script[req.step % len(self.script)]
             if "tool_call" in turn:
                 tc = turn["tool_call"]
                 yield StreamChunk(tool_calls=[{
