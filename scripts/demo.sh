@@ -45,7 +45,7 @@ bash test/e2e/w3-hitl.sh "$API" > /tmp/demo-w3h.log 2>&1 && pass "W3 HITL 审批
 
 # 6. W3 定时唤醒（harness 回默认 fake）
 HARNESS_FAKE_SCRIPT= HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
-sleep 3
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
 bash test/e2e/w3-schedule.sh "$API" > /tmp/demo-w3s.log 2>&1 && pass "W3 定时唤醒（5 项断言）" || { fail "W3 定时唤醒"; tail -5 /tmp/demo-w3s.log; }
 
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="

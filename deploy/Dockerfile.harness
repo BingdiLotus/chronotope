@@ -4,6 +4,8 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 COPY harness/pyproject.toml harness/uv.lock* ./
+# hatchling 构建 wheel 需要 README（pyproject readme 字段）
+COPY harness/README.md ./README.md
 RUN uv sync --frozen --no-install-project --no-dev
 COPY harness/app ./app
 RUN uv sync --frozen --no-dev

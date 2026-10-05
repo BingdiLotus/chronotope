@@ -45,12 +45,20 @@ type harnessClient struct {
 	client  *http.Client
 }
 
+// noKeepAliveTransport 禁用连接复用（harness/executor 共用；见 NewHarnessClient 注释）。
+var noKeepAliveTransport = &http.Transport{
+	DisableKeepAlives:   true,
+	MaxIdleConnsPerHost: -1,
+}
+
 // NewHarnessClient 构造 harness 客户端（baseURL 形如 http://harness:8000）。
 func NewHarnessClient(baseURL string) Harness {
 	return &harnessClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		// 分钟级 SSE 长流：不设总超时，仅依赖调用方 ctx 与帧间隔语义（契约规范 §3）
-		client: &http.Client{},
+		// 分钟级 SSE 长流：不设总超时，仅依赖调用方 ctx 与帧间隔语义（契约规范 §3）；
+		// 禁用连接复用——harness 无状态可随时重建（容器 IP 会变），池化死连接
+		// 导致瞬时「unexpected EOF」（demo 场景实测），每次调用新建连接 + 新鲜 DNS
+		client: &http.Client{Transport: noKeepAliveTransport},
 	}
 }
 

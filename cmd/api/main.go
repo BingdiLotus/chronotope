@@ -56,7 +56,8 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	// 不设全局 Timeout：SSE 时间轴是长连接（由客户端断开控制生命周期）；
+	// 提交任务的阻塞时长由 ingress 客户端超时（10min）约束
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","service":"chronotope-api"}`))

@@ -38,7 +38,8 @@ type executorClient struct {
 
 // NewExecutorClient 构造 executor 客户端（baseURL 形如 http://executor:9082）。
 func NewExecutorClient(baseURL string) Executor {
-	return &executorClient{baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{}}
+	// 禁用连接复用：executor 可重启（容器 IP 会变），复用死连接导致瞬时 EOF
+	return &executorClient{baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Transport: noKeepAliveTransport}}
 }
 
 func (c *executorClient) CreateSandbox(ctx context.Context, req execproto.CreateSandboxRequest) (string, error) {
