@@ -36,6 +36,11 @@ type Store interface {
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error
 	CreateSchedule(ctx context.Context, id, orgID, sessionID string, delay time.Duration, payload json.RawMessage) error
 	ListEvents(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error)
+	ListEventsAfterID(ctx context.Context, afterID int64, limit int) ([]store.EventRow, error)
+	ListSessionsByOrg(ctx context.Context, orgID string, limit int) ([]store.Session, error)
+	ResetSessionUsage(ctx context.Context, sessionID string) error
+	UpsertUsage(ctx context.Context, u store.UsageRow) error
+	ListUsage(ctx context.Context, sessionID string) ([]store.UsageRow, error)
 }
 
 // RestateIngress 是 worker 控制面的最小接口（api → Restate ingress，worker-架构设计 §8）。
@@ -73,7 +78,8 @@ func (h *Handler) Router() chi.Router {
 	r.Use(middleware.Recoverer)
 
 	r.Route("/orgs/{orgID}", func(r chi.Router) {
-		r.Post("/agents", h.createAgent) // 创建/升级 agent（config 全量，version+1）
+		r.Post("/agents", h.createAgent)   // 创建/升级 agent（config 全量，version+1）
+		r.Get("/sessions", h.listSessions) // 会话列表（控制台最小页）
 	})
 	r.Route("/agents/{agentID}", func(r chi.Router) {
 		r.Post("/sessions", h.createSession) // 创建 session → ready（沙箱懒创建）
@@ -89,6 +95,7 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/mcp", notImplemented)         // MCP 连接（W6）
 		r.Delete("/", h.deleteSession)         // tombstone 两段式删除（边界语义 §4）
 		r.Get("/export", notImplemented)       // 标准 tar 导出（W8）
+		r.Get("/usage", h.getUsage)            // 三轴计量（活跃秒/token/计算秒，1min 桶）
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)

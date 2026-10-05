@@ -3,6 +3,7 @@ package restate
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -24,6 +25,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		if err != nil {
 			return "", err
 		}
+		started := time.Now()
 		res, err := restate.Run(ctx, func(rc restate.RunContext) (*ExecResult, error) {
 			return deps.Executor.Execute(rc, sandboxID, tc.Name, input,
 				execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
@@ -34,6 +36,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
 			"step": step, "tool": tc.Name, "exit": res.Exit,
 			"output": truncate(res.Output, 4096), "output_ref": res.OutputRef, "truncated": res.Truncated,
+			"duration_ms": time.Since(started).Milliseconds(), // 计算秒计量依据（W4）
 		})
 		return jsonToolResult(tc.Name, res), nil
 

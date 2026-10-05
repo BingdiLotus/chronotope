@@ -284,3 +284,53 @@ func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		"schedule_id": id, "session_id": sessionID, "woken": out.Woken, "run_id": out.RunID, "final": out.Final,
 	})
 }
+
+// GET /sessions/{sessionID}/usage —— 三轴计量（活跃秒 / token / 计算秒，1min 桶）。
+func (h *Handler) getUsage(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if _, err := h.Store.GetSession(r.Context(), sessionID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	rows, err := h.Store.ListUsage(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	type bucketOut struct {
+		Bucket         string  `json:"bucket"`
+		ActiveSeconds  float64 `json:"active_seconds"`
+		TokensIn       int64   `json:"tokens_in"`
+		TokensOut      int64   `json:"tokens_out"`
+		ComputeSeconds float64 `json:"compute_seconds"`
+	}
+	out := make([]bucketOut, 0, len(rows))
+	for _, u := range rows {
+		out = append(out, bucketOut{
+			Bucket: u.Bucket.UTC().Format(time.RFC3339), ActiveSeconds: u.ActiveSeconds,
+			TokensIn: u.TokensIn, TokensOut: u.TokensOut, ComputeSeconds: u.ComputeSeconds,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "buckets": out})
+}
+
+// GET /orgs/{orgID}/sessions —— 会话列表（控制台最小页；契约增量端点）。
+func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	sessions, err := h.Store.ListSessionsByOrg(r.Context(), orgID, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	type sessionOut struct {
+		ID           string                  `json:"id"`
+		AgentID      string                  `json:"agent_id"`
+		Status       sessionapi.SessionPhase `json:"status"`
+		LastActiveAt *time.Time              `json:"last_active_at"`
+	}
+	out := make([]sessionOut, 0, len(sessions))
+	for _, sess := range sessions {
+		out = append(out, sessionOut{ID: sess.ID, AgentID: sess.AgentID, Status: sess.Status, LastActiveAt: sess.LastActiveAt})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "sessions": out})
+}

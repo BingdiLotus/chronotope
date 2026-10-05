@@ -271,3 +271,47 @@ func randSuffix() string {
 	}
 	return hex.EncodeToString(b)
 }
+
+func TestUsageUpsertAccumulates(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_usage_" + randSuffix()
+	bucket := time.Now().UTC().Truncate(time.Minute)
+
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agentID := "a_" + key
+	if err := s.CreateAgent(ctx, agentID, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, agentID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := s.UpsertUsage(ctx, store.UsageRow{SessionID: key, Bucket: bucket, ActiveSeconds: 10, TokensIn: 5, TokensOut: 3, ComputeSeconds: 1.5}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// 同桶冲突 → 累加
+	if err := s.UpsertUsage(ctx, store.UsageRow{SessionID: key, Bucket: bucket, ActiveSeconds: 5, TokensIn: 2, TokensOut: 1, ComputeSeconds: 0.5}); err != nil {
+		t.Fatalf("upsert again: %v", err)
+	}
+	rows, err := s.ListUsage(ctx, key)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("应 1 个桶，得 %d", len(rows))
+	}
+	u := rows[0]
+	if u.ActiveSeconds != 15 || u.TokensIn != 7 || u.TokensOut != 4 || u.ComputeSeconds != 2.0 {
+		t.Fatalf("累加不符: %+v", u)
+	}
+	// 重建式聚合前置：清空
+	if err := s.ResetSessionUsage(ctx, key); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if rows, _ := s.ListUsage(ctx, key); len(rows) != 0 {
+		t.Fatalf("reset 后应为空: %+v", rows)
+	}
+}

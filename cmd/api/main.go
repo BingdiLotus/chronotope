@@ -8,6 +8,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -45,6 +46,10 @@ func main() {
 
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
 	h.StartPoller(ctx)
+
+	// 三轴计量聚合（活跃秒 / token / 计算秒，1min 桶；重建式，W4）
+	agg := &api.Aggregator{Store: st, Logger: slog.Default()}
+	go agg.Run(ctx)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

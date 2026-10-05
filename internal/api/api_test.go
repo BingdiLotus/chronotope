@@ -26,6 +26,7 @@ type fakeStore struct {
 	sessions map[string]*store.Session
 	runs     map[string]*store.Run
 	events   []store.EventRow
+	usage    []store.UsageRow
 	seq      int64
 }
 
@@ -135,6 +136,65 @@ func (f *fakeStore) CreateSchedule(_ context.Context, id, orgID, sessionID strin
 	return nil
 }
 
+func (f *fakeStore) ListEventsAfterID(_ context.Context, afterID int64, limit int) ([]store.EventRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.EventRow
+	for _, e := range f.events {
+		if e.ID > afterID && len(out) < limit {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListSessionsByOrg(_ context.Context, orgID string, limit int) ([]store.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.Session
+	for _, sess := range f.sessions {
+		if sess.OrgID == orgID && len(out) < limit {
+			out = append(out, *sess)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ResetSessionUsage(_ context.Context, sessionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.usage = nil
+	return nil
+}
+
+func (f *fakeStore) UpsertUsage(_ context.Context, u store.UsageRow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, existing := range f.usage {
+		if existing.SessionID == u.SessionID && existing.Bucket.Equal(u.Bucket) {
+			f.usage[i].ActiveSeconds += u.ActiveSeconds
+			f.usage[i].TokensIn += u.TokensIn
+			f.usage[i].TokensOut += u.TokensOut
+			f.usage[i].ComputeSeconds += u.ComputeSeconds
+			return nil
+		}
+	}
+	f.usage = append(f.usage, u)
+	return nil
+}
+
+func (f *fakeStore) ListUsage(_ context.Context, sessionID string) ([]store.UsageRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.UsageRow
+	for _, u := range f.usage {
+		if u.SessionID == sessionID {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) ListEvents(_ context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -151,7 +211,7 @@ func (f *fakeStore) addEvent(sessionID string, typ event.Type) int64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
-	e := store.EventRow{SessionID: sessionID, Seq: f.seq, Type: typ, Payload: json.RawMessage(`{"v":1}`), At: time.Now()}
+	e := store.EventRow{ID: f.seq, SessionID: sessionID, Seq: f.seq, Type: typ, Payload: json.RawMessage(`{"v":1}`), At: time.Now()}
 	f.events = append(f.events, e)
 	return f.seq
 }
