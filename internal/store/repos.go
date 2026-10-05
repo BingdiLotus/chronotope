@@ -123,6 +123,20 @@ func (s *Store) SoftDeleteSession(ctx context.Context, id string) error {
 	return nil
 }
 
+// SessionOrg 读取会话所属 org（executor 创建沙箱行时回填 org_id 用）。
+func (s *Store) SessionOrg(ctx context.Context, sessionID string) (string, error) {
+	const q = `SELECT org_id FROM sessions WHERE id = $1`
+	var orgID string
+	err := s.Pool.QueryRow(ctx, q, sessionID).Scan(&orgID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: session org: %w", err)
+	}
+	return orgID, nil
+}
+
 // Run 是 runs 表行；Bound 是 run 启动绑定的 {agent_config_version, protocol_version, model}。
 type Run struct {
 	ID        string

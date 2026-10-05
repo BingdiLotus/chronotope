@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
@@ -186,6 +187,80 @@ func TestGetMissingReturnsNotFound(t *testing.T) {
 	}
 	if _, err := s.GetSession(ctx, "missing_"+randSuffix()); err != store.ErrNotFound {
 		t.Fatalf("应返回 ErrNotFound，得 %v", err)
+	}
+	if _, err := s.GetSandbox(ctx, "missing_"+randSuffix()); err != store.ErrNotFound {
+		t.Fatalf("应返回 ErrNotFound，得 %v", err)
+	}
+}
+
+func TestSandboxAndExecCacheRoundtrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_sb_" + randSuffix()
+	ttl := time.Hour
+
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agentID := "a_" + key
+	if err := s.CreateAgent(ctx, agentID, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	sessID := "s_" + key
+	if err := s.CreateSession(ctx, sessID, "o_"+key, agentID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := s.UpsertSandbox(ctx, &store.SandboxRow{
+		SandboxID: key, OrgID: "o_" + key, SessionID: sessID, Driver: "docker",
+		Image: "python:3.12-slim", Limits: map[string]string{"cpu": "1", "mem": "256m"},
+		FileSyncState: "syncing", Status: "ready", TTL: &ttl,
+	}); err != nil {
+		t.Fatalf("upsert sandbox: %v", err)
+	}
+	sb, err := s.GetSandbox(ctx, key)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if sb.Image != "python:3.12-slim" || sb.Status != "ready" {
+		t.Fatalf("沙箱回读不符: %+v", sb)
+	}
+	if sb.TTL == nil || *sb.TTL != time.Hour {
+		t.Fatalf("TTL 回读不符（interval 扫描回归）: %v", sb.TTL)
+	}
+
+	// 幂等缓存（防重试双执行）：写入 → 命中 → 过期视为未执行
+	result := json.RawMessage(`{"exit":0,"output":"42\n"}`)
+	execKey := "r_" + key + ":0:t_1"
+	if err := s.PutExec(ctx, execKey, key, result); err != nil {
+		t.Fatalf("put exec: %v", err)
+	}
+	got, err := s.GetExec(ctx, execKey)
+	if err != nil {
+		t.Fatalf("get exec: %v", err)
+	}
+	// jsonb 重序列化（空格差异），按语义比较
+	var gotRes, wantRes map[string]any
+	if err := json.Unmarshal(got.Result, &gotRes); err != nil {
+		t.Fatalf("unmarshal cached result: %v", err)
+	}
+	if err := json.Unmarshal(result, &wantRes); err != nil {
+		t.Fatalf("unmarshal want: %v", err)
+	}
+	if gotRes["exit"] != wantRes["exit"] || gotRes["output"] != wantRes["output"] {
+		t.Fatalf("exec 缓存回读不符: %v != %v", gotRes, wantRes)
+	}
+	if _, err := s.GetExec(ctx, "r_"+key+":0:t_9"); err != store.ErrNotFound {
+		t.Fatalf("未命中应 ErrNotFound，得 %v", err)
+	}
+
+	// 状态迁移
+	if err := s.UpdateSandboxStatus(ctx, key, "destroyed"); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+	sb2, _ := s.GetSandbox(ctx, key)
+	if sb2.Status != "destroyed" {
+		t.Fatalf("状态迁移失败: %+v", sb2)
 	}
 }
 
