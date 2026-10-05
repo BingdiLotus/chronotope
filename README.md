@@ -54,8 +54,9 @@ curl -X POST localhost:8080/orgs/org-demo/agents -H 'content-type: application/j
 可经 `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` 指向官方端点或任意 OpenAI/Anthropic
 兼容代理——切换在 LiteLLM 网关配置化完成，0 代码改动）。
 
-**全场景演示（W1–W4 一条命令复现）**：`bash scripts/demo.sh`
-——全栈启动 → 注册 worker → W1 对话闭环 → W2 沙箱闭环 → W3 HITL → W3 定时唤醒。
+**全场景演示（W1–W4 一条命令复现，实测 6/6 通过）**：`bash scripts/demo.sh`
+——全栈启动 → 注册 worker → W1 对话闭环（11 项断言）→ W2 沙箱闭环（9 项）→
+W3 HITL（4 项）→ W3 定时唤醒（5 项）。
 控制台：`cd web && pnpm install && pnpm dev` → http://localhost:3000（会话列表 /
 时间轴回放 / 三轴计量）。
 
