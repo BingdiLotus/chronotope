@@ -6,7 +6,8 @@ Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意�
 
 ## 项目状态
 
-**W1 进行中**：仓库骨架已初始化（Go 三二进制 + harness 四服务骨架、compose、三契约落库、契约测试），下一步为 W1 D1 Spike（Restate Go SDK 五项原语验证）与 D3–D4 三服务实现。
+**W1 进行中**：D1 Spike（Restate Go SDK 五项原语）**全部通过**，结论见 [spike/README.md](./spike/README.md)（不切 Temporal；sdk-go v1.1.0，要求 go ≥ 1.25）。
+下一步：worker 按 [worker-架构设计.md](./worker-架构设计.md) §2 接入 SDK（session_object / run_workflow / scheduler / webhook），api 实现 Session API，harness 接入 LiteLLM。
 
 ## 快速开始（W1 骨架）
 
