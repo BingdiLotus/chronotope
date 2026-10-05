@@ -131,6 +131,10 @@ func (f *fakeStore) UpdateRunStatus(_ context.Context, id string, status session
 	return nil
 }
 
+func (f *fakeStore) CreateSchedule(_ context.Context, id, orgID, sessionID string, delay time.Duration, payload json.RawMessage) error {
+	return nil
+}
+
 func (f *fakeStore) ListEvents(_ context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -484,5 +488,27 @@ func TestApprovalWebhook(t *testing.T) {
 	}
 	if last := ing.lastCall(); last != "POST /webhook/Resolve" {
 		t.Fatalf("应转发 webhook.Resolve: %q", last)
+	}
+}
+
+func TestCreateSchedule(t *testing.T) {
+	h, fs, ing := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/schedules",
+		`{"delay_ms":1000,"payload":{"input":"定时任务"}}`, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("建 schedule 应 202，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); !strings.HasPrefix(last, "POST /scheduler/") || !strings.HasSuffix(last, "/run") {
+		t.Fatalf("应触发 scheduler workflow: %q", last)
+	}
+}
+
+func TestCreateScheduleInvalid(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/schedules", `{"delay_ms":0}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("非法 schedule 应 422，得 %d", rec.Code)
 	}
 }

@@ -16,8 +16,8 @@ func TestSessionTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("wake 从 sleeping/paused 迁移到 running", func(t *testing.T) {
-		for _, from := range []sessionapi.SessionPhase{sessionapi.PhaseSleeping, sessionapi.PhasePaused} {
+	t.Run("wake 从 ready/sleeping/paused 迁移到 running", func(t *testing.T) {
+		for _, from := range []sessionapi.SessionPhase{sessionapi.PhaseReady, sessionapi.PhaseSleeping, sessionapi.PhasePaused} {
 			next, err := wakeTransition(SessionState{Phase: from, AgentConfig: cfg})
 			if err != nil {
 				t.Fatalf("wake(%s): %v", from, err)
@@ -28,15 +28,13 @@ func TestSessionTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("wake 对 running/ready 保持原态（幂等）", func(t *testing.T) {
-		for _, from := range []sessionapi.SessionPhase{sessionapi.PhaseRunning, sessionapi.PhaseReady} {
-			next, err := wakeTransition(SessionState{Phase: from, AgentConfig: cfg})
-			if err != nil {
-				t.Fatalf("wake(%s): %v", from, err)
-			}
-			if next.Phase != from {
-				t.Fatalf("wake(%s) 应保持原态，得 %s", from, next.Phase)
-			}
+	t.Run("wake 对 running 保持原态（幂等）", func(t *testing.T) {
+		next, err := wakeTransition(SessionState{Phase: sessionapi.PhaseRunning, AgentConfig: cfg})
+		if err != nil {
+			t.Fatalf("wake(running): %v", err)
+		}
+		if next.Phase != sessionapi.PhaseRunning {
+			t.Fatalf("wake(running) 应保持原态，得 %s", next.Phase)
 		}
 	})
 

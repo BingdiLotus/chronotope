@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -244,4 +245,42 @@ func (h *Handler) approvalWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "status": out})
+}
+
+// POST /sessions/{sessionID}/schedules —— 一次性定时唤醒（W3）：durable timer 到点
+// → session_object.Wake → child run 执行 → 回睡。cron 表与时区语义后置（边界语义 §5）。
+func (h *Handler) createSchedule(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	sess, err := h.Store.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	var req struct {
+		DelayMs int64          `json:"delay_ms"`
+		Payload map[string]any `json:"payload,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DelayMs <= 0 {
+		writeError(w, http.StatusUnprocessableEntity, 422, "invalid schedule request（delay_ms 必填且 >0）")
+		return
+	}
+	id := genID("sch_")
+	payload, _ := json.Marshal(req.Payload)
+	if err := h.Store.CreateSchedule(r.Context(), id, sess.OrgID, sessionID, time.Duration(req.DelayMs)*time.Millisecond, payload); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	var out struct {
+		Woken bool   `json:"woken"`
+		RunID string `json:"run_id"`
+		Final string `json:"final"`
+	}
+	if err := h.Ingress.Call(r.Context(), "/scheduler/"+id+"/run", http.MethodPost,
+		map[string]any{"session_id": sessionID, "delay_ms": req.DelayMs, "payload": req.Payload}, &out); err != nil {
+		writeError(w, http.StatusBadGateway, 502, "scheduler failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"schedule_id": id, "session_id": sessionID, "woken": out.Woken, "run_id": out.RunID, "final": out.Final,
+	})
 }

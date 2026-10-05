@@ -137,6 +137,18 @@ func (s *Store) SessionOrg(ctx context.Context, sessionID string) (string, error
 	return orgID, nil
 }
 
+// CreateSchedule 记录一次性唤醒计划（W3：delay 形态；cron 表 + 时区语义后置，边界语义 §5）。
+func (s *Store) CreateSchedule(ctx context.Context, id, orgID, sessionID string, delay time.Duration, payload json.RawMessage) error {
+	const q = `
+INSERT INTO schedules (id, org_id, session_id, cron, next_at, payload)
+VALUES ($1, $2, $3, '', now() + ($4::text || ' milliseconds')::interval, $5)`
+	delayText := fmt.Sprintf("%d", delay.Milliseconds())
+	if _, err := s.Pool.Exec(ctx, q, id, orgID, sessionID, delayText, nullableRaw(payload)); err != nil {
+		return fmt.Errorf("store: create schedule: %w", err)
+	}
+	return nil
+}
+
 // Run 是 runs 表行；Bound 是 run 启动绑定的 {agent_config_version, protocol_version, model}。
 type Run struct {
 	ID        string

@@ -136,7 +136,10 @@ func wakeTransition(state SessionState) (SessionState, error) {
 	if state.Phase == "" {
 		return SessionState{}, fmt.Errorf("session state not initialized")
 	}
-	if state.Phase == sessionapi.PhaseSleeping || state.Phase == sessionapi.PhasePaused {
+	// 唤醒即执行：ready/sleeping/paused → running；running 幂等保持
+	if state.Phase == sessionapi.PhaseReady ||
+		state.Phase == sessionapi.PhaseSleeping ||
+		state.Phase == sessionapi.PhasePaused {
 		state.Phase = sessionapi.PhaseRunning
 	}
 	return state, nil

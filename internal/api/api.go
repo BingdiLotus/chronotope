@@ -34,6 +34,7 @@ type Store interface {
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	GetRun(ctx context.Context, id string) (*store.Run, error)
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error
+	CreateSchedule(ctx context.Context, id, orgID, sessionID string, delay time.Duration, payload json.RawMessage) error
 	ListEvents(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error)
 }
 
@@ -78,15 +79,16 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/sessions", h.createSession) // 创建 session → ready（沙箱懒创建）
 	})
 	r.Route("/sessions/{sessionID}", func(r chi.Router) {
-		r.Get("/", h.getSession)            // session 状态 + 最近事件
-		r.Get("/events", h.streamEvents)    // SSE 时间轴，after=seq 断线续读
-		r.Post("/runs", h.submitRun)        // 提交任务；Idempotency-Key 必带
-		r.Post("/actions", h.sessionAction) // pause|resume|wake|cancel|steer
-		r.Post("/messages", notImplemented) // 人类消息注入（W5+）
-		r.Post("/skills", notImplemented)   // skill 安装（W6）
-		r.Post("/mcp", notImplemented)      // MCP 连接（W6）
-		r.Delete("/", h.deleteSession)      // tombstone 两段式删除（边界语义 §4）
-		r.Get("/export", notImplemented)    // 标准 tar 导出（W8）
+		r.Get("/", h.getSession)               // session 状态 + 最近事件
+		r.Get("/events", h.streamEvents)       // SSE 时间轴，after=seq 断线续读
+		r.Post("/runs", h.submitRun)           // 提交任务；Idempotency-Key 必带
+		r.Post("/actions", h.sessionAction)    // pause|resume|wake|cancel|steer
+		r.Post("/schedules", h.createSchedule) // 一次性定时唤醒（W3）
+		r.Post("/messages", notImplemented)    // 人类消息注入（W5+）
+		r.Post("/skills", notImplemented)      // skill 安装（W6）
+		r.Post("/mcp", notImplemented)         // MCP 连接（W6）
+		r.Delete("/", h.deleteSession)         // tombstone 两段式删除（边界语义 §4）
+		r.Get("/export", notImplemented)       // 标准 tar 导出（W8）
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)

@@ -57,10 +57,24 @@ func (f *fakeStore) ListMessages(context.Context, string, int) ([]store.Message,
 }
 
 func (f *fakeStore) GetRun(_ context.Context, runID string) (*store.Run, error) {
+	if f.runs == nil {
+		f.runs = map[string]*store.Run{}
+	}
 	if r, ok := f.runs[runID]; ok {
 		return r, nil
 	}
 	return nil, store.ErrNotFound
+}
+
+func (f *fakeStore) CreateRun(_ context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error) {
+	if f.runs == nil {
+		f.runs = map[string]*store.Run{}
+	}
+	if _, ok := f.runs[id]; ok {
+		return false, nil
+	}
+	f.runs[id] = &store.Run{ID: id, SessionID: sessionID, Bound: bound}
+	return true, nil
 }
 
 // fakeHarness 按脚本顺序返回结果，并记录每次请求（断言消息组装）。

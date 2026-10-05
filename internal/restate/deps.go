@@ -18,6 +18,8 @@ type Store interface {
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
 	// GetRun 供 webhook 解析 run → session（HITL 审批回调按 run_id 定位 awakeable）。
 	GetRun(ctx context.Context, runID string) (*store.Run, error)
+	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
+	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 }
 
 // SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object
