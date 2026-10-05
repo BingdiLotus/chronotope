@@ -4,9 +4,14 @@
 # postgres/restate）；compose 应用容器会被 stop，避免与本地二进制端口冲突。
 # 注意：先于 compose 应用容器运行 chaos（demo.sh 之后需先 stop 容器）。
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DB="${DB:-postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable}"
-BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/bin"
-HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/harness"
+BIN="$ROOT/bin"
+HARNESS_DIR="$ROOT/harness"
+# compose 一律绝对路径（脚本会 cd 到 test/chaos，相对路径会静默失效——实证）
+ENVFILE_ARGS=()
+[ -f "$ROOT/.env" ] && ENVFILE_ARGS=(--env-file "$ROOT/.env")
+COMPOSE=(docker compose "${ENVFILE_ARGS[@]}" -f "$ROOT/deploy/docker-compose.yml")
 ADMIN=http://localhost:9070
 
 start_worker() {
@@ -41,8 +46,7 @@ stop_local_services() {
 }
 
 stop_compose_apps() { # 防 compose 应用容器与本地二进制端口冲突（postgres/restate 保留）
-  docker compose --env-file .env -f deploy/docker-compose.yml stop api worker executor harness \
-    > /dev/null 2>&1 || true
+  "${COMPOSE[@]}" stop api worker executor harness > /dev/null 2>&1 || true
 }
 
 ensure_api() { # 本地 api 未运行则启动（chaos 全程本地进程）
