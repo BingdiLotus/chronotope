@@ -130,6 +130,29 @@ func TestRunsFramesSample(t *testing.T) {
 	}
 }
 
+// TestRunsRequestToolSchemaNeverNull 防回归：tools 的 schema 空时必须省略，
+// 不得序列化为 null（harness 侧 pydantic 严格校验——契约测试捕获过的真实 bug）。
+func TestRunsRequestToolSchemaNeverNull(t *testing.T) {
+	req := runs.Request{
+		Protocol: runs.ProtocolVersion,
+		RunID:    "r_1", SessionID: "s_1", Model: "m",
+		Tools: []runs.Tool{{Type: "function", Name: "bash"}},
+	}
+	raw := mustMarshal(t, req)
+	var m struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(m.Tools) != 1 {
+		t.Fatalf("tools 数量: %d", len(m.Tools))
+	}
+	if v, ok := m.Tools[0]["schema"]; ok && v == nil {
+		t.Fatalf("schema 不得为 null: %s", raw)
+	}
+}
+
 func TestToolVocabulary(t *testing.T) {
 	for _, name := range []string{
 		runs.ToolBash, runs.ToolRunPython, runs.ToolReadFile, runs.ToolWriteFile,

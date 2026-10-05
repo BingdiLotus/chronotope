@@ -36,9 +36,9 @@ type Message struct {
 
 // Tool 是模型可见工具；risk_class 见边界语义 §2（0 安全 / 1 敏感 / 2 强制审批）。
 type Tool struct {
-	Type      string          `json:"type"` // function|mcp
-	Name      string          `json:"name"` // 必须是工具名词汇表规范名
-	Schema    json.RawMessage `json:"schema"`
+	Type      string          `json:"type"`             // function|mcp
+	Name      string          `json:"name"`             // 必须是工具名词汇表规范名
+	Schema    json.RawMessage `json:"schema,omitempty"` // 空时省略，不得序列化为 null（契约样例）
 	RiskClass int             `json:"risk_class"`
 }
 

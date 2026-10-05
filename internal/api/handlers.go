@@ -171,9 +171,13 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
+	projected := make([]sseEvent, 0, len(rows))
+	for _, row := range rows {
+		projected = append(projected, projectEvent(row))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": sess.ID, "agent_id": sess.AgentID, "status": sess.Status,
-		"last_active_at": sess.LastActiveAt, "recent_events": rows,
+		"last_active_at": sess.LastActiveAt, "recent_events": projected,
 	})
 }
 

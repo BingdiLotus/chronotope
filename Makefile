@@ -34,6 +34,9 @@ register-worker: ## 注册 worker 端点到 Restate（dev 用；生产由发布�
 	curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
 	  -d '{"uri":"http://host.docker.internal:9080","version":"v1","use_http_11":true,"force":true}'
 
+e2e: ## W1 闭环 e2e（前置：make dev-up + register-worker + 三服务运行中）
+	bash test/e2e/w1-loop.sh
+
 up: ## 全量构建并启动（api/worker/executor/harness + 基础设施；web 属 W4 profile）
 	$(DC) up -d --build
 

@@ -23,6 +23,14 @@ type sseEvent struct {
 	At        time.Time       `json:"at"`
 }
 
+// projectEvent 把 store 行投影为契约事件形状（getSession 与 SSE 共用，保证响应形状一致）。
+func projectEvent(row store.EventRow) sseEvent {
+	return sseEvent{
+		SessionID: row.SessionID, RunID: row.RunID, Seq: row.Seq,
+		Type: string(row.Type), Payload: row.Payload, At: row.At,
+	}
+}
+
 // GET /sessions/{sessionID}/events?after=seq&limit —— SSE 时间轴（断线按 seq 续读）。
 //
 // 分发策略（落地方案 §5）：poller → hub 提示 (session_id, seq) → 此处回查 store 推送；
@@ -37,10 +45,14 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	after, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
-	if err != nil || after < 0 {
-		writeError(w, http.StatusBadRequest, 400, "after 必须为非负整数（契约规范 §2）")
-		return
+	// after 缺省为 0（从头开始）；显式传参时校验（契约规范 §2：?after=seq 断线续读）
+	after := int64(0)
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		var err error
+		if after, err = strconv.ParseInt(raw, 10, 64); err != nil || after < 0 {
+			writeError(w, http.StatusBadRequest, 400, "after 必须为非负整数（契约规范 §2）")
+			return
+		}
 	}
 	limit := 100
 	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 && l <= 500 {
@@ -58,10 +70,7 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	writeRow := func(row store.EventRow) {
-		ev := sseEvent{
-			SessionID: row.SessionID, RunID: row.RunID, Seq: row.Seq,
-			Type: string(row.Type), Payload: row.Payload, At: row.At,
-		}
+		ev := projectEvent(row)
 		b, _ := json.Marshal(ev)
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
 		fl.Flush()
