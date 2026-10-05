@@ -7,22 +7,39 @@ Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意�
 ## 项目状态
 
 **W1 进行中**：D1 Spike（Restate Go SDK 五项原语）**全部通过**（结论见 [spike/README.md](./spike/README.md)，不切 Temporal）。
-已落地：store 数据访问层（幂等事件/消息真相）、worker 四个 Restate 服务（session_object / run_workflow / scheduler / webhook，agent 主循环 journal 缓存）、api Session API 网关（REST + SSE 时间轴 after=seq 续读）。
-下一步：harness 接入 LiteLLM 真实模型调用 → W1 联调验收（建 agent → 建 session → 提交任务 → SSE 收事件）。
+已落地：store 数据访问层（幂等事件/消息真相）、worker 四个 Restate 服务（session_object / run_workflow / scheduler / webhook，agent 主循环 journal 缓存）、api Session API 网关（REST + SSE 时间轴 after=seq 续读）、harness 真实 agent 循环（LiteLLM 网关流式调用 + 工具分流 + fake 模式）。
+**W1 闭环验收通过**（[test/e2e/w1-loop.sh](test/e2e/w1-loop.sh) 11 项断言全过；真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`）。
 
-## 快速开始（W1 骨架）
+## 快速开始（W1 闭环）
 
 ```bash
-# 前置：Go 1.23+（brew install go）、uv、docker compose
+# 前置：Go 1.25+（brew install go）、uv、docker compose
 make dev-up              # 启动基础设施：postgres / restate / minio / litellm
 make build               # 构建三个 Go 二进制到 bin/
-make contract-test       # Go 契约测试 + harness 侧 /runs 契约测试
 
-# harness 骨架（POST /runs → SSE，done 帧占位；LiteLLM 接入待 W1 D3–D4）
-cd harness && uv sync && uv run uvicorn app.main:app --port 8000
-curl -N -X POST localhost:8000/runs -H 'content-type: application/json' \
-  -d '{"protocol":"1.0","run_id":"r_1","session_id":"s_1","step":0,"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}'
+# 终端 A：worker（Restate 端点）
+export DATABASE_URL='postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable'
+./bin/chronotope-worker -addr :9080 -harness-url http://localhost:8000
+
+# 终端 B：api（HTTP/SSE 网关）
+export DATABASE_URL='postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable'
+./bin/chronotope-api -addr :8080 -restate-url http://localhost:8081
+
+# 终端 C：harness（fake 模型流，无密钥演示；真实模型去掉 HARNESS_FAKE_MODEL 并配 LITELLM_API_KEY）
+cd harness && uv sync && HARNESS_FAKE_MODEL=1 uv run uvicorn app.main:app --port 8000
+
+# 终端 D：注册 worker + 跑 W1 闭环 e2e
+make register-worker
+make e2e
+
+# 手动闭环：
+curl -X POST localhost:8080/orgs/org-demo/agents -H 'content-type: application/json' \
+  -d '{"name":"demo","config":{"model":"claude-sonnet-4-6","instructions":"你是演示助手。","tools":[],"version":1}}'
+# → 取 agent id 建 session → 取 session id 提交任务（Idempotency-Key 必带）→ SSE 收事件
 ```
+
+一键容器化：`HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build`
+（真实模型：在 `.env` 配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` 后 `make up`）。
 
 ## 仓库结构（落地方案 §1）
 
