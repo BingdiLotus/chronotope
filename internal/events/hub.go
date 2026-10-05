@@ -28,14 +28,36 @@ func (s *Subscription) SessionID() string { return s.sessionID }
 
 // Hub 是进程内订阅表。api 多实例部署时按 session 路由或共享 NOTIFY 通道。
 type Hub struct {
-	mu   sync.RWMutex
-	subs map[string]map[int64]*Subscription
-	next int64
+	mu        sync.RWMutex
+	subs      map[string]map[int64]*Subscription
+	published map[string]int64 // 每 session 最近一次发布的 seq（poller 水位）
+	next      int64
 }
 
 // NewHub 创建空 hub。
 func NewHub() *Hub {
-	return &Hub{subs: make(map[string]map[int64]*Subscription)}
+	return &Hub{
+		subs:      make(map[string]map[int64]*Subscription),
+		published: make(map[string]int64),
+	}
+}
+
+// SessionIDs 返回当前有订阅者的 session 列表（api poller 的轮询范围）。
+func (h *Hub) SessionIDs() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]string, 0, len(h.subs))
+	for id := range h.subs {
+		out = append(out, id)
+	}
+	return out
+}
+
+// LastPublished 返回某 session 最近一次发布的 seq 水位（0 表示从未发布）。
+func (h *Hub) LastPublished(sessionID string) int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.published[sessionID]
 }
 
 // Subscribe 订阅某 session 的 seq 提示流（after 为续读游标，0 表示从头）。
@@ -69,12 +91,15 @@ func (h *Hub) Subscribe(ctx context.Context, sessionID string, after int64) *Sub
 // Unsubscribe 主动取消订阅。
 func (h *Hub) Unsubscribe(sub *Subscription) { sub.cancel() }
 
-// Publish 向订阅者广播「新事件提示」（seq 为游标）。
-// TODO(W1)：接 PG LISTEN/NOTIFY 通道后，本方法由 notify handler 调用。
+// Publish 向订阅者广播「新事件提示」（seq 为游标），并推进该 session 的水位。
+// TODO(W1+)：接 PG LISTEN/NOTIFY 通道后，本方法由 notify handler 调用。
 func (h *Hub) Publish(sessionID string, seq int64) {
-	h.mu.RLock()
+	h.mu.Lock()
+	if h.published[sessionID] < seq {
+		h.published[sessionID] = seq
+	}
 	subs := h.subs[sessionID]
-	h.mu.RUnlock()
+	h.mu.Unlock()
 	for _, sub := range subs {
 		if sub.after >= seq {
 			continue
