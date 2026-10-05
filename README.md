@@ -6,9 +6,9 @@ Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意�
 
 ## 项目状态
 
-**W1 ✓ / W2 ✓ 进行中**：W1 闭环验收通过（[test/e2e/w1-loop.sh](test/e2e/w1-loop.sh) 11 项断言）；W2 沙箱闭环验收通过（[test/e2e/w2-sandbox.sh](test/e2e/w2-sandbox.sh) 9 项断言：agent 写代码 → docker 沙箱执行 → 文件回传）。
-已落地：store 数据访问层（幂等事件/消息/沙箱事实状态/exec 幂等缓存）、worker 四个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 / scheduler / webhook）+ 工具分流（代码→executor、API→harness 内联、控制→W3 awakeable）、api Session API 网关（REST + SSE 时间轴 after=seq 续读）、executor docker driver（受限容器 + 幂等缓存）、harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）。
-下一步：W3 持久性三件套（kill -9 崩溃恢复 chaos、定时唤醒、HITL awakeable）；真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。
+**W1 ✓ / W2 ✓ / W3 ✓ 进行中**：W1 闭环（11 项断言）、W2 沙箱闭环（9 项断言）、W3 持久性三件套（HITL 4 项 + 定时唤醒 5 项 + kill -9 崩溃恢复 6 项，脚本见 [test/e2e/](test/e2e/w3-hitl.sh) 与 [test/chaos/](test/chaos/README.md)）全部验收通过。
+已落地：store 数据访问层（幂等事件/消息/沙箱事实状态/exec 幂等缓存/schedules）、worker 四个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 / scheduler 定时唤醒 / webhook HITL）+ 工具分流（代码→executor、API→harness 内联、控制→awakeable）、api Session API 网关（REST + SSE 时间轴 + 审批回调 + actions）、executor docker driver（受限容器 + 幂等缓存）、harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）。
+下一步：W4 计量三轴 + 控制台 + demo 脚本；真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。
 
 ## 快速开始（W1 闭环）
 

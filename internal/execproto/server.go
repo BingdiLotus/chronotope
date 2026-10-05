@@ -148,6 +148,7 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, "streaming unsupported")
 		return
 	}
+	s.Logger.Info("execute", "sandbox_id", req.SandboxID, "name", req.Name, "idempotency_key", req.IdempotencyKey)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)

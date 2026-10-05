@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,7 +107,7 @@ func testServer(t *testing.T) (*Server, *fakeDriver, *fakeSBStore) {
 	t.Helper()
 	d := &fakeDriver{}
 	st := newFakeSBStore()
-	s := &Server{Driver: d, Store: st, WorkspaceRoot: t.TempDir()}
+	s := &Server{Driver: d, Store: st, WorkspaceRoot: t.TempDir(), Logger: slog.Default()}
 	return s, d, st
 }
 
