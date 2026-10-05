@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bingdilotus/chronotope/docs/contracts/events.schema.json",
+  "title": "Chronotope Event Schema",
+  "description": "事件 schema（契约规范 §5，append-only 单一真相）。规则：只插入与 tombstone，不更新；seq 每 session 单调（PG BIGSERIAL）且允许 gap；同 session 按 seq 排序，同 run 内逻辑顺序由 (run_id, step, kind) 表达；payload 带 v 字段。类型全集只增不改。",
+  "type": "object",
+  "required": ["session_id", "seq", "type", "payload", "at"],
+  "properties": {
+    "id": { "type": "integer", "description": "bigserial 主键" },
+    "session_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "seq": { "type": "integer", "description": "每 session 单调，允许 gap（dedupe 冲突烧号/重放跳过）" },
+    "type": {
+      "type": "string",
+      "description": "事件类型全集（v1，只增不改）",
+      "enum": [
+        "run.started", "run.completed", "run.failed", "run.cancelled",
+        "llm.call", "tool.call", "sandbox.exec", "mcp.call", "step.journaled", "event.truncated",
+        "run.paused", "run.resumed", "run.awaiting_approval", "run.frozen", "run.unfrozen", "session.woken",
+        "skill.install", "mcp.connected", "mcp.updated",
+        "subagent.spawned", "subagent.completed", "group.turn",
+        "memory.consolidated",
+        "audit.tool_denied", "budget.exceeded"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "required": ["v"],
+      "properties": {
+        "v": { "type": "integer", "description": "payload 版本" },
+        "usage": {
+          "type": "object",
+          "description": "llm.call 专属：{tokens_in, tokens_out, usage_partial?}",
+          "properties": {
+            "tokens_in": { "type": "integer" },
+            "tokens_out": { "type": "integer" },
+            "usage_partial": { "type": "boolean" }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "at": { "type": "string", "format": "date-time", "description": "UTC ISO8601" },
+    "dedupe_key": { "type": "string", "description": "run_id:step:kind[:tool]，UNIQUE；重放重复发射时幂等吞掉" }
+  },
+  "examples": [
+    {
+      "session_id": "s_1",
+      "run_id": "r_1",
+      "seq": 42,
+      "type": "sandbox.exec",
+      "payload": { "v": 1, "tool": "bash", "input": "pytest", "exit": 0 },
+      "at": "2025-01-01T00:00:42Z",
+      "dedupe_key": "r_1:12:sandbox.exec:bash"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# chronotope-web：Next.js 控制台（W4：会话列表 / 时间轴回放 / 用量）
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY web/package.json web/pnpm-lock.yaml* ./
+RUN corepack enable && pnpm install --frozen-lockfile || pnpm install
+COPY web/ ./
+RUN pnpm build
+
+FROM node:20-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+EXPOSE 3000
+CMD ["node", "server.js"]

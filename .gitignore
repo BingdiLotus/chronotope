@@ -1,0 +1,30 @@
+# Go
+/bin/
+*.test
+coverage.out
+
+# 环境与密钥（事件日志零密钥，密钥只在 .env / LiteLLM 侧）
+.env
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# OS / 编辑器
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# 日志
+*.log

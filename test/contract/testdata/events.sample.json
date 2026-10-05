@@ -1,0 +1,13 @@
+{
+  "session_id": "s_1",
+  "run_id": "r_1",
+  "seq": 42,
+  "type": "sandbox.exec",
+  "payload": {
+    "v": 1,
+    "tool": "bash",
+    "input": "pytest",
+    "exit": 0
+  },
+  "at": "2025-01-01T00:00:42Z"
+}

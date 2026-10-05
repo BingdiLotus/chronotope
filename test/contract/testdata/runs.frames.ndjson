@@ -1,0 +1,3 @@
+{"type":"delta","seq":0,"payload":{"text":"好的，"}}
+{"type":"tool_call","seq":1,"payload":{"id":"t_3","name":"bash","arguments":{"command":"pytest"}}}
+{"type":"done","seq":2,"payload":{"final":"已完成。","usage":{"tokens_in":120,"tokens_out":80},"truncated":true}}

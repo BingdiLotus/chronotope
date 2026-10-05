@@ -1,0 +1,15 @@
+# LiteLLM 网关配置骨架（mvp-技术选型 §8.1）：
+# 一个 OpenAI 兼容端点聚合所有模型；统一密钥/限流/fallback/用量计数。
+# 密钥只在本文件引用的容器环境变量（.env）中存在——事件日志零密钥。
+model_list:
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -1,0 +1,14 @@
+# chronotope-executor（与 api/worker 同构：单静态二进制，承担「任意空间」远程部署）
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum go.work ./
+COPY cmd/ cmd/
+COPY internal/ internal/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/chronotope-executor ./cmd/executor
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 65532 chronotope
+USER chronotope
+COPY --from=build /out/chronotope-executor /usr/local/bin/chronotope-executor
+EXPOSE 9082
+ENTRYPOINT ["chronotope-executor"]

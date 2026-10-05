@@ -1,0 +1,137 @@
+# Chronotope 部署编排（单机自托管，mvp-架构设计 §4）
+#
+# 基础设施：postgres(pgvector) / restate / litellm / minio
+# 应用服务：api / worker / executor / harness（make up 一键构建）
+# web 控制台属 W4，放入 profile "web"（docker compose --profile web up web）
+#
+# 密钥纪律：模型 key 只在 litellm 容器与 .env 存在，事件日志零密钥。
+
+name: chronotope
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-chronotope}
+      POSTGRES_USER: ${POSTGRES_USER:-chronotope}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chronotope_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 首次初始化自动执行契约 schema（内部建表均幂等）
+      - ../internal/store/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chronotope} -d ${POSTGRES_DB:-chronotope}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  restate:
+    image: docker.io/restatedev/restate:latest
+    environment:
+      RESTATE_AUTO_TIP: "false"
+    ports:
+      - "8081:8080" # ingress（worker 注册端点）
+      - "9070:9070" # admin/observability
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-chronotope-dev}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-chronotope}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-chronotope_dev}
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # console
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      API_ADDR: ":8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    environment:
+      WORKER_ADDR: ":9080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
+      RESTATE_URL: http://restate:8080
+      HARNESS_URL: http://harness:8000
+    ports:
+      - "9080:9080"
+    depends_on:
+      - postgres
+      - restate
+      - harness
+
+  executor:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.executor
+    environment:
+      EXECUTOR_ADDR: ":9082"
+      DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
+      MINIO_ENDPOINT: minio:9000
+    ports:
+      - "9082:9082"
+    volumes:
+      # docker driver（dev）：executor 需要宿主机 docker 守护进程（受限容器）
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - postgres
+      - minio
+
+  harness:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.harness
+    environment:
+      HARNESS_PORT: "8000"
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-chronotope-dev}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - litellm
+
+  web:
+    profiles: ["web"] # W4 控制台：docker compose --profile web up --build web
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    environment:
+      API_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata: {}
+  miniodata: {}

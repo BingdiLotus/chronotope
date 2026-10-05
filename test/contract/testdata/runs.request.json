@@ -1,0 +1,19 @@
+{
+  "protocol": "1.0",
+  "run_id": "r_1",
+  "session_id": "s_1",
+  "step": 12,
+  "model": "claude-sonnet-4-6",
+  "messages": [
+    { "role": "system", "content": "你是一个编码助手。", "source": "trusted" },
+    { "role": "user", "content": "写一个能通过测试的模块。" },
+    { "role": "assistant", "content": "好的，我先写实现。", "tool_calls": [] },
+    { "role": "tool", "content": "exit: 2\n...", "source": "sandbox" }
+  ],
+  "tools": [
+    { "type": "function", "name": "bash", "schema": { "type": "object", "properties": { "command": { "type": "string" } } }, "risk_class": 1 },
+    { "type": "function", "name": "write_file", "schema": {}, "risk_class": 1 }
+  ],
+  "max_turns": 8,
+  "max_output_bytes": 524288
+}

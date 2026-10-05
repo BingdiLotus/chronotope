@@ -1,0 +1,228 @@
+openapi: 3.0.3
+info:
+  title: Chronotope Session API
+  version: 1.0.0
+  description: |
+    Session API（契约规范 §2，权威定义见仓库根目录 契约规范.md）。
+    总原则：只增不改；版本绑定在 run；幂等键贯穿全链路；错误码稳定。
+
+    状态机（唯一权威）：
+      session: created → ready → running → sleeping / paused / awaiting_approval
+               → completed → archived / deleted
+      run:     queued → running → paused / awaiting_approval / frozen
+               → completed / failed / cancelled
+
+    幂等键传递链路：Idempotency-Key(api) → run_id(worker) → (run_id, step)(harness/executor)。
+paths:
+  /orgs/{orgId}/agents:
+    post:
+      summary: 创建/升级 agent（config 全量，version+1）
+      operationId: createAgent
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentRequest"
+      responses:
+        "201": { description: agent 已创建（含 version） }
+        "422": { $ref: "#/components/responses/Error422" }
+  /agents/{agentId}/sessions:
+    post:
+      summary: 创建 session → ready（沙箱懒创建）
+      operationId: createSession
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "201": { description: session 已创建，status=created → ready }
+  /sessions/{sessionId}/runs:
+    post:
+      summary: 提交任务；Idempotency-Key 必带，返回同一 run
+      operationId: submitRun
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitRunRequest"
+      responses:
+        "201": { description: run_id（queued） }
+        "409": { description: 双开（带 active_run_id，可 queue:true 排队） }
+        "422": { description: 超预算（budget.exceeded） }
+  /sessions/{sessionId}/events:
+    get:
+      summary: SSE 时间轴；断线重连按 after=seq 续读；seq 允许 gap
+      operationId: streamEvents
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: after
+          in: query
+          schema: { type: integer, format: int64 }
+          description: 续读游标（含该 seq 之后的事件）
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: text/event-stream（事件行见 events.schema.json）
+        "404": { $ref: "#/components/responses/Error404" }
+  /sessions/{sessionId}:
+    get:
+      summary: Session 状态 + 最近事件
+      operationId: getSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200": { description: session 状态与最近事件 }
+        "404": { $ref: "#/components/responses/Error404" }
+    delete:
+      summary: 逻辑删除（tombstone 两段式：立即可见性移除 → 异步 compaction）
+      operationId: deleteSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204": { description: tombstone 已生效 }
+  /sessions/{sessionId}/actions:
+    post:
+      summary: 控制动作（幂等）
+      operationId: sessionAction
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionRequest"
+      responses:
+        "202": { description: 动作已受理 }
+        "409": { description: 状态不合法 }
+  /sessions/{sessionId}/messages:
+    post:
+      summary: 人类消息注入（群聊/steer；幂等）
+      operationId: postMessage
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "202": { description: 已入队 }
+  /sessions/{sessionId}/skills:
+    post:
+      summary: skill 安装（幂等；沙箱 skills/<name>/ 写入 + 指令 patch）
+      operationId: installSkill
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "202": { description: skill.install 事件已产生 }
+        "403": { description: 未批准 }
+  /sessions/{sessionId}/mcp:
+    post:
+      summary: MCP 连接（幂等；tools/list 缓存进 session 状态）
+      operationId: connectMCP
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "202": { description: mcp.connected 事件已产生 }
+        "403": { description: 未批准 }
+  /sessions/{sessionId}/export:
+    get:
+      summary: 导出（事件日志+工件+快照引用，标准 tar）
+      operationId: exportSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200": { description: application/x-tar }
+
+components:
+  parameters:
+    OrgId:
+      name: orgId
+      in: path
+      required: true
+      schema: { type: string }
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      schema: { type: string }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string }
+
+  responses:
+    Error404:
+      description: 不存在
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Error422:
+      description: 语义非法（config 非法 / 超预算），不重试
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, error]
+      properties:
+        code: { type: integer }
+        error: { type: string }
+        detail: { type: string }
+      description: |
+        错误码（契约规范 §6）：客户端 400/401/403/404/409/422 不重试；
+        429 幂等重试 + 指数退避 + Retry-After；500/502/503 幂等重试；504 幂等重试（≤3 次后失败事件）。
+    AgentConfig:
+      type: object
+      required: [model, instructions, tools, version]
+      properties:
+        model: { type: string, description: model+版本 }
+        instructions: { type: string }
+        tools: { type: array, items: { type: string }, description: 工具名词汇表规范名 }
+        mcp_servers: { type: array, items: { type: string } }
+        skills: { type: array, items: { type: string } }
+        environment:
+          type: object
+          properties:
+            sandbox:
+              type: object
+              properties:
+                image: { type: string }
+                limits: { type: object, additionalProperties: { type: string } }
+                ttl: { type: string }
+        budget: { type: object }
+        version: { type: integer, description: 每次变更 +1；run 启动时绑定 }
+    CreateAgentRequest:
+      type: object
+      required: [name, config]
+      properties:
+        name: { type: string }
+        config: { $ref: "#/components/schemas/AgentConfig" }
+    SubmitRunRequest:
+      type: object
+      required: [input]
+      properties:
+        input: { type: string }
+        trigger: { type: object }
+        queue:
+          type: boolean
+          description: true 时同 session 双开改排队（queued 态按序执行）
+    ActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [pause, resume, wake, cancel, steer]
+        payload: { type: object }

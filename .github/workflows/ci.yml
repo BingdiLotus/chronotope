@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    name: go（build / vet / 契约测试）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+      - name: test（含 test/contract 契约测试）
+        run: go test ./...
+
+  harness:
+    name: harness（/runs 契约测试）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: harness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: sync
+        run: uv sync --frozen
+      - name: test
+        run: uv run pytest -q
+
+  # TODO(W3+)：compose 全链路 e2e（每次提交跑）+ golden journal 重放测试
+  # TODO(W3)：chaos 套件（kill -9 矩阵）在专用 runner 上执行

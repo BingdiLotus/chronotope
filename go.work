@@ -1,0 +1,13 @@
+go 1.23.0
+
+use .
+
+// 落地方案 §1 预留的多模块工作区。
+//
+// 当前 Go 侧为单模块（github.com/bingdilotus/chronotope）：
+// cmd/{api,worker,executor} 三个二进制共享根模块 internal/ 下的跨切面包
+// （core/store/events/restate/execproto）——Go 的 internal/ 可见性按模块生效，
+// 共享契约包因此放在同一模块内。
+//
+// 当 api/worker/executor 需要独立发布节奏（如 executor 单二进制远程部署）时，
+// 在此 use 各子模块目录即可；届时契约包将拆出为共享 module。
