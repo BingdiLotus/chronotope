@@ -41,6 +41,11 @@ curl -X POST localhost:8080/orgs/org-demo/agents -H 'content-type: application/j
 一键容器化：`HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build`
 （真实模型：在 `.env` 配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` 后 `make up`）。
 
+**全场景演示（W1–W4 一条命令复现）**：`bash scripts/demo.sh`
+——全栈启动 → 注册 worker → W1 对话闭环 → W2 沙箱闭环 → W3 HITL → W3 定时唤醒。
+控制台：`cd web && pnpm install && pnpm dev` → http://localhost:3000（会话列表 /
+时间轴回放 / 三轴计量）。
+
 ## 仓库结构（落地方案 §1）
 
 ```
