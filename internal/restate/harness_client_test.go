@@ -80,6 +80,16 @@ func TestParseFramesMissingTerminalFrame(t *testing.T) {
 	}
 }
 
+func TestParseFramesToolCallIsTerminalHandoff(t *testing.T) {
+	// 交棒是合法终态（契约 §3 三种返回）：无 done 但有 tool_call → 有效结果
+	res := frames(t,
+		`data: {"type":"tool_call","seq":0,"payload":{"id":"t_1","name":"bash","arguments":{"command":"pytest"}}}`,
+	)
+	if res.Done || res.ErrCode != "" || len(res.ToolCalls) != 1 {
+		t.Fatalf("tool_call 交棒应解析为有效结果: %+v", res)
+	}
+}
+
 func TestParseFramesBadJSON(t *testing.T) {
 	if _, err := ParseFrames(strings.NewReader(`data: {oops` + "\n")); err == nil {
 		t.Fatal("坏 JSON 帧应报错")

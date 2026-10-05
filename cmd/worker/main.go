@@ -26,6 +26,7 @@ func main() {
 		addr        = flag.String("addr", envOr("WORKER_ADDR", ":9080"), "listen address（Restate 端点）")
 		databaseURL = flag.String("database-url", envOr("DATABASE_URL", ""), "Postgres DSN（事件/消息真相层）")
 		harnessURL  = flag.String("harness-url", envOr("HARNESS_URL", "http://localhost:8000"), "harness 服务地址")
+		executorURL = flag.String("executor-url", envOr("EXECUTOR_URL", "http://localhost:9082"), "executor 服务地址")
 	)
 	flag.Parse()
 
@@ -45,6 +46,7 @@ func main() {
 	deps := &restate.Deps{
 		Store:    st,
 		Harness:  restate.NewHarnessClient(*harnessURL),
+		Executor: restate.NewExecutorClient(*executorURL),
 		Sessions: restate.RestateSessionSource{},
 	}
 	handler, err := restate.BuildEndpoint(deps)

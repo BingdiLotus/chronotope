@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	restate "github.com/restatedev/sdk-go"
@@ -15,6 +16,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/execproto"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -69,11 +71,46 @@ func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error
 }
 
 type fakeSessions struct {
-	state SessionState
+	state    SessionState
+	attached []string
 }
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
 	return f.state, nil
+}
+
+func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) error {
+	f.attached = append(f.attached, sandboxID)
+	return nil
+}
+
+// fakeExecutor 实现 Executor 接口（W2 工具分流的测试替身）。
+type fakeExecutor struct {
+	execs   []string // "name:input"
+	files   map[string]string
+	created int
+}
+
+func (f *fakeExecutor) CreateSandbox(context.Context, execproto.CreateSandboxRequest) (string, error) {
+	f.created++
+	return "sb_test", nil
+}
+
+func (f *fakeExecutor) Execute(_ context.Context, sandboxID, name, input, idempotencyKey string) (*ExecResult, error) {
+	f.execs = append(f.execs, name+":"+input)
+	return &ExecResult{Exit: 0, Output: "ok\n"}, nil
+}
+
+func (f *fakeExecutor) ReadFile(_ context.Context, sandboxID, path string) (string, error) {
+	return f.files[path], nil
+}
+
+func (f *fakeExecutor) WriteFile(_ context.Context, sandboxID, path, content string) error {
+	if f.files == nil {
+		f.files = map[string]string{}
+	}
+	f.files[path] = content
+	return nil
 }
 
 // fakeRunContext 实现 restate.RunContext（Run 闭包的入参）。
@@ -101,8 +138,8 @@ func newMockedLoop(t *testing.T) restate.Context {
 	return restate.WithMockContext(mockCtx)
 }
 
-func deps(store *fakeStore, harness *fakeHarness, sessions *fakeSessions) *Deps {
-	return &Deps{Store: store, Harness: harness, Sessions: sessions}
+func deps(store *fakeStore, harness *fakeHarness, sessions *fakeSessions, executor *fakeExecutor) *Deps {
+	return &Deps{Store: store, Harness: harness, Executor: executor, Sessions: sessions}
 }
 
 func eventsOf(store *fakeStore, typ event.Type) []storedEvent {
@@ -129,9 +166,10 @@ func TestRunLoopHappyPath(t *testing.T) {
 			Model: "claude-sonnet-4-6", Instructions: "你是助手。", Version: 1,
 		},
 	}}
+	exec := &fakeExecutor{}
 	ctx := newMockedLoop(t)
 
-	out, err := runLoop(ctx, deps(store, harness, sessions), RunInput{SessionID: "s_1", Input: "hi"}, "r_1")
+	out, err := runLoop(ctx, deps(store, harness, sessions, exec), RunInput{SessionID: "s_1", Input: "hi"}, "r_1")
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}
@@ -197,9 +235,10 @@ func TestRunLoopToolCallContinuesLoop(t *testing.T) {
 		Phase:       sessionapi.PhaseReady,
 		AgentConfig: sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1},
 	}}
+	exec := &fakeExecutor{}
 	ctx := newMockedLoop(t)
 
-	out, err := runLoop(ctx, deps(store, harness, sessions), RunInput{SessionID: "s_1", Input: "go"}, "r_1")
+	out, err := runLoop(ctx, deps(store, harness, sessions, exec), RunInput{SessionID: "s_1", Input: "go"}, "r_1")
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}
@@ -209,6 +248,16 @@ func TestRunLoopToolCallContinuesLoop(t *testing.T) {
 	if len(harness.calls) != 2 {
 		t.Fatalf("harness 应被调用 2 次，得 %d", len(harness.calls))
 	}
+	// 代码工具 → executor：沙箱懒创建 + 执行
+	if exec.created != 1 {
+		t.Fatalf("沙箱应懒创建 1 次，得 %d", exec.created)
+	}
+	if len(exec.execs) != 1 || exec.execs[0] != "bash:ls" {
+		t.Fatalf("executor 应执行 bash:ls，得 %v", exec.execs)
+	}
+	if len(sessions.attached) != 1 || sessions.attached[0] != "sb_test" {
+		t.Fatalf("沙箱 id 应回填会话状态: %v", sessions.attached)
+	}
 	// 第二步的请求应携带上一步的 tool_result（作为 tool 消息回喂，位于消息尾部）
 	second := harness.calls[1]
 	if n := len(second.Messages); n < 3 {
@@ -217,9 +266,15 @@ func TestRunLoopToolCallContinuesLoop(t *testing.T) {
 	if last := second.Messages[len(second.Messages)-1]; last.Role != "tool" || last.Source != "sandbox" {
 		t.Fatalf("tool 消息应在尾部且标 source=sandbox（注入防护）: %+v", last)
 	}
-	// 事件：tool.call 落表、step.journaled 落表
+	if !strings.Contains(second.Messages[len(second.Messages)-1].Content, `"exit":0`) {
+		t.Fatalf("tool 消息应携带 exit 结果: %+v", second.Messages[len(second.Messages)-1])
+	}
+	// 事件：tool.call / sandbox.exec / step.journaled 落表
 	if got := eventsOf(store, event.ToolCall); len(got) != 1 {
 		t.Fatalf("应有 1 条 tool.call，得 %d", len(got))
+	}
+	if got := eventsOf(store, event.SandboxExec); len(got) != 1 {
+		t.Fatalf("应有 1 条 sandbox.exec，得 %d", len(got))
 	}
 	if got := eventsOf(store, event.StepJournaled); len(got) != 1 {
 		t.Fatalf("应有 1 条 step.journaled，得 %d", len(got))
@@ -233,9 +288,10 @@ func TestRunLoopHarnessErrorTerminates(t *testing.T) {
 		Phase:       sessionapi.PhaseReady,
 		AgentConfig: sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1},
 	}}
+	exec := &fakeExecutor{}
 	ctx := newMockedLoop(t)
 
-	_, err := runLoop(ctx, deps(store, harness, sessions), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	_, err := runLoop(ctx, deps(store, harness, sessions, exec), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
 	if err == nil {
 		t.Fatal("harness error 终态应返回错误")
 	}
@@ -255,9 +311,10 @@ func TestRunLoopUninitializedSession(t *testing.T) {
 	store := &fakeStore{}
 	harness := &fakeHarness{}
 	sessions := &fakeSessions{state: SessionState{}}
+	exec := &fakeExecutor{}
 	ctx := newMockedLoop(t)
 
-	_, err := runLoop(ctx, deps(store, harness, sessions), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	_, err := runLoop(ctx, deps(store, harness, sessions, exec), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
 	if err == nil {
 		t.Fatal("未初始化会话应报错")
 	}
@@ -276,11 +333,13 @@ func TestRunLoopMaxSteps(t *testing.T) {
 	harness := &fakeHarness{script: script}
 	sessions := &fakeSessions{state: SessionState{
 		Phase:       sessionapi.PhaseReady,
+		SandboxID:   "sb_test", // 预设沙箱：短路懒创建（该用例聚焦 maxSteps）
 		AgentConfig: sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1},
 	}}
+	exec := &fakeExecutor{}
 	ctx := newMockedLoop(t)
 
-	_, err := runLoop(ctx, deps(store, harness, sessions), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	_, err := runLoop(ctx, deps(store, harness, sessions, exec), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
 	if err == nil {
 		t.Fatal("maxSteps 应报错")
 	}

@@ -142,8 +142,10 @@ func ParseFrames(r io.Reader) (*Result, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("harness: read stream: %w", err)
 	}
-	if !res.Done && res.ErrCode == "" {
-		return nil, fmt.Errorf("harness: stream ended without done/error terminal frame（契约规范 §3：连接断开未见 done = 未完成）")
+	// 契约 §3 三种返回：done（终答）/ tool_call（交棒）/ error（失败）。
+	// 三者皆无 = 未完成（连接断开未见终态 → 调用方幂等重发）。
+	if !res.Done && res.ErrCode == "" && len(res.ToolCalls) == 0 {
+		return nil, fmt.Errorf("harness: stream ended without done/error/tool_call terminal frame（契约规范 §3：连接断开未见 done = 未完成）")
 	}
 	return res, nil
 }

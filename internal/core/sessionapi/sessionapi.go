@@ -55,9 +55,14 @@ type AgentConfig struct {
 	Tools        []string       `json:"tools"`
 	MCPServers   []string       `json:"mcp_servers,omitempty"`
 	Skills       []string       `json:"skills,omitempty"`
-	Environment  SandboxSpec    `json:"environment,omitempty"`
+	Environment  Environment    `json:"environment,omitempty"`
 	Budget       map[string]any `json:"budget,omitempty"`
 	Version      int            `json:"version"` // 每次变更 +1
+}
+
+// Environment 是 agent.config.environment（契约规范 §1：environment{sandbox{...}}）。
+type Environment struct {
+	Sandbox SandboxSpec `json:"sandbox,omitempty"`
 }
 
 // SandboxSpec 是 agent.config.environment.sandbox（image/limits/ttl）。

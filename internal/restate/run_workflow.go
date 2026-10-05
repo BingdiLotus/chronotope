@@ -101,13 +101,17 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		}
 
 		if len(res.ToolCalls) > 0 {
-			// 工具分流（worker-架构设计 §1 dispatcher）：W1 未接 executor（W2），
-			// 代码类工具交棒先以错误 tool_result 回喂，loop 继续（maxSteps 封顶）。
+			// 工具分流（worker-架构设计 §1 dispatcher）：代码/命令类 → executor（W2）；
+			// 控制类（request_approval）→ W3 awakeable；API 类已在 harness 内联。
 			for _, tc := range res.ToolCalls {
 				_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
 					"step": step, "id": tc.ID, "name": tc.Name, "arguments": json.RawMessage(tc.Arguments),
 				})
-				result := fmt.Sprintf(`{"name":%q,"result":{"error":"tools not wired yet (executor W2)"}}`, tc.Name)
+				result, err := dispatchTool(ctx, deps, in, runID, step, cfg, tc, emit)
+				if err != nil {
+					return RunOutput{}, restate.ToTerminalError(
+						fmt.Errorf("dispatch %s (step %d): %w", tc.Name, step, err))
+				}
 				content, _ := json.Marshal(result)
 				if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); err != nil {
 					return RunOutput{}, restate.ToTerminalError(err)

@@ -89,6 +89,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       RESTATE_URL: http://restate:8080
       HARNESS_URL: http://harness:8000
+      EXECUTOR_URL: http://executor:9082
     ports:
       - "9080:9080"
     depends_on:
@@ -97,6 +98,8 @@ services:
       restate:
         condition: service_started
       harness:
+        condition: service_started
+      executor:
         condition: service_started
 
   executor:

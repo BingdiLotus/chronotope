@@ -18,24 +18,35 @@ type Store interface {
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
 }
 
-// SessionSource 是会话状态的读取接缝：run_workflow 经它读 session_object
+// SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object
 // （Virtual Object 单写者串行）；测试以 fake 替换，避免在单测中依赖 Restate 语境。
 type SessionSource interface {
 	GetState(ctx restate.Context, sessionID string) (SessionState, error)
+	// AttachSandbox 回填会话作用域沙箱 id（懒创建后调用；幂等）。
+	AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error
 }
 
-// Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EM+ST 经 Store / MO 后置）。
+// Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
+// EM+ST 经 Store / MO 后置）。
 type Deps struct {
 	Store    Store
 	Harness  Harness
+	Executor Executor
 	Sessions SessionSource
 }
 
-// RestateSessionSource 是生产实现：经 Restate virtual object 调用读会话状态。
+// RestateSessionSource 是生产实现：经 Restate virtual object 调用读写会话状态。
 type RestateSessionSource struct{}
 
 // GetState 读 session_object 状态（未初始化时返回零值状态，由调用方校验）。
 func (RestateSessionSource) GetState(ctx restate.Context, sessionID string) (SessionState, error) {
 	return restate.Object[SessionState](ctx, SessionObjectName, sessionID, "GetState").
 		Request(restate.Void{})
+}
+
+// AttachSandbox 回填沙箱 id（对象调用幂等：同值重复设置无害，重放重发安全）。
+func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "AttachSandbox").
+		Request(sandboxID)
+	return err
 }

@@ -23,6 +23,7 @@ type SessionState struct {
 	AgentConfig      sessionapi.AgentConfig  `json:"agent_config"`
 	LastRunID        string                  `json:"last_run_id,omitempty"`
 	PendingAwakeable string                  `json:"pending_awakeable,omitempty"`
+	SandboxID        string                  `json:"sandbox_id,omitempty"` // 会话作用域沙箱（懒创建，W2）
 }
 
 const sessionStateKey = "state"
@@ -40,7 +41,21 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("GetState", restate.NewObjectSharedHandler[restate.Void, SessionState](getSessionState)).
 		Handler("Wake", restate.NewObjectHandler[WakeInput, SessionState](wakeSession)).
 		Handler("Pause", restate.NewObjectHandler[restate.Void, SessionState](pauseSession)).
-		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession))
+		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession)).
+		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox))
+}
+
+// attachSandbox 记录会话作用域沙箱（懒创建后回填；幂等：同值重复设置无害）。
+func attachSandbox(ctx restate.ObjectContext, sandboxID string) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	if state.SandboxID != sandboxID {
+		state.SandboxID = sandboxID
+		restate.Set(ctx, sessionStateKey, state)
+	}
+	return state, nil
 }
 
 func createSessionObject(ctx restate.ObjectContext, cfg sessionapi.AgentConfig) (SessionState, error) {
