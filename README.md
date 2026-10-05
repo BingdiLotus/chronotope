@@ -6,9 +6,20 @@ Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意�
 
 ## 项目状态
 
-**W1 ✓ / W2 ✓ / W3 ✓ 进行中**：W1 闭环（11 项断言）、W2 沙箱闭环（9 项断言）、W3 持久性三件套（HITL 4 项 + 定时唤醒 5 项 + kill -9 崩溃恢复 6 项，脚本见 [test/e2e/](test/e2e/w3-hitl.sh) 与 [test/chaos/](test/chaos/README.md)）全部验收通过。
-已落地：store 数据访问层（幂等事件/消息/沙箱事实状态/exec 幂等缓存/schedules）、worker 四个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 / scheduler 定时唤醒 / webhook HITL）+ 工具分流（代码→executor、API→harness 内联、控制→awakeable）、api Session API 网关（REST + SSE 时间轴 + 审批回调 + actions）、executor docker driver（受限容器 + 幂等缓存）、harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）。
-下一步：W4 计量三轴 + 控制台 + demo 脚本；真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。
+**MVP 核心闭环（W1–W4）已完成** ✅——创建 Agent → 持久 Session → 提交任务 → 崩溃恢复 →
+定时/事件唤醒 → 沙箱执行 → 时间轴回看 → 三轴计量。周度验收全部有可重放 e2e：
+W1 对话闭环（11 项断言）、W2 沙箱闭环（9 项）、W3 持久性三件套（HITL 4 项 + 定时唤醒 5 项 +
+kill -9 崩溃恢复 6 项）、W4 计量三轴 + 控制台（会话列表/时间轴回放/用量）。
+
+已落地：store 数据访问层（幂等事件/消息/沙箱事实状态/exec 幂等缓存/schedules/usage）、
+worker 四个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 /
+scheduler 定时唤醒 / webhook HITL）+ 四类工具分流、api Session API 网关（REST + SSE 时间轴
+after=seq 续读 + 审批回调 + actions + 计量）、executor docker driver（受限容器 + 幂等缓存）、
+harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）、Next.js 控制台。
+
+**后置迭代（落地方案 §4 W5–W8）**：分层记忆 + consolidation、熔断/无进展检测/限流、
+skill/MCP + 子 Agent、群聊多 Agent、存储分层与运营。真实模型调用待配
+`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
 
 ## 快速开始（W1 闭环）
 
