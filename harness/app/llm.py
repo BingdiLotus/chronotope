@@ -1,0 +1,144 @@
+"""模型提供层（LLM provider 抽象，mvp-落地方案 §9.2）。
+
+- OpenAIProvider：经 LiteLLM 网关（OpenAI 兼容端点）调模型——「借」openai SDK 的
+  流式与工具调用，模型多翻译由网关承担；密钥只在 LiteLLM 侧，harness 仅持网关 key。
+- FakeProvider：e2e/演示用——无模型密钥时流式回放固定回复（多段 delta），
+  让平台全链路（含 delta 帧 → 事件）在任何环境可演示。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+
+from openai import AsyncOpenAI
+
+from .protocol import RunRequest, Tool
+
+
+@dataclass
+class StreamChunk:
+    """流式块：文本增量 / 工具调用（按 index 累积）/ 流末 usage。"""
+
+    delta: str | None = None
+    tool_calls: list[dict] = field(default_factory=list)  # 原始 OpenAI 格式片段
+    usage: dict | None = None  # tokens_in/tokens_out
+
+
+class LLMProvider(ABC):
+    """模型流接口：逐块产出 StreamChunk。"""
+
+    @abstractmethod
+    def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
+        raise NotImplementedError
+
+
+def openai_tools(tools: list[Tool]) -> list[dict] | None:
+    """把 /runs 协议工具清单转换为 OpenAI function 格式；空清单返回 None。"""
+    if not tools:
+        return None
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": f"risk_class={t.risk_class}",  # 风险分级提示（边界语义 §2）
+                "parameters": t.tool_schema or {"type": "object", "properties": {}},
+            },
+        }
+        for t in tools
+    ]
+
+
+class OpenAIProvider(LLMProvider):
+    """经 LiteLLM 网关（OpenAI 兼容端点）的流式调用。"""
+
+    def __init__(self, base_url: str, api_key: str) -> None:
+        self.client = AsyncOpenAI(base_url=base_url.rstrip("/"), api_key=api_key)
+
+    async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
+        messages = [
+            {
+                "role": m.role,
+                "content": m.content,
+                **({"tool_calls": m.tool_calls} if m.tool_calls else {}),
+            }
+            for m in req.messages
+        ]
+        # stream_options.include_usage：流末返回 usage（截断/断流时 usage_partial 兜底，契约规范 §3）
+        response = await self.client.chat.completions.create(
+            model=req.model,
+            messages=messages,
+            tools=openai_tools(req.tools),
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        tool_call_fragments: dict[int, dict] = {}
+        async for chunk in response:
+            # 流末 usage 块（stream_options.include_usage）可能无 choices，先取 usage
+            usage = None
+            if chunk.usage is not None:
+                usage = {
+                    "tokens_in": chunk.usage.prompt_tokens or 0,
+                    "tokens_out": chunk.usage.completion_tokens or 0,
+                }
+            if not chunk.choices:
+                if usage:
+                    yield StreamChunk(usage=usage)
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta is None:
+                continue
+            text = delta.content or ""
+            calls = []
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    frag = tool_call_fragments.setdefault(
+                        idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                    )
+                    if tc.id:
+                        frag["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        frag["function"]["name"] += tc.function.name
+                    if tc.function and tc.function.arguments:
+                        frag["function"]["arguments"] += tc.function.arguments
+                    calls.append(frag.copy())
+            if text or calls or usage:
+                yield StreamChunk(delta=text or None, tool_calls=calls, usage=usage)
+
+
+class FakeProvider(LLMProvider):
+    """e2e/演示实现：流式回放固定回复（模拟 delta 帧，可配延迟）。"""
+
+    def __init__(self, reply: str = "你好，我是 Chronotope 演示助手。", chunk_ms: int = 20) -> None:
+        self.reply = reply
+        self.chunk_ms = chunk_ms
+
+    async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
+        for i in range(0, len(self.reply), 3):  # 每 3 字符一个 delta
+            await asyncio.sleep(self.chunk_ms / 1000)
+            yield StreamChunk(delta=self.reply[i : i + 3])
+        yield StreamChunk(usage={"tokens_in": 4, "tokens_out": len(self.reply) // 3})
+
+
+def build_provider() -> LLMProvider:
+    """按环境构造 provider：HARNESS_FAKE_MODEL=1 → Fake（e2e/演示），否则 LiteLLM 网关。"""
+    if os.environ.get("HARNESS_FAKE_MODEL") == "1":
+        return FakeProvider(
+            reply=os.environ.get("HARNESS_FAKE_REPLY", "你好，我是 Chronotope 演示助手。")
+        )
+    api_key = os.environ.get("LITELLM_API_KEY", "")
+    if not api_key:
+        raise RuntimeError(
+            "LITELLM_API_KEY 未设置（harness 经 LiteLLM 网关调模型）；"
+            "本地 e2e/演示可设 HARNESS_FAKE_MODEL=1 走假模型流"
+        )
+    return OpenAIProvider(
+        base_url=os.environ.get("LITELLM_BASE_URL", "http://localhost:4000"),
+        api_key=api_key,
+    )

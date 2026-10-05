@@ -4,6 +4,10 @@
 """
 
 import json
+import os
+
+# 契约测试走 FakeProvider（无模型密钥；真实 LiteLLM 路径由 test_llm_provider 覆盖）
+os.environ.setdefault("HARNESS_FAKE_MODEL", "1")
 
 from fastapi.testclient import TestClient
 
