@@ -5,6 +5,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# .env 在仓库根目录；compose 默认只在 deploy/ 查找，须显式指定
+ENV_ARGS=()
+[ -f .env ] && ENV_ARGS=(--env-file .env)
+DC="docker compose ${ENV_ARGS[*]} -f deploy/docker-compose.yml"
 API=http://localhost:8080
 ADMIN=http://localhost:9070
 PASS=0; FAIL=0
@@ -15,7 +19,7 @@ echo "== Chronotope 全场景演示 =="
 
 # 1. 全栈启动（fake 模型）
 echo "[1/6] docker compose 启动全栈…"
-HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker executor api
+HARNESS_FAKE_MODEL=1 $DC up -d --build postgres restate litellm harness worker executor api
 for i in $(seq 1 60); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 2; done
 pass "全栈启动（api/worker/executor/harness + postgres/restate/minio/litellm）"
 
@@ -29,18 +33,18 @@ bash test/e2e/w1-loop.sh "$API" > /tmp/demo-w1.log 2>&1 && pass "W1 对话闭环
 
 # 4. W2 沙箱闭环（harness 切脚本模式重启）
 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/hello.py","content":"print(42)"}}},{"tool_call":{"name":"bash","arguments":{"command":"python3 /workspace/hello.py"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/hello.py"}}},{"final":"沙箱闭环完成，输出 42。"}]' \
-  docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+  $DC up -d --force-recreate harness
 sleep 3
 bash test/e2e/w2-sandbox.sh "$API" > /tmp/demo-w2.log 2>&1 && pass "W2 沙箱闭环（9 项断言）" || { fail "W2 沙箱闭环"; tail -5 /tmp/demo-w2.log; }
 
 # 5. W3 HITL（harness 切审批脚本）
 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"request_approval","arguments":{"question":"允许删除生产数据吗？"}}},{"final":"已获批准，执行完成。"}]' \
-  docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+  $DC up -d --force-recreate harness
 sleep 3
 bash test/e2e/w3-hitl.sh "$API" > /tmp/demo-w3h.log 2>&1 && pass "W3 HITL 审批挂起/恢复（4 项断言）" || { fail "W3 HITL"; tail -5 /tmp/demo-w3h.log; }
 
 # 6. W3 定时唤醒（harness 回默认 fake）
-HARNESS_FAKE_SCRIPT= HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+HARNESS_FAKE_SCRIPT= HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
 sleep 3
 bash test/e2e/w3-schedule.sh "$API" > /tmp/demo-w3s.log 2>&1 && pass "W3 定时唤醒（5 项断言）" || { fail "W3 定时唤醒"; tail -5 /tmp/demo-w3s.log; }
 

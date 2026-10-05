@@ -1,7 +1,9 @@
 SHELL := /bin/bash
 GO     ?= go
 UV     ?= uv
-DC     := docker compose -f deploy/docker-compose.yml
+# .env 在仓库根目录；compose 默认只在项目目录（deploy/）查找，须显式指定
+ENVFILE := $(if $(wildcard .env),--env-file .env,)
+DC     := docker compose $(ENVFILE) -f deploy/docker-compose.yml
 
 .PHONY: help build test contract-test fmt vet dev-up up down logs clean
 
