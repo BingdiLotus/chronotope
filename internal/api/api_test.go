@@ -1,0 +1,456 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/events"
+	"github.com/bingdilotus/chronotope/internal/store"
+)
+
+// --- fakes ---
+
+type fakeStore struct {
+	mu       sync.Mutex
+	orgs     map[string]bool
+	agents   map[string]*store.Agent
+	sessions map[string]*store.Session
+	runs     map[string]*store.Run
+	events   []store.EventRow
+	seq      int64
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{
+		orgs:     map[string]bool{},
+		agents:   map[string]*store.Agent{},
+		sessions: map[string]*store.Session{},
+		runs:     map[string]*store.Run{},
+	}
+}
+
+func (f *fakeStore) CreateOrg(_ context.Context, id, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orgs[id] = true
+	return nil
+}
+
+func (f *fakeStore) CreateAgent(_ context.Context, id, orgID, name string, cfg *sessionapi.AgentConfig) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cfg.Version = 1
+	f.agents[id] = &store.Agent{ID: id, OrgID: orgID, Name: name, Config: *cfg, Version: 1}
+	return nil
+}
+
+func (f *fakeStore) GetAgent(_ context.Context, id string) (*store.Agent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.agents[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return a, nil
+}
+
+func (f *fakeStore) CreateSession(_ context.Context, id, orgID, agentID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions[id] = &store.Session{ID: id, OrgID: orgID, AgentID: agentID, Status: sessionapi.PhaseCreated}
+	return nil
+}
+
+func (f *fakeStore) GetSession(_ context.Context, id string) (*store.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return s, nil
+}
+
+func (f *fakeStore) UpdateSessionStatus(_ context.Context, id string, status sessionapi.SessionPhase) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.sessions[id]; ok {
+		s.Status = status
+		now := time.Now()
+		s.LastActiveAt = &now
+	}
+	return nil
+}
+
+func (f *fakeStore) SoftDeleteSession(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.sessions[id]; ok {
+		s.Status = sessionapi.PhaseDeleted
+		now := time.Now()
+		s.DeletedAt = &now
+	}
+	return nil
+}
+
+func (f *fakeStore) CreateRun(_ context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.runs[id]; ok {
+		return false, nil
+	}
+	f.runs[id] = &store.Run{ID: id, SessionID: sessionID, Status: sessionapi.RunQueued, Bound: bound}
+	return true, nil
+}
+
+func (f *fakeStore) GetRun(_ context.Context, id string) (*store.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.runs[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return r, nil
+}
+
+func (f *fakeStore) UpdateRunStatus(_ context.Context, id string, status sessionapi.RunStatus) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.runs[id]; ok {
+		r.Status = status
+	}
+	return nil
+}
+
+func (f *fakeStore) ListEvents(_ context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.EventRow
+	for _, e := range f.events {
+		if e.SessionID == sessionID && e.Seq > afterSeq && len(out) < limit {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) addEvent(sessionID string, typ event.Type) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	e := store.EventRow{SessionID: sessionID, Seq: f.seq, Type: typ, Payload: json.RawMessage(`{"v":1}`), At: time.Now()}
+	f.events = append(f.events, e)
+	return f.seq
+}
+
+// fakeIngress 记录调用并按路径回放结果。
+type fakeIngress struct {
+	mu     sync.Mutex
+	calls  []string
+	runOut struct {
+		Final string `json:"final"`
+		Steps int    `json:"steps"`
+	}
+}
+
+func (f *fakeIngress) Call(_ context.Context, path, method string, body any, out any) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, method+" "+path)
+	f.mu.Unlock()
+	switch {
+	case strings.HasPrefix(path, "/session_object/"):
+		if m, ok := out.(*struct {
+			Phase string `json:"phase"`
+		}); ok {
+			m.Phase = "ready"
+		}
+	case strings.HasPrefix(path, "/run_workflow/"):
+		if m, ok := out.(*struct {
+			Final string `json:"final"`
+			Steps int    `json:"steps"`
+		}); ok {
+			m.Final, m.Steps = f.runOut.Final, f.runOut.Steps
+		}
+	}
+	return nil
+}
+
+func (f *fakeIngress) lastCall() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return ""
+	}
+	return f.calls[len(f.calls)-1]
+}
+
+func (f *fakeIngress) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// --- 测试辅助 ---
+
+func setup(t *testing.T) (*Handler, *fakeStore, *fakeIngress) {
+	t.Helper()
+	fs := newFakeStore()
+	ing := &fakeIngress{runOut: struct {
+		Final string `json:"final"`
+		Steps int    `json:"steps"`
+	}{Final: "你好，我是助手。", Steps: 1}}
+	h := New(fs, events.NewHub(), ing)
+	return h, fs, ing
+}
+
+func seedAgentSession(t *testing.T, h *Handler, fs *fakeStore) (agentID, sessionID string) {
+	t.Helper()
+	agentID = "a_seed"
+	sessionID = "s_seed"
+	_ = fs.CreateOrg(context.Background(), "org_seed", "org")
+	_ = fs.CreateAgent(context.Background(), agentID, "org_seed", "agent",
+		&sessionapi.AgentConfig{Model: "claude-sonnet-4-6", Instructions: "你是助手。", Version: 1})
+	_ = fs.CreateSession(context.Background(), sessionID, "org_seed", agentID)
+	_ = fs.UpdateSessionStatus(context.Background(), sessionID, sessionapi.PhaseReady)
+	return agentID, sessionID
+}
+
+func doJSON(t *testing.T, h http.Handler, method, path string, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// --- 用例 ---
+
+func TestCreateAgent(t *testing.T) {
+	h, _, _ := setup(t)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/orgs/org1/agents",
+		`{"name":"coder","config":{"model":"claude-sonnet-4-6","instructions":"你是编码助手。","tools":["bash"],"version":1}}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("创建 agent 应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		ID     string                 `json:"id"`
+		Config sessionapi.AgentConfig `json:"config"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("响应解析: %v", err)
+	}
+	if resp.ID == "" || resp.Config.Version != 1 || resp.Config.Model != "claude-sonnet-4-6" {
+		t.Fatalf("agent 响应不符: %+v", resp)
+	}
+}
+
+func TestCreateSessionWiresSessionObject(t *testing.T) {
+	h, fs, ing := setup(t)
+	agentID, _ := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/agents/"+agentID+"/sessions", "", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("创建 session 应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); !strings.HasPrefix(last, "POST /session_object/") || !strings.HasSuffix(last, "/Create") {
+		t.Fatalf("应经控制面初始化 session_object: %q", last)
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Status != "ready" {
+		t.Fatalf("session 应 ready: %+v", resp)
+	}
+}
+
+func TestSubmitRunIdempotency(t *testing.T) {
+	h, fs, ing := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	path := "/sessions/" + sessionID + "/runs"
+	body := `{"input":"帮我写个 hello world"}`
+	headers := map[string]string{"Idempotency-Key": "k-1", "Content-Type": "application/json"}
+
+	rec1 := doJSON(t, h.Router(), http.MethodPost, path, body, headers)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("首次提交应 201，得 %d: %s", rec1.Code, rec1.Body.String())
+	}
+	var r1 struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+		Final  string `json:"final"`
+	}
+	_ = json.Unmarshal(rec1.Body.Bytes(), &r1)
+	if r1.RunID == "" || r1.Status != "completed" || r1.Final == "" {
+		t.Fatalf("run 响应不符: %+v", r1)
+	}
+	if got := ing.callCount(); got != 1 {
+		t.Fatalf("ingress 应只触发 1 次 run_workflow，得 %d", got)
+	}
+
+	// 同幂等键重放：返回同一 run_id，不重复触发
+	rec2 := doJSON(t, h.Router(), http.MethodPost, path, body, headers)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("幂等重放应 200，得 %d: %s", rec2.Code, rec2.Body.String())
+	}
+	var r2 struct {
+		RunID      string `json:"run_id"`
+		Idempotent bool   `json:"idempotent"`
+	}
+	_ = json.Unmarshal(rec2.Body.Bytes(), &r2)
+	if r2.RunID != r1.RunID || !r2.Idempotent {
+		t.Fatalf("幂等键应返回同一 run_id 且标记幂等: %+v", r2)
+	}
+	if got := ing.callCount(); got != 1 {
+		t.Fatalf("幂等重放不应重复触发 run_workflow，得 %d", got)
+	}
+
+	// 不同幂等键 → 新 run_id
+	rec3 := doJSON(t, h.Router(), http.MethodPost, path, body, map[string]string{"Idempotency-Key": "k-2", "Content-Type": "application/json"})
+	var r3 struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(rec3.Body.Bytes(), &r3)
+	if r3.RunID == r1.RunID {
+		t.Fatal("不同幂等键应产生不同 run_id")
+	}
+}
+
+func TestSubmitRunRequiresIdempotencyKey(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs", `{"input":"x"}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("缺 Idempotency-Key 应 400，得 %d", rec.Code)
+	}
+}
+
+func TestSubmitRunSessionNotFound(t *testing.T) {
+	h, _, _ := setup(t)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_missing/runs", `{"input":"x"}`,
+		map[string]string{"Idempotency-Key": "k"})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知 session 应 404，得 %d", rec.Code)
+	}
+}
+
+func TestGetSessionWithRecentEvents(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	fs.addEvent(sessionID, event.RunStarted)
+	rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/"+sessionID, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("应 200，得 %d", rec.Code)
+	}
+	var resp struct {
+		Status       string `json:"status"`
+		RecentEvents []struct {
+			Type string `json:"type"`
+		} `json:"recent_events"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Status != "ready" || len(resp.RecentEvents) != 1 || resp.RecentEvents[0].Type != "run.started" {
+		t.Fatalf("get session 响应不符: %+v", resp)
+	}
+}
+
+func TestDeleteSessionTombstone(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodDelete, "/sessions/"+sessionID, "", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("删除应 204，得 %d", rec.Code)
+	}
+	sess, _ := fs.GetSession(context.Background(), sessionID)
+	if sess.Status != sessionapi.PhaseDeleted || sess.DeletedAt == nil {
+		t.Fatalf("应 tombstone: %+v", sess)
+	}
+	// 已删除的 session 提交任务 → 404
+	rec2 := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs", `{"input":"x"}`,
+		map[string]string{"Idempotency-Key": "k"})
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("已删除 session 提交应 404，得 %d", rec2.Code)
+	}
+}
+
+func TestStreamEventsBacklogAndLive(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	fs.addEvent(sessionID, event.RunStarted)
+	fs.addEvent(sessionID, event.RunCompleted) // 历史两条（seq 1、2）
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.StartPoller(ctx) // poller 驱动 hub 提示
+
+	// 请求上下文与 cancel 联动：取消后 SSE handler 必须退出（连接生命周期）
+	req := httptest.NewRequest(http.MethodGet, "/sessions/"+sessionID+"/events?after=1", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.Router().ServeHTTP(rec, req)
+	}()
+
+	// 等 backlog（after=1 → 只应补读 seq=2）与心跳帧写出
+	waitFor(t, done, func() bool { return strings.Contains(rec.Body.String(), `"seq":2`) })
+	time.Sleep(200 * time.Millisecond)
+
+	// 新事件经 poller → hub → 回查推送（容忍 gap：直接跳到 seq=5）
+	seq5 := fs.addEvent(sessionID, event.RunFailed)
+	waitFor(t, done, func() bool {
+		return strings.Contains(rec.Body.String(), fmt.Sprintf(`"seq":%d`, seq5))
+	})
+
+	// after=1 的历史补读不应包含 seq=1
+	if strings.Contains(rec.Body.String(), `"seq":1`) {
+		t.Fatalf("after=1 不应补读 seq=1: %s", rec.Body.String())
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE handler 未随 ctx 取消退出")
+	}
+}
+
+func TestStreamEventsSessionNotFound(t *testing.T) {
+	h, _, _ := setup(t)
+	rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/s_missing/events", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知 session 应 404，得 %d", rec.Code)
+	}
+}
+
+func TestStreamEventsBadAfter(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/"+sessionID+"/events?after=abc", "", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法 after 应 400，得 %d", rec.Code)
+	}
+}
+
+func waitFor(t *testing.T, done <-chan struct{}, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("等待条件超时")
+}

@@ -1,25 +1,50 @@
 // chronotope-api：HTTP/SSE 网关（REST + SSE + 事件投影 + 计量 + outbox + 幂等）。
 //
-// 骨架阶段（W1 D3–D4）：按 契约规范 §2 把 Session API 路由铺开，handler 统一返回
-// 501 占位；各端点实现随 W1–W4 逐周补全。SSE 时间轴的分发策略见 internal/events
-// （PG LISTEN/NOTIFY 只发 (session_id, seq) 提示，api 回查后推送，落地方案 §5）。
+// 职责边界：api 只读投影事件（worker 是事件唯一写入者），控制面经 Restate ingress
+// 调用 worker（session_object.Create / run_workflow 启动）。
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/bingdilotus/chronotope/internal/api"
+	"github.com/bingdilotus/chronotope/internal/events"
+	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 func main() {
-	addr := flag.String("addr", envOr("API_ADDR", ":8080"), "listen address")
+	var (
+		addr        = flag.String("addr", envOr("API_ADDR", ":8080"), "listen address")
+		databaseURL = flag.String("database-url", envOr("DATABASE_URL", ""), "Postgres DSN（事件投影/元数据）")
+		restateURL  = flag.String("restate-url", envOr("RESTATE_URL", "http://localhost:8081"), "Restate ingress（worker 控制面）")
+	)
 	flag.Parse()
+
+	if *databaseURL == "" {
+		log.Fatal("DATABASE_URL 未设置：api 需要 Postgres 投影事件与元数据")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := store.Open(ctx, *databaseURL)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
+	h.StartPoller(ctx)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -27,52 +52,24 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
-
-	r.Get("/healthz", healthz("chronotope-api"))
-
-	// Session API（契约规范 §2）
-	r.Route("/orgs/{orgID}", func(r chi.Router) {
-		r.Post("/agents", notImplemented) // 创建/升级 agent（config 全量，version+1）
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","service":"chronotope-api"}`))
 	})
-	r.Route("/agents/{agentID}", func(r chi.Router) {
-		r.Post("/sessions", notImplemented) // 创建 session → ready（沙箱懒创建）
-	})
-	r.Route("/sessions/{sessionID}", func(r chi.Router) {
-		r.Get("/", notImplemented)          // session 状态 + 最近事件
-		r.Get("/events", notImplemented)    // SSE 时间轴，after=seq 断线续读
-		r.Post("/runs", notImplemented)     // 提交任务；Idempotency-Key 必带，409 双开
-		r.Post("/actions", notImplemented)  // pause|resume|wake|cancel|steer
-		r.Post("/messages", notImplemented) // 人类消息注入
-		r.Post("/skills", notImplemented)   // skill 安装（幂等）
-		r.Post("/mcp", notImplemented)      // MCP 连接（幂等）
-		r.Delete("/", notImplemented)       // tombstone 两段式删除（边界语义 §4）
-		r.Get("/export", notImplemented)    // 事件日志+工件+快照引用的标准 tar
-	})
+	r.Mount("/", h.Router())
 
-	// TODO(W4)：/usage 三轴计量（活跃秒 / token / 计算秒，1min 桶聚合）
+	srv := &http.Server{Addr: *addr, Handler: r}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
 
 	log.Printf("chronotope-api listening on %s", *addr)
-	if err := http.ListenAndServe(*addr, r); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
-}
-
-func healthz(service string) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": service})
-	}
-}
-
-func notImplemented(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"code":  501,
-		"error": "not_implemented",
-		"path":  r.URL.Path,
-		"note":  "骨架路由：实现随 W1–W4 逐周补全（契约规范 §2）",
-	})
 }
 
 func envOr(key, fallback string) string {

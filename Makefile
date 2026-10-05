@@ -30,6 +30,10 @@ vet: ## go vet 静态检查
 dev-up: ## 仅启动基础设施（postgres / restate / minio / litellm）
 	$(DC) up -d postgres restate minio litellm
 
+register-worker: ## 注册 worker 端点到 Restate（dev 用；生产由发布流水线按 version 注册）
+	curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
+	  -d '{"uri":"http://host.docker.internal:9080","version":"v1","use_http_11":true,"force":true}'
+
 up: ## 全量构建并启动（api/worker/executor/harness + 基础设施；web 属 W4 profile）
 	$(DC) up -d --build
 

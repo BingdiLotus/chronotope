@@ -6,8 +6,9 @@ Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意�
 
 ## 项目状态
 
-**W1 进行中**：D1 Spike（Restate Go SDK 五项原语）**全部通过**，结论见 [spike/README.md](./spike/README.md)（不切 Temporal；sdk-go v1.1.0，要求 go ≥ 1.25）。
-下一步：worker 按 [worker-架构设计.md](./worker-架构设计.md) §2 接入 SDK（session_object / run_workflow / scheduler / webhook），api 实现 Session API，harness 接入 LiteLLM。
+**W1 进行中**：D1 Spike（Restate Go SDK 五项原语）**全部通过**（结论见 [spike/README.md](./spike/README.md)，不切 Temporal）。
+已落地：store 数据访问层（幂等事件/消息真相）、worker 四个 Restate 服务（session_object / run_workflow / scheduler / webhook，agent 主循环 journal 缓存）、api Session API 网关（REST + SSE 时间轴 after=seq 续读）。
+下一步：harness 接入 LiteLLM 真实模型调用 → W1 联调验收（建 agent → 建 session → 提交任务 → SSE 收事件）。
 
 ## 快速开始（W1 骨架）
 
@@ -26,18 +27,20 @@ curl -N -X POST localhost:8000/runs -H 'content-type: application/json' \
 ## 仓库结构（落地方案 §1）
 
 ```
-chronotope/                     # Go module：github.com/bingdilotus/chronotope
+chronotope/                     # Go module：github.com/bingdilotus/chronotope（go ≥ 1.25）
 ├─ go.work                      # 预留多模块工作区（当前单模块，见文件内注释）
 ├─ cmd/
-│  ├─ api/                      # HTTP/SSE 网关（Session API 路由骨架）
-│  ├─ worker/                   # Restate 服务端点（spike 后接入 SDK）
-│  └─ executor/                 # 沙箱编排服务（executor 协议路由骨架）
+│  ├─ api/                      # HTTP/SSE 网关（Session API + SSE 时间轴）
+│  ├─ worker/                   # Restate 端点（session_object/run_workflow/scheduler/webhook）
+│  └─ executor/                 # 沙箱编排服务（executor 协议路由骨架，W2 接 docker driver）
 ├─ internal/
+│  ├─ api/                      # Session API 网关实现（REST + SSE hub/poller + ingress 控制面）
 │  ├─ core/                     # 共享契约：事件 schema、/runs 协议、Session API 类型
 │  ├─ store/                    # Postgres 访问层 + migrations（events/sessions/usage/outbox…）
-│  ├─ events/                   # 事件投影：SSE hub、outbox 投递
-│  ├─ restate/                  # journal 缓存键 helper、大小策略
+│  ├─ events/                   # 事件投影：SSE hub（提示+回查、水位）、outbox 投递
+│  ├─ restate/                  # worker 服务层：四 Restate 服务、agent 主循环、harness 客户端、journal helper
 │  └─ execproto/                # execute 协议：Driver 接口（docker / e2b）
+├─ spike/                       # W1 D1 Restate Go SDK 五项原语 spike（独立 module）
 ├─ harness/                     # Python 服务（uv + FastAPI）：POST /runs → SSE
 ├─ web/                         # Next.js 控制台（W4，compose profile "web"）
 ├─ deploy/                      # docker-compose.yml + Dockerfile.{api,worker,executor,harness,web} + litellm 配置
