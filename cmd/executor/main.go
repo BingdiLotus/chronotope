@@ -1,64 +1,74 @@
 // chronotope-executor：沙箱编排服务（execute 协议，契约规范 §4）。
 //
-// 实现同一 internal/execproto.Driver 接口的两个 driver：
-//
-//	docker driver —— dev/通用，受限容器（read-only root、egress 白名单、无 secrets、
-//	                 CPU/内存/TTL 限额），W2 落地；
-//	e2b driver    —— prod，Firecracker 微 VM 强隔离，W4 在 Linux(KVM) 主机验证切流。
-//
-// capability 字段（cpu/gpu/network/browser）从第一天就在协议里（落地方案 §2.4）。
-//
-// 骨架阶段：协议路由铺开返回 501；docker driver 实现随 W2 接入。
+// dev 档：DockerDriver（受限容器：read-only root、tmpfs、network none|bridge、CPU/内存
+// 限额、无 secrets、会话作用域工作区卷）；prod 档 E2B driver（W4 验证切流，同一接口）。
+// 沙箱事实状态在 PG（sandboxes 表），exec 幂等缓存在 PG（sandbox_execs，防重试双执行）。
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/bingdilotus/chronotope/internal/execproto"
+	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 func main() {
-	addr := flag.String("addr", envOr("EXECUTOR_ADDR", ":9082"), "listen address")
+	var (
+		addr          = flag.String("addr", envOr("EXECUTOR_ADDR", ":9082"), "listen address")
+		databaseURL   = flag.String("database-url", envOr("DATABASE_URL", ""), "Postgres DSN（沙箱事实状态 + 幂等缓存）")
+		workspaceRoot = flag.String("workspace-root", envOr("EXECUTOR_WORKSPACE_ROOT", ""), "宿主机工作区根（文件快路径暂存，空则系统临时目录）")
+	)
 	flag.Parse()
 
-	r := chi.NewRouter()
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	if *databaseURL == "" {
+		log.Fatal("DATABASE_URL 未设置：executor 需要 Postgres 存沙箱事实状态与幂等缓存")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := store.Open(ctx, *databaseURL)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	driver := execproto.NewDockerDriver(nil, *workspaceRoot)
+	server := &execproto.Server{
+		Driver:        driver,
+		Store:         st,
+		WorkspaceRoot: driver.WorkspaceRoot,
+		Logger:        slog.Default(),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "chronotope-executor"})
 	})
+	mux.Handle("/", server.Router())
 
-	// Executor 协议（契约规范 §4）
-	r.Post("/sandboxes", notImplemented)               // 创建沙箱 → ready；restore_from 可选
-	r.Post("/execute", notImplemented)                 // 流式日志 + 结果；幂等键 = (run_id, step, tool_id)
-	r.Get("/files/{sandboxID}/{path}", notImplemented) // 文件快路径（不经过 shell）
-	r.Put("/files/{sandboxID}/{path}", notImplemented)
-	r.Post("/sandboxes/{sandboxID}/freeze", notImplemented) // Tier 1 冻结（docker pause）
-	r.Post("/sandboxes/{sandboxID}/unfreeze", notImplemented)
-	r.Post("/sandboxes/{sandboxID}/snapshot", notImplemented) // Tier 2 快照 → snapshot_ref
-	r.Delete("/sandboxes/{sandboxID}", notImplemented)        // Tier 3 拆除（前提 file_sync_state=synced）
+	srv := &http.Server{Addr: *addr, Handler: mux}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
 
-	// TODO(W2)：docker driver——受限容器 + 幂等缓存（PG sandbox_execs，防重试双执行）
-	// TODO(W4)：e2b driver + capability 路由（executors 表）
-
-	log.Printf("chronotope-executor listening on %s", *addr)
-	if err := http.ListenAndServe(*addr, r); err != nil {
+	log.Printf("chronotope-executor（docker driver）listening on %s", *addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
-}
-
-func notImplemented(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"code":  501,
-		"error": "not_implemented",
-		"path":  r.URL.Path,
-		"note":  "骨架路由：docker driver 实现随 W2 接入（契约规范 §4）",
-	})
 }
 
 func envOr(key, fallback string) string {

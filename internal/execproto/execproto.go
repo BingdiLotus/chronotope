@@ -10,6 +10,7 @@ package execproto
 import (
 	"context"
 	"fmt"
+	"io"
 )
 
 // Limits 是沙箱资源限额。
@@ -26,12 +27,14 @@ type Capabilities struct {
 }
 
 // CreateSandboxRequest 是 POST /sandboxes 的请求体。
+// session_id 为平台侧扩展字段（兼容性契约第 3 条：新增字段带默认值，旧端忽略）。
 type CreateSandboxRequest struct {
 	Image        string       `json:"image"`
 	Limits       Limits       `json:"limits"`
 	TTL          string       `json:"ttl"`
 	Capabilities Capabilities `json:"capabilities"`
 	RestoreFrom  string       `json:"restore_from,omitempty"` // snapshot_ref（Tier 2 恢复）
+	SessionID    string       `json:"session_id,omitempty"`
 }
 
 // Sandbox 是沙箱引用。
@@ -65,7 +68,8 @@ func ExecuteIdempotencyKey(runID string, step int, toolID string) string {
 // Driver 是 executor 双实现的统一接口（docker / e2b_selfhosted）。
 type Driver interface {
 	CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error)
-	Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResult, error)
+	// Execute 把流式日志写入 log（SSE 日志帧的原始流），返回最终结果。
+	Execute(ctx context.Context, req ExecuteRequest, log io.Writer) (*ExecuteResult, error)
 	ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error)
 	WriteFile(ctx context.Context, sandboxID, path string, data []byte) error
 	Freeze(ctx context.Context, sandboxID string) error // Tier 1
