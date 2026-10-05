@@ -28,3 +28,6 @@ out/
 
 # 日志
 *.log
+
+# spike 构建产物
+spike/spike-server
