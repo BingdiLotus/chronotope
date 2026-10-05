@@ -8,9 +8,9 @@ model_list:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
       api_base: os.environ/ANTHROPIC_BASE_URL
-  - model_name: gpt-4o-mini
+  - model_name: gpt-6-luna
     litellm_params:
-      model: gpt-4o-mini
+      model: gpt-6-luna
       api_key: os.environ/OPENAI_API_KEY
       api_base: os.environ/OPENAI_BASE_URL
 
