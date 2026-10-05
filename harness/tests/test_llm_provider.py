@@ -109,3 +109,31 @@ async def test_fake_provider_script_turns():
     texts = "".join(c.delta for c in chunks2 if c.delta)
     assert texts == "完成"
     assert any(c.usage for c in chunks2)
+
+
+async def test_fake_provider_inline_tool_advances_within_request():
+    """同一 /runs 内多次 stream()（内联工具场景）：调用序推进脚本轮次；
+    重发（同 run_id+step）从头开始（确定性重放）。"""
+    from app.llm import FakeProvider
+
+    provider = FakeProvider(script=[
+        {"tool_call": {"name": "http_request", "arguments": {"url": "http://x"}}},
+        {"final": "完成"},
+    ])
+    req0 = p.RunRequest(
+        protocol="1.0", run_id="r_1", session_id="s_1", step=0, model="m",
+        messages=[p.Message(role="user", content="x")],
+    )
+    # 第 1 次调用（同请求）：工具轮
+    c1 = [c async for c in provider.stream(req0)]
+    assert c1[-1].tool_calls[0]["function"]["name"] == "http_request"
+    # 第 2 次调用（同请求，内联工具后继续）：终答轮
+    c2 = [c async for c in provider.stream(req0)]
+    assert "".join(c.delta for c in c2 if c.delta) == "完成"
+    # 重发同 (run_id, step)：重新从头（工具轮）——确定性重放
+    c3 = [c async for c in provider.stream(req0)]
+    assert c3[-1].tool_calls[0]["function"]["name"] == "http_request"
+    # 新 step：step 偏移进下一轮
+    req1 = req0.model_copy(update={"step": 1})
+    c4 = [c async for c in provider.stream(req1)]
+    assert "".join(c.delta for c in c4 if c.delta) == "完成"

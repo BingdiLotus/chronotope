@@ -31,6 +31,8 @@ services:
     image: docker.io/restatedev/restate:latest
     environment:
       RESTATE_AUTO_TIP: "false"
+    volumes:
+      - restatedata:/restate-data  # invocation/部署状态持久化（重启/重建不丢在途 run）
     ports:
       - "8081:8080" # ingress（worker 注册端点）
       - "9070:9070" # admin/observability
@@ -151,3 +153,4 @@ services:
 volumes:
   pgdata: {}
   miniodata: {}
+  restatedata: {}

@@ -21,6 +21,8 @@ from . import protocol as p
 from .llm import LLMProvider, build_provider
 from .tools import run_api_tool
 
+# 应用日志直通根 logger（uvicorn 默认不配置根 logger，否则 INFO 记录被丢弃）
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chronotope-harness")
 
 app = FastAPI(title="chronotope-harness", version="0.1.0")
@@ -44,6 +46,8 @@ async def healthz() -> dict[str, str]:
 @app.post("/runs")
 async def runs(req: p.RunRequest) -> EventSourceResponse:
     """POST /runs → SSE 事件流（契约规范 §3）。"""
+    # 请求开始日志（chaos 套件的重调/重发计数依据；日志非状态，不破坏无状态纪律）
+    logger.info("runs start run_id=%s step=%s model=%s", req.run_id, req.step, req.model)
     try:
         provider = get_provider()
     except RuntimeError as exc:  # 配置错误：明确报错而非静默降级

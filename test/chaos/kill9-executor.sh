@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# W3 崩溃恢复 chaos：kill -9 worker（执行中）→ 重启自动续跑，
-# 日志证明「不重调 harness、不重跑沙箱」（已完成 step 走 journal 缓存；
-# 在途 exec 幂等重发恰好一次）。
-# 用法: bash test/chaos/kill9-worker.sh [API_URL]
+# W3 崩溃恢复 chaos：kill -9 executor（第 2 步 exec 执行中）→ 重启后
+# worker 重发 execute；沙箱按 sandbox_id 存活（容器不随进程死），重发恰好一次。
+# 用法: bash test/chaos/kill9-executor.sh [API_URL]
 set -euo pipefail
 cd "$(dirname "$0")"
 source ./lib.sh
 
 API="${1:-http://localhost:8080}"
-RUN_ID="chaos-w-$(date +%s)"
+RUN_ID="chaos-e-$(date +%s)"
 SCRIPT='[{"tool_call":{"name":"bash","arguments":{"command":"sleep 2; echo one"}}},{"tool_call":{"name":"bash","arguments":{"command":"sleep 2; echo two"}}},{"tool_call":{"name":"bash","arguments":{"command":"sleep 2; echo three"}}},{"final":"崩溃恢复完成"}]'
 
-echo "== 崩溃恢复 chaos：kill -9 worker（第 2 步 exec 执行中）=="
+echo "== 崩溃恢复 chaos：kill -9 executor（第 2 步 exec 执行中）=="
 
 stop_local_services; stop_compose_apps; ensure_api
 start_harness "$SCRIPT"; start_executor; start_worker
@@ -26,18 +25,18 @@ curl -fsS -N "$API/sessions/$SID/events?after=0" > /tmp/chaos-sse.out 2>&1 &
 SSE_PID=$!
 sleep 1
 curl -fsS -m 180 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
-  -H "Idempotency-Key: $RUN_ID" -d '{"input":"跑三步命令证明崩溃恢复"}' > /tmp/chaos-run.out &
+  -H "Idempotency-Key: $RUN_ID" -d '{"input":"executor 崩溃恢复"}' > /tmp/chaos-run.out &
 RUN_PID=$!
 
 wait_for_count /tmp/chaos-sse.out 'sandbox.exec' 1 60
 sleep 1 # 第 2 步 exec 执行中
-WORKER_PID=$(pgrep -f 'chronotope-worker -addr' | head -1)
-kill -9 "$WORKER_PID"
-echo "  [注入] kill -9 worker (pid=${WORKER_PID})"
+EXEC_PID=$(pgrep -f 'chronotope-executor -addr' | head -1)
+kill -9 "$EXEC_PID"
+echo "  [注入] kill -9 executor (pid=${EXEC_PID})"
 
 sleep 1
-start_worker
-sleep 2
+start_executor
+wait_for_service http://localhost:9082/healthz
 wait "$RUN_PID" || true
 RUN=$(cat /tmp/chaos-run.out)
 assert "崩溃后自动续跑完成（steps=4）" \
@@ -45,14 +44,15 @@ assert "崩溃后自动续跑完成（steps=4）" \
 
 sleep 1
 kill "$SSE_PID" 2>/dev/null || true
-assert "sandbox.exec ×3（重放不重复发射）" test "$(count_of /tmp/chaos-sse.out 'sandbox.exec')" -eq 3
-assert "tool.call ×3" test "$(count_of /tmp/chaos-sse.out 'tool.call')" -eq 3
-assert "run.completed" grep -q '"type":"run.completed"' /tmp/chaos-sse.out
+assert "sandbox.exec ×3" test "$(count_of /tmp/chaos-sse.out 'sandbox.exec')" -eq 3
 
 HARNESS_DELTA=$(( $(count_of /tmp/chaos-harness.log 'runs start') - HARNESS_BASELINE ))
 EXEC_DELTA=$(( $(count_of /tmp/chaos-executor.log 'INFO execute') - EXEC_BASELINE ))
+SANDBOX_IDS=$(grep -o 'sandbox_id=sb_[a-f0-9]*' /tmp/chaos-executor.log | sort -u | wc -l | tr -d ' ')
 echo "  harness /runs 增量: ${HARNESS_DELTA}（期望 4：已完成 step 零重调）"
-echo "  executor 执行增量: ${EXEC_DELTA}（期望 4：3 步各一次 + 在途 step 重发恰好一次）"
+echo "  executor 执行增量: ${EXEC_DELTA}（期望 4：3 步 + 在途重发恰好一次）"
+echo "  executor 日志中唯一 sandbox_id 数: ${SANDBOX_IDS}（期望 1：沙箱按 id 存活，不重建）"
 assert "不重调 harness（/runs 恰好 4 次）" test "$HARNESS_DELTA" -eq 4
-assert "沙箱执行语义正确（3 步 + 在途重发恰好一次 = 4）" test "$EXEC_DELTA" -eq 4
+assert "execute 恰好 4 次（在途重发一次）" test "$EXEC_DELTA" -eq 4
+assert "沙箱按 sandbox_id 存活（唯一 id=1）" test "$SANDBOX_IDS" -eq 1
 finish

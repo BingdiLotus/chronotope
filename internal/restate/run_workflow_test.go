@@ -66,6 +66,16 @@ func (f *fakeStore) GetRun(_ context.Context, runID string) (*store.Run, error) 
 	return nil, store.ErrNotFound
 }
 
+func (f *fakeStore) UpdateRunStatus(_ context.Context, runID string, status sessionapi.RunStatus) error {
+	if f.runs == nil {
+		f.runs = map[string]*store.Run{}
+	}
+	if r, ok := f.runs[runID]; ok {
+		r.Status = status
+	}
+	return nil
+}
+
 func (f *fakeStore) CreateRun(_ context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error) {
 	if f.runs == nil {
 		f.runs = map[string]*store.Run{}
@@ -183,7 +193,7 @@ func eventsOf(store *fakeStore, typ event.Type) []storedEvent {
 // --- 用例 ---
 
 func TestRunLoopHappyPath(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
 	harness := &fakeHarness{script: []*Result{{
 		Done: true, Deltas: []string{"你好，"}, Final: "你好，我是助手。",
 		Usage: runs.LLMUsage{TokensIn: 10, TokensOut: 5},
@@ -238,6 +248,11 @@ func TestRunLoopHappyPath(t *testing.T) {
 	}
 	if msgText != "你好，我是助手。" {
 		t.Fatalf("消息内容不符: %q", msgText)
+	}
+
+	// run 状态行记账：worker 是终态记账者（api 崩溃后状态仍收敛）
+	if r, ok := store.runs["r_1"]; !ok || r.Status != sessionapi.RunCompleted {
+		t.Fatalf("run 状态应为 completed: %+v", store.runs)
 	}
 
 	// /runs 请求组装：system 指令 + 用户输入 + 模型绑定
@@ -310,7 +325,7 @@ func TestRunLoopToolCallContinuesLoop(t *testing.T) {
 }
 
 func TestRunLoopHarnessErrorTerminates(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
 	harness := &fakeHarness{script: []*Result{{ErrCode: "max_turns", ErrMsg: "exceeded"}}}
 	sessions := &fakeSessions{state: SessionState{
 		Phase:       sessionapi.PhaseReady,
@@ -332,6 +347,9 @@ func TestRunLoopHarnessErrorTerminates(t *testing.T) {
 	_ = json.Unmarshal(eventsOf(store, event.RunFailed)[0].payload, &fp)
 	if fp.Code != "max_turns" {
 		t.Fatalf("run.failed 应带错误码: %+v", fp)
+	}
+	if r, ok := store.runs["r_1"]; !ok || r.Status != sessionapi.RunFailed {
+		t.Fatalf("harness error 终态 run 状态应为 failed: %+v", store.runs)
 	}
 }
 

@@ -56,6 +56,8 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	}); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
+	// run 状态行记账（幂等）：worker 是终态记账者，api 崩溃后状态仍收敛
+	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunRunning)
 
 	msgs, err := buildMessages(ctx, deps.Store, in, cfg)
 	if err != nil {
@@ -84,6 +86,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "harness", "", map[string]any{
 				"reason": runErr.Error(),
 			})
+			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
 			return RunOutput{}, runErr
 		}
 
@@ -97,6 +100,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
 				"code": res.ErrCode, "message": res.ErrMsg,
 			})
+			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
 			return RunOutput{}, restate.ToTerminalError(fmt.Errorf("harness: %s: %s", res.ErrCode, res.ErrMsg))
 		}
 
@@ -130,6 +134,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 			})
+			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCompleted)
 			return RunOutput{Final: res.Final, Steps: step + 1}, nil
 		}
 	}
@@ -137,6 +142,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	_ = emit.Emit(ctx, in.SessionID, runID, maxSteps, event.RunFailed, "", "", map[string]any{
 		"reason": "max_steps",
 	})
+	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
 	return RunOutput{}, restate.ToTerminalError(fmt.Errorf("max steps (%d) exceeded", maxSteps))
 }
 

@@ -7,6 +7,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -20,6 +21,9 @@ type Store interface {
 	GetRun(ctx context.Context, runID string) (*store.Run, error)
 	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
+	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
+	// 事件才是真相，状态行是投影；chaos 套件 kill9-api 实证）。
+	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
 }
 
 // SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object
