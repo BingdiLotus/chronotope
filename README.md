@@ -6,9 +6,9 @@ Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意�
 
 ## 项目状态
 
-**W1 进行中**：D1 Spike（Restate Go SDK 五项原语）**全部通过**（结论见 [spike/README.md](./spike/README.md)，不切 Temporal）。
-已落地：store 数据访问层（幂等事件/消息真相）、worker 四个 Restate 服务（session_object / run_workflow / scheduler / webhook，agent 主循环 journal 缓存）、api Session API 网关（REST + SSE 时间轴 after=seq 续读）、harness 真实 agent 循环（LiteLLM 网关流式调用 + 工具分流 + fake 模式）。
-**W1 闭环验收通过**（[test/e2e/w1-loop.sh](test/e2e/w1-loop.sh) 11 项断言全过；真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`）。
+**W1 ✓ / W2 ✓ 进行中**：W1 闭环验收通过（[test/e2e/w1-loop.sh](test/e2e/w1-loop.sh) 11 项断言）；W2 沙箱闭环验收通过（[test/e2e/w2-sandbox.sh](test/e2e/w2-sandbox.sh) 9 项断言：agent 写代码 → docker 沙箱执行 → 文件回传）。
+已落地：store 数据访问层（幂等事件/消息/沙箱事实状态/exec 幂等缓存）、worker 四个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 / scheduler / webhook）+ 工具分流（代码→executor、API→harness 内联、控制→W3 awakeable）、api Session API 网关（REST + SSE 时间轴 after=seq 续读）、executor docker driver（受限容器 + 幂等缓存）、harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）。
+下一步：W3 持久性三件套（kill -9 崩溃恢复 chaos、定时唤醒、HITL awakeable）；真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。
 
 ## 快速开始（W1 闭环）
 
