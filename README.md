@@ -50,7 +50,9 @@ curl -X POST localhost:8080/orgs/org-demo/agents -H 'content-type: application/j
 ```
 
 一键容器化：`HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build`
-（真实模型：在 `.env` 配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` 后 `make up`）。
+（真实模型：在 `.env` 配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` 后 `make up`；
+可经 `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` 指向官方端点或任意 OpenAI/Anthropic
+兼容代理——切换在 LiteLLM 网关配置化完成，0 代码改动）。
 
 **全场景演示（W1–W4 一条命令复现）**：`bash scripts/demo.sh`
 ——全栈启动 → 注册 worker → W1 对话闭环 → W2 沙箱闭环 → W3 HITL → W3 定时唤醒。

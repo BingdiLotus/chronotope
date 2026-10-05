@@ -41,6 +41,8 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-chronotope-dev}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
     ports:
       - "4000:4000"
     volumes:
