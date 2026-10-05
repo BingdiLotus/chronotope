@@ -58,7 +58,7 @@ assert "SSE 收到事件流（≥3 条）" test "$EVENTS" -ge 3
 assert "事件序列含 run.started" grep -q '"type":"run.started"' /tmp/e2e-sse.out
 assert "事件序列含 llm.call" grep -q '"type":"llm.call"' /tmp/e2e-sse.out
 assert "事件序列含 run.completed" grep -q '"type":"run.completed"' /tmp/e2e-sse.out
-ORDER=$(grep -o '"type":"run\.[a-z]*"\|"type":"llm.call"' /tmp/e2e-sse.out | paste -sd, -)
+ORDER=$(grep -a -o '"type":"run\.[a-z]*"\|"type":"llm.call"' /tmp/e2e-sse.out | paste -sd, -)
 assert "事件顺序 run.started→llm.call→run.completed" \
   python3 -c "import sys; s=sys.stdin.read(); assert 'run.started' in s and 'llm.call' in s and 'run.completed' in s and s.index('run.started') < s.index('llm.call') < s.index('run.completed')" <<< "$ORDER"
 echo "  事件序列: $ORDER"

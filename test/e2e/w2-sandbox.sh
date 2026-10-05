@@ -63,7 +63,7 @@ assert "read_file 读回 hello.py" \
   python3 -c 'import sys,json; data=[json.loads(l[6:])["payload"] for l in sys.stdin if l.startswith("data: ") and "sandbox.exec" in l]; assert any(p.get("tool")=="read_file" and p.get("path")=="/workspace/hello.py" for p in data)' < /tmp/w2-sse.out
 
 # 5. 事件顺序：run.started → …工具循环… → run.completed
-ORDER=$(grep -o '"type":"run\.[a-z]*"' /tmp/w2-sse.out | paste -sd, -)
+ORDER=$(grep -a -o '"type":"run\.[a-z]*"' /tmp/w2-sse.out | paste -sd, -)
 assert "首事件 run.started、末事件 run.completed" \
   python3 -c "import sys; s=sys.stdin.read().strip().split(','); assert 'run.started' in s[0] and 'run.completed' in s[-1], s" <<< "$ORDER"
 echo "  事件序列: $ORDER"

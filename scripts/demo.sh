@@ -32,13 +32,13 @@ pass "worker 端点注册（version v1）"
 bash test/e2e/w1-loop.sh "$API" > /tmp/demo-w1.log 2>&1 && pass "W1 对话闭环（11 项断言）" || { fail "W1 对话闭环"; tail -5 /tmp/demo-w1.log; }
 
 # 4. W2 沙箱闭环（harness 切脚本模式重启）
-HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/hello.py","content":"print(42)"}}},{"tool_call":{"name":"bash","arguments":{"command":"python3 /workspace/hello.py"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/hello.py"}}},{"final":"沙箱闭环完成，输出 42。"}]' \
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/hello.py","content":"print(42)"}}},{"tool_call":{"name":"bash","arguments":{"command":"python3 /workspace/hello.py"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/hello.py"}}},{"final":"沙箱闭环完成，输出 42。"}]' \
   $DC up -d --force-recreate harness
 sleep 3
 bash test/e2e/w2-sandbox.sh "$API" > /tmp/demo-w2.log 2>&1 && pass "W2 沙箱闭环（9 项断言）" || { fail "W2 沙箱闭环"; tail -5 /tmp/demo-w2.log; }
 
 # 5. W3 HITL（harness 切审批脚本）
-HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"request_approval","arguments":{"question":"允许删除生产数据吗？"}}},{"final":"已获批准，执行完成。"}]' \
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"request_approval","arguments":{"question":"允许删除生产数据吗？"}}},{"final":"已获批准，执行完成。"}]' \
   $DC up -d --force-recreate harness
 sleep 3
 bash test/e2e/w3-hitl.sh "$API" > /tmp/demo-w3h.log 2>&1 && pass "W3 HITL 审批挂起/恢复（4 项断言）" || { fail "W3 HITL"; tail -5 /tmp/demo-w3h.log; }

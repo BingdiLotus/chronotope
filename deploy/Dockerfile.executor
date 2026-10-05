@@ -7,9 +7,10 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/chronotope-executor ./cmd/executor
 
 FROM alpine:3.20
-# docker-cli：docker driver 经挂载的 /var/run/docker.sock 编排宿主机沙箱容器
-RUN apk add --no-cache ca-certificates tzdata docker-cli && adduser -D -u 65532 chronotope
-USER chronotope
+# docker-cli：docker driver 经挂载的 /var/run/docker.sock 编排宿主机沙箱容器。
+# 以 root 运行：/var/run/docker.sock 在 Docker Desktop 重启后为 root:root 660，
+# 非 root 用户无法连接（demo 实测 permission denied）；沙箱管理器本就需要 socket 权限。
+RUN apk add --no-cache ca-certificates tzdata docker-cli
 COPY --from=build /out/chronotope-executor /usr/local/bin/chronotope-executor
 EXPOSE 9082
 ENTRYPOINT ["chronotope-executor"]

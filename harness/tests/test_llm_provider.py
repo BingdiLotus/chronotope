@@ -137,3 +137,21 @@ async def test_fake_provider_inline_tool_advances_within_request():
     req1 = req0.model_copy(update={"step": 1})
     c4 = [c async for c in provider.stream(req1)]
     assert "".join(c.delta for c in c4 if c.delta) == "完成"
+
+
+def test_build_provider_empty_reply_env_falls_back():
+    """HARNESS_FAKE_REPLY 设空串（compose 默认透传）不得覆盖默认回复（demo 实证）。"""
+    import os
+
+    from app.llm import FakeProvider, build_provider
+
+    os.environ["HARNESS_FAKE_MODEL"] = "1"
+    os.environ["HARNESS_FAKE_REPLY"] = ""
+    os.environ.pop("HARNESS_FAKE_SCRIPT", None)
+    try:
+        provider = build_provider()
+        assert isinstance(provider, FakeProvider)
+        assert provider.reply == "你好，我是 Chronotope 演示助手。"
+    finally:
+        os.environ.pop("HARNESS_FAKE_MODEL", None)
+        os.environ.pop("HARNESS_FAKE_REPLY", None)

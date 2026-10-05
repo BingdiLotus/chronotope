@@ -175,8 +175,9 @@ def build_provider() -> LLMProvider:
         script = None
         if raw := os.environ.get("HARNESS_FAKE_SCRIPT"):
             script = json.loads(raw)  # [{"tool_call":{...}} | {"final":"..."}, ...]
+        # 空串视为未设置（compose 默认透传 "" 不得覆盖默认回复——demo 实证）
         return FakeProvider(
-            reply=os.environ.get("HARNESS_FAKE_REPLY", "你好，我是 Chronotope 演示助手。"),
+            reply=os.environ.get("HARNESS_FAKE_REPLY") or "你好，我是 Chronotope 演示助手。",
             script=script,
         )
     api_key = os.environ.get("LITELLM_API_KEY", "")

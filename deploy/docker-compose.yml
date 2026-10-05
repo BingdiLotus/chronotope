@@ -31,6 +31,8 @@ services:
     image: docker.io/restatedev/restate:latest
     environment:
       RESTATE_AUTO_TIP: "false"
+      # 固定节点名：数据卷跨容器重建时节点身份不变（否则 Restate 拒绝启动）
+      RESTATE_NODE_NAME: chronotope-node
     volumes:
       - restatedata:/restate-data  # invocation/部署状态持久化（重启/重建不丢在途 run）
     ports:
