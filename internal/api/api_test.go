@@ -726,3 +726,20 @@ func TestCorsMiddleware(t *testing.T) {
 		t.Fatalf("非白名单源不应放行: %q", rec2.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
+
+func TestCreateSessionWithParticipants(t *testing.T) {
+	h, fs, ing := setup(t)
+	agentID, _ := seedAgentSession(t, h, fs)
+	// 群聊创建：participants 透传 + SetParticipants 对象调用
+	rec := doJSON(t, h.Router(), http.MethodPost, "/agents/"+agentID+"/sessions", `{"participants":[{"agent_id":"a_m1","role":"架构师"}]}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "a_m1") {
+		t.Fatalf("participants 应回显: %s", rec.Body.String())
+	}
+	last := ing.lastCall()
+	if !strings.HasSuffix(last, "/SetParticipants") {
+		t.Fatalf("应调 SetParticipants: %q", last)
+	}
+}

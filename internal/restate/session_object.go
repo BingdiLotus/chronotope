@@ -19,12 +19,13 @@ const (
 // SessionState 是 session_object 的持久状态（分层原则：Restate 只放协调态——
 // 游标/引用/版本/小配置；大载荷在 PG/MinIO，worker-架构设计 §4）。
 type SessionState struct {
-	Phase            sessionapi.SessionPhase `json:"phase"`
-	AgentConfig      sessionapi.AgentConfig  `json:"agent_config"`
-	LastRunID        string                  `json:"last_run_id,omitempty"`
-	PendingAwakeable string                  `json:"pending_awakeable,omitempty"` // HITL 审批槽
-	FrozenAwakeable  string                  `json:"frozen_awakeable,omitempty"`  // 欠费冻结槽（与审批独立）
-	SandboxID        string                  `json:"sandbox_id,omitempty"`        // 会话作用域沙箱（懒创建，W2）
+	Phase            sessionapi.SessionPhase  `json:"phase"`
+	AgentConfig      sessionapi.AgentConfig   `json:"agent_config"`
+	LastRunID        string                   `json:"last_run_id,omitempty"`
+	PendingAwakeable string                   `json:"pending_awakeable,omitempty"` // HITL 审批槽
+	FrozenAwakeable  string                   `json:"frozen_awakeable,omitempty"`  // 欠费冻结槽（与审批独立）
+	Participants     []sessionapi.Participant `json:"participants,omitempty"`      // 群聊成员（非空 = 群聊会话；moderator 主持）
+	SandboxID        string                   `json:"sandbox_id,omitempty"`        // 会话作用域沙箱（懒创建，W2）
 }
 
 const sessionStateKey = "state"
@@ -46,7 +47,8 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
 		Handler("SetPendingAwakeable", restate.NewObjectHandler[string, SessionState](setPendingAwakeable)).
 		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
-		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession))
+		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession)).
+		Handler("SetParticipants", restate.NewObjectHandler[[]sessionapi.Participant, SessionState](setParticipants))
 }
 
 // attachSandbox 记录会话作用域沙箱（懒创建后回填；幂等：同值重复设置无害）。
@@ -100,6 +102,17 @@ func unfreezeSession(ctx restate.ObjectContext, _ restate.Void) (SessionState, e
 	}
 	restate.ResolveAwakeable[string](ctx, state.FrozenAwakeable, "unfrozen")
 	state.FrozenAwakeable = ""
+	restate.Set(ctx, sessionStateKey, state)
+	return state, nil
+}
+
+// setParticipants 设置群聊成员（幂等：同值重复设置无害）。
+func setParticipants(ctx restate.ObjectContext, participants []sessionapi.Participant) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	state.Participants = participants
 	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }

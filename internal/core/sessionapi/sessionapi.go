@@ -86,6 +86,18 @@ type SubmitRunRequest struct {
 	Queue          bool           `json:"queue,omitempty"` // true 时双开改排队
 }
 
+// Participant 是群聊成员（边界语义/落地方案 §14 水平黑板拓扑：同侪共享日志）。
+type Participant struct {
+	AgentID string `json:"agent_id"`
+	Role    string `json:"role,omitempty"` // 成员角色说明（moderator prompt 可见）
+}
+
+// CreateSessionRequest 是 POST /agents/:id/sessions 的可选请求体
+// （participants 非空 = 群聊会话：moderator 主持循环 + 成员 child run）。
+type CreateSessionRequest struct {
+	Participants []Participant `json:"participants,omitempty"`
+}
+
 // ActionRequest 是 POST /sessions/:id/actions 的请求体。
 type ActionRequest struct {
 	Action  ActionName     `json:"action"`

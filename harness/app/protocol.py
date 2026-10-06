@@ -36,7 +36,7 @@ VOCABULARY = {
 CODE_TOOLS = {"bash", "run_python", "read_file", "write_file", "list_files"}
 
 # 控制类工具：harness 交棒给 worker 的控制面（awakeable/子 Agent），harness 不内联
-CONTROL_TOOLS = {"request_approval", "spawn_subagent"}
+CONTROL_TOOLS = {"request_approval", "spawn_subagent", "next_speaker"}
 
 DEFAULT_MAX_TURNS = 8
 DEFAULT_MAX_OUTPUT_BYTES = 512 * 1024

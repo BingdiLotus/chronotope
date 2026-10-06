@@ -160,6 +160,17 @@ jobs:
             sleep 1
           done
           bash test/e2e/w5-budget.sh http://localhost:8080
+      - name: W7 群聊多 Agent e2e（moderator 主持循环 + 成员 child run）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"next_speaker","arguments":{"participant":0,"instruction":"请就方案选择发表意见"}}},{"tool_call":{"name":"next_speaker","arguments":{"participant":1,"instruction":"请评审上一轮发言"}}},{"final":"讨论完成：采用方案 A 并限定范围。"}]'
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w7-group.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

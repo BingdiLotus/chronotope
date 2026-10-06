@@ -78,6 +78,13 @@ for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&
 bash test/e2e/w5-budget.sh "$API" > /tmp/demo-w5b.log 2>&1 && pass "W5 org 预算冻结（3 项断言）" || { fail "W5 org 预算冻结"; tail -5 /tmp/demo-w5b.log; }
 API_AGGREGATE_INTERVAL=1m $DC up -d --force-recreate api
 
+# 11. W7 群聊多 Agent（moderator 主持循环 + 成员 child run 发言）
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"next_speaker","arguments":{"participant":0,"instruction":"请就方案选择发表意见"}}},{"tool_call":{"name":"next_speaker","arguments":{"participant":1,"instruction":"请评审上一轮发言"}}},{"final":"讨论完成：采用方案 A 并限定范围。"}]' \
+  $DC up -d --force-recreate harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w7-group.sh "$API" > /tmp/demo-w7.log 2>&1 && pass "W7 群聊多 Agent（5 项断言）" || { fail "W7 群聊多 Agent"; tail -5 /tmp/demo-w7.log; }
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

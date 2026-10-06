@@ -52,6 +52,10 @@ func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
 // POST /agents/{agentID}/sessions —— 创建 session → ready（session_object 初始化）。
 func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
+	var req sessionapi.CreateSessionRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req) // 空体/旧客户端：普通会话
+	}
 	agent, err := h.Store.GetAgent(r.Context(), agentID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, 404, "agent not found")
@@ -74,11 +78,22 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, 503, "session_object unavailable: "+err.Error())
 		return
 	}
+	if len(req.Participants) > 0 {
+		// 群聊成员（moderator 主持循环依据；同侪共享消息日志）
+		if err := h.Ingress.Call(r.Context(), "/session_object/"+id+"/SetParticipants",
+			http.MethodPost, req.Participants, &state); err != nil {
+			writeError(w, http.StatusServiceUnavailable, 503, "set participants failed: "+err.Error())
+			return
+		}
+	}
 	if err := h.Store.UpdateSessionStatus(r.Context(), id, sessionapi.PhaseReady); err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "agent_id": agentID, "status": "ready"})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id": id, "agent_id": agentID, "status": "ready",
+		"participants": req.Participants,
+	})
 }
 
 // POST /sessions/{sessionID}/runs —— 提交任务（Idempotency-Key 必带，幂等链第一跳）。

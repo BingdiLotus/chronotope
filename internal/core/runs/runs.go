@@ -93,6 +93,7 @@ const (
 	ToolHTTPRequest     = "http_request"
 	ToolRequestApproval = "request_approval"
 	ToolSpawnSubagent   = "spawn_subagent"
+	ToolNextSpeaker     = "next_speaker" // 群聊：moderator 指定下一位发言者（W7）
 
 	// MCPToolPrefix 是 mcp:<server>:<tool> 前缀。
 	MCPToolPrefix = "mcp:"
@@ -105,7 +106,8 @@ func IsVocabularyName(name string) bool {
 	}
 	switch name {
 	case ToolBash, ToolRunPython, ToolReadFile, ToolWriteFile, ToolListFiles,
-		ToolWebSearch, ToolHTTPRequest, ToolRequestApproval, ToolSpawnSubagent:
+		ToolWebSearch, ToolHTTPRequest, ToolRequestApproval, ToolSpawnSubagent,
+		ToolNextSpeaker:
 		return true
 	}
 	return false

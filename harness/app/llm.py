@@ -135,6 +135,20 @@ class FakeProvider(LLMProvider):
     async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
         # 记忆消化摘要模式：run_id 带 #consolidation 后缀（worker 分层记忆调用；
         # 确定性文本——重放安全，真实模式不受影响）
+        if req.model == "chronotope-participant-a":
+            final = "成员发言（架构师）：我建议采用方案 A，理由是简单可控。"
+            for i in range(0, len(final), 3):
+                await asyncio.sleep(self.chunk_ms / 1000)
+                yield StreamChunk(delta=final[i : i + 3])
+            yield StreamChunk(usage={"tokens_in": 4, "tokens_out": 6})
+            return
+        if req.model == "chronotope-participant-b":
+            final = "成员发言（评审）：方案 A 可行，但成本偏高，建议限定范围。"
+            for i in range(0, len(final), 3):
+                await asyncio.sleep(self.chunk_ms / 1000)
+                yield StreamChunk(delta=final[i : i + 3])
+            yield StreamChunk(usage={"tokens_in": 4, "tokens_out": 6})
+            return
         if req.model == "chronotope-subagent":
             # 子 Agent 演示模式（e2e 用）：确定性终答，避免脚本递归
             final = "子任务完成：答案是 42。"

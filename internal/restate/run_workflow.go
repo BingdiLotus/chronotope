@@ -142,7 +142,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			Step:           step,
 			Model:          cfg.Model,
 			Messages:       msgs,
-			Tools:          toolsFromConfig(cfg),
+			Tools:          groupAwareTools(cfg, state),
 			MaxTurns:       8,
 			MaxOutputBytes: 524288,
 		}
@@ -296,6 +296,16 @@ func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.Ag
 	}
 	msgs = append(msgs, runs.Message{Role: "user", Content: in.Input})
 	return msgs, nil
+}
+
+// groupAwareTools 组装工具清单：群聊会话（participants 非空）附加主持工具
+// next_speaker（moderator 决策发言顺序；落地方案 §14）。
+func groupAwareTools(cfg sessionapi.AgentConfig, state SessionState) []runs.Tool {
+	tools := toolsFromConfig(cfg)
+	if len(state.Participants) > 0 {
+		tools = append(tools, groupTools()...)
+	}
+	return tools
 }
 
 // toolsFromConfig 把 agent.config.tools 映射为 /runs 协议的工具清单（风险分级 W5 细化）。
