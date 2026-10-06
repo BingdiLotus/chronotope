@@ -303,12 +303,12 @@ func TestRunLoopHappyPath(t *testing.T) {
 		t.Fatalf("run.completed payload 不符: %+v", cp)
 	}
 
-	// 消息写回：assistant 终答必须落表（重放后历史不缺失，worker-架构设计 §3）
-	if len(store.messages) != 1 || store.messages[0].role != "assistant" {
-		t.Fatalf("assistant 消息应写回: %+v", store.messages)
+	// 消息写回：user 输入 + assistant 终答落表（对话全量真相；重放后历史不缺失）
+	if len(store.messages) != 2 || store.messages[0].role != "user" || store.messages[1].role != "assistant" {
+		t.Fatalf("消息应为 user+assistant 两条: %+v", store.messages)
 	}
 	var msgText string
-	if err := json.Unmarshal([]byte(store.messages[0].content), &msgText); err != nil {
+	if err := json.Unmarshal([]byte(store.messages[1].content), &msgText); err != nil {
 		t.Fatalf("消息 content 应为 JSON 字符串: %v", err)
 	}
 	if msgText != "你好，我是助手。" {

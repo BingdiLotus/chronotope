@@ -48,6 +48,14 @@ HARNESS_FAKE_SCRIPT= HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
 for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
 bash test/e2e/w3-schedule.sh "$API" > /tmp/demo-w3s.log 2>&1 && pass "W3 定时唤醒（5 项断言）" || { fail "W3 定时唤醒"; tail -5 /tmp/demo-w3s.log; }
 
+# 7. W5 分层记忆（worker 阈值调小 → 多轮对话触发消化 → 恢复默认）
+CONSOLIDATE_THRESHOLD=4 $DC up -d --force-recreate worker
+curl -fsS -X POST "$ADMIN/deployments" -H 'content-type: application/json' \
+  -d '{"uri":"http://worker:9080","version":"v1","use_http_11":true,"force":true}' > /dev/null
+sleep 3
+bash test/e2e/w5-memory.sh "$API" > /tmp/demo-w5.log 2>&1 && pass "W5 分层记忆（4 项断言）" || { fail "W5 分层记忆"; tail -5 /tmp/demo-w5.log; }
+CONSOLIDATE_THRESHOLD=40 $DC up -d --force-recreate worker
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

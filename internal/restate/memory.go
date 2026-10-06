@@ -3,6 +3,7 @@ package restate
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -76,6 +77,7 @@ func recentUserMessages(msgs []store.Message, limit int) []string {
 func consolidate(ctx restate.Context, deps *Deps, sessionID, runID, topic string, emit *Emitter) error {
 	threshold := thresholdOf(deps)
 	msgs, err := deps.Store.ListMessages(ctx, sessionID, 1000)
+	slog.Info("consolidate: check", "session", sessionID, "msgs", len(msgs), "threshold", threshold, "err", err)
 	if err != nil || len(msgs) < threshold {
 		return nil // 未达阈值或读取失败：跳过（失败不影响主流程）
 	}
@@ -86,6 +88,7 @@ func consolidate(ctx restate.Context, deps *Deps, sessionID, runID, topic string
 	}
 
 	_, runErr := restate.Run(ctx, func(rc restate.RunContext) (any, error) {
+		slog.Info("consolidate: closure enter", "session", sessionID, "version", version)
 		// 摘要：harness 摘要模式（run_id 带 #consolidation 后缀 → FakeProvider 返回
 		// 确定性摘要；真实模式用会话模型 + 摘要指令）。失败 → 跳过，不 fail run。
 		res, err := deps.Harness.Call(rc, &runs.Request{
@@ -98,11 +101,14 @@ func consolidate(ctx restate.Context, deps *Deps, sessionID, runID, topic string
 				{Role: "system", Content: summarizerPrompt, Source: "trusted"},
 				{Role: "user", Content: buildTranscript(msgs)},
 			},
+			Tools:          []runs.Tool{}, // 契约要求 list（nil 序列化为 null → harness 422）
 			MaxTurns:       1,
 			MaxOutputBytes: 524288,
 		})
 		summary := ""
-		if err == nil && res != nil {
+		if err != nil {
+			slog.Warn("consolidate: 摘要调用失败（跳过）", "err", err)
+		} else if res != nil {
 			summary = res.Final
 		}
 		if strings.TrimSpace(summary) == "" {
@@ -131,9 +137,10 @@ func consolidate(ctx restate.Context, deps *Deps, sessionID, runID, topic string
 		return struct{}{}, nil
 	}, restate.WithName("consolidation:"+strconv.Itoa(version)))
 	if runErr != nil {
-		// journal 错误：仅防御性吞掉（consolidation 从不 fail run）
+		slog.Warn("consolidate: journal error（不影响主流程）", "err", runErr)
 		return nil
 	}
+	slog.Info("consolidate: done", "session", sessionID, "version", version)
 	return nil
 }
 

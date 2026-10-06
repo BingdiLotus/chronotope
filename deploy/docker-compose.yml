@@ -97,6 +97,7 @@ services:
       RESTATE_URL: http://restate:8080
       HARNESS_URL: http://harness:8000
       EXECUTOR_URL: http://executor:9082
+      CONSOLIDATE_THRESHOLD: ${CONSOLIDATE_THRESHOLD:-40}
     ports:
       - "9080:9080"
     depends_on:

@@ -95,6 +95,10 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
+	// 用户输入写回消息全量（对话真相；buildMessages 之后写，避免本轮历史重复注入）
+	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
+		return RunOutput{}, restate.ToTerminalError(err)
+	}
 
 	maxTokens, maxCompute := parseBudget(cfg.Budget)
 	var accTokens int64
@@ -148,6 +152,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 
 		if err := emit.Emit(ctx, in.SessionID, runID, step, event.LLMCall, "llm", "", map[string]any{
 			"step": step, "usage": res.Usage,
+			"msgs": len(req.Messages), // 组装消息数（分层记忆注入的 e2e 可观测性）
 		}); err != nil {
 			return RunOutput{}, restate.ToTerminalError(err)
 		}
