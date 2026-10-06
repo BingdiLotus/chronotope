@@ -2,6 +2,8 @@ package execproto
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +31,9 @@ type SandboxStore interface {
 	UpdateSandboxTier(ctx context.Context, sandboxID string, tier int, snapshotRef *string) error
 	GetExec(ctx context.Context, idempotencyKey string) (*store.ExecRow, error)
 	PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
+	// 执行状态机（评审 #1：prepared claim → done 落账）
+	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error
+	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
 	SessionOrg(ctx context.Context, sessionID string) (string, error)
 	// 孤儿 GC（W8）：过期沙箱扫描 + 行删除。
 	ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*store.SandboxRow, error)
@@ -141,12 +146,29 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 幂等缓存（防重试双执行）：同键重发返回缓存结果，绝不复跑命令
+	// 幂等缓存状态机（评审 #1 闭合）：
+	//   done + digest 匹配 → 回缓存（SSE 同形流——客户端固定解析 SSE，评审 #2）
+	//   done + digest 不匹配 → 400（同键不同输入是契约违约）
+	//   prepared 新鲜（<2min）→ 409 in-flight（并发/未知窗口停派发）
+	//   prepared 过期 → unknown：命令可能已执行——按「结果查询优先」原则重跑覆盖
+	//     （exec 级语义：沙箱命令不可回查，重跑是唯一可确定路径；业务层由
+	//     worker 的 Restate journal 兜底）
 	if req.IdempotencyKey != "" {
-		if cached, err := s.Store.GetExec(r.Context(), req.IdempotencyKey); err == nil {
-			writeJSON(w, http.StatusOK, json.RawMessage(cached.Result))
+		cached, err := s.Store.GetExec(r.Context(), req.IdempotencyKey)
+		switch {
+		case err == nil && cached.State == "done" && (cached.InputDigest == "" || cached.InputDigest == inputDigest(req)):
+			// 缓存命中发同形 SSE 流（beat + exit），绝不发裸 JSON
+			s.writeCacheHit(w, cached.Result)
 			return
-		} else if !errors.Is(err, store.ErrNotFound) {
+		case err == nil && cached.State == "done":
+			writeError(w, http.StatusBadRequest, 400, "idempotency key 与输入摘要不匹配")
+			return
+		case err == nil && cached.PreparedAt != nil && time.Since(*cached.PreparedAt) < 2*time.Minute:
+			writeError(w, http.StatusConflict, 409, "同键执行进行中（in-flight）")
+			return
+		case err == nil:
+			s.Logger.Warn("exec prepared 过期视为 unknown，重跑覆盖", "key", req.IdempotencyKey)
+		case !errors.Is(err, store.ErrNotFound):
 			writeError(w, http.StatusInternalServerError, 500, err.Error())
 			return
 		}
@@ -168,6 +190,14 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 	if sb.TTL != nil && time.Since(sb.CreatedAt) > *sb.TTL {
 		writeError(w, http.StatusConflict, 409, "sandbox expired（TTL 空闲回收）")
 		return
+	}
+
+	// 执行前 claim（prepared；并发同键第二个请求在 GetExec 分支被 409）
+	if req.IdempotencyKey != "" {
+		if err := s.Store.PutExecPrepared(r.Context(), req.IdempotencyKey, req.SandboxID, inputDigest(req)); err != nil {
+			writeError(w, http.StatusInternalServerError, 500, err.Error())
+			return
+		}
 	}
 
 	// SSE 流式日志 + exit 结果帧
@@ -206,11 +236,36 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IdempotencyKey != "" {
 		raw, _ := json.Marshal(cached)
-		if err := s.Store.PutExec(r.Context(), req.IdempotencyKey, req.SandboxID, raw); err != nil {
-			s.Logger.Warn("put exec cache failed", "err", err)
+		// 落账失败必须发 error 帧（不回成功 exit）：否则未知窗口内重试会双执行
+		// （评审 #1——曾仅 Warn 后继续发成功 exit）
+		if err := s.Store.PutExecDone(r.Context(), req.IdempotencyKey, req.SandboxID, raw); err != nil {
+			s.Logger.Error("exec 落账失败（发 error 帧，重试由客户端 unknown 停派发）", "err", err)
+			s.writeSSE(w, fl, map[string]any{"type": "error", "payload": map[string]any{"message": "exec result persistence failed: " + err.Error()}})
+			return
 		}
 	}
 	s.writeSSE(w, fl, map[string]any{"type": "exit", "payload": cached})
+}
+
+// writeCacheHit 缓存命中回放：同形 SSE 流（beat → exit 帧）。
+// 客户端固定解析 SSE（评审 #2——曾发裸 JSON 致解析跳过、零值 exit=0 进 journal）。
+func (s *Server) writeCacheHit(w http.ResponseWriter, cached json.RawMessage) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, 500, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	s.writeSSE(w, fl, map[string]any{"type": "beat", "payload": map[string]any{"seq": 0}})
+	s.writeSSE(w, fl, map[string]any{"type": "exit", "payload": json.RawMessage(cached)})
+}
+
+// inputDigest 计算同键输入摘要（sha256(工具名+输入)，16 hex）。
+func inputDigest(req ExecuteRequest) string {
+	sum := sha256.Sum256([]byte(req.Name + "\x00" + req.Input))
+	return hex.EncodeToString(sum[:8])
 }
 
 // sseLogWriter 把 driver 原始字节按行包装为 {"type":"log"} SSE 帧，同时累积完整输出。

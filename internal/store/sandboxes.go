@@ -102,13 +102,19 @@ type ExecRow struct {
 	SandboxID      string
 	Result         json.RawMessage
 	ExpiresAt      time.Time
+	State          string     // prepared|done
+	InputDigest    string     // 同键同输入校验（sha256(input)）
+	PreparedAt     *time.Time // prepared 时间（in-flight 新鲜度判断）
 }
 
 // GetExec 读取幂等缓存；未命中返回 ErrNotFound。
+// GetExec 取幂等缓存行（含状态机与输入摘要——评审 #1 闭合依据）。
 func (s *Store) GetExec(ctx context.Context, idempotencyKey string) (*ExecRow, error) {
-	const q = `SELECT idempotency_key, sandbox_id, result, expires_at FROM sandbox_execs WHERE idempotency_key = $1`
+	const q = `SELECT idempotency_key, sandbox_id, result, expires_at, state, input_digest, prepared_at
+FROM sandbox_execs WHERE idempotency_key = $1`
 	var e ExecRow
-	err := s.Pool.QueryRow(ctx, q, idempotencyKey).Scan(&e.IdempotencyKey, &e.SandboxID, &e.Result, &e.ExpiresAt)
+	err := s.Pool.QueryRow(ctx, q, idempotencyKey).Scan(
+		&e.IdempotencyKey, &e.SandboxID, &e.Result, &e.ExpiresAt, &e.State, &e.InputDigest, &e.PreparedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -121,11 +127,40 @@ func (s *Store) GetExec(ctx context.Context, idempotencyKey string) (*ExecRow, e
 	return &e, nil
 }
 
+// PutExecPrepared 执行前 claim（prepared；同键已存在不覆盖——并发第二个请求
+// 走 GetExec 的分支：done → 回缓存 / prepared 新鲜 → 409 / prepared 过期 → 重跑）。
+func (s *Store) PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error {
+	const q = `
+INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state, input_digest, prepared_at)
+VALUES ($1, $2, NULL, now() + interval '24 hours', 'prepared', $3, now())
+ON CONFLICT (idempotency_key) DO NOTHING`
+	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, inputDigest); err != nil {
+		return fmt.Errorf("store: prepared exec: %w", err)
+	}
+	return nil
+}
+
+// PutExecDone 执行完成落账（状态 done；失败返回错误——调用方必须发 error 帧，
+// 不得回成功 exit，否则未知窗口内重试会双执行，评审 #1）。
+func (s *Store) PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
+	const q = `
+UPDATE sandbox_execs
+SET result = $3, state = 'done', expires_at = now() + interval '24 hours', sandbox_id = $2
+WHERE idempotency_key = $1`
+	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result); err != nil {
+		return fmt.Errorf("store: done exec: %w", err)
+	}
+	return nil
+}
+
 // PutExec 写入幂等缓存（TTL 24h，契约规范 §4）。
+// PutExec 保留（兼容旧调用方语义 = prepared + done 一步）。
 func (s *Store) PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
 	const q = `
-INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at)
-VALUES ($1, $2, $3, now() + interval '24 hours')`
+INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state)
+VALUES ($1, $2, $3, now() + interval '24 hours', 'done')
+ON CONFLICT (idempotency_key) DO UPDATE SET result = $3, state = 'done',
+  expires_at = now() + interval '24 hours'`
 	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result); err != nil {
 		return fmt.Errorf("store: put exec: %w", err)
 	}

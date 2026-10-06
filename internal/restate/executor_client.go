@@ -84,6 +84,7 @@ func (c *executorClient) Execute(ctx context.Context, sandboxID, name, input, id
 
 func parseExecFrames(r io.Reader) (*ExecResult, error) {
 	res := &ExecResult{}
+	sawExit := false
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -106,6 +107,7 @@ func parseExecFrames(r io.Reader) (*ExecResult, error) {
 			_ = json.Unmarshal(f.Payload, &p)
 			res.Output += p.Payload + "\n"
 		case "exit":
+			sawExit = true
 			var p struct {
 				Exit      int    `json:"exit"`
 				Output    string `json:"output"`
@@ -131,6 +133,11 @@ func parseExecFrames(r io.Reader) (*ExecResult, error) {
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("executor: read stream: %w", err)
+	}
+	// 终止帧强制（评审 #2）：无 exit 帧的流（空流/裸 JSON/截断）不得视为成功——
+	// 零值 exit=0 曾静默进 journal，恢复结果被污染
+	if !sawExit {
+		return nil, fmt.Errorf("executor: 流无 exit 终止帧（空流或协议不符）")
 	}
 	return res, nil
 }

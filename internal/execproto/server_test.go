@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,14 +74,22 @@ func (f *fakeDriver) Destroy(_ context.Context, id string) error {
 }
 
 type fakeSBStore struct {
-	sandboxes   map[string]*store.SandboxRow
-	execs       map[string]json.RawMessage
-	expiredRows []*store.SandboxRow
-	deletedIDs  []string
+	mu            sync.Mutex
+	sandboxes     map[string]*store.SandboxRow
+	execs         map[string]json.RawMessage
+	prepared      map[string]string
+	execsPrepared map[string]*store.ExecRow
+	expiredRows   []*store.SandboxRow
+	deletedIDs    []string
 }
 
 func newFakeSBStore() *fakeSBStore {
-	return &fakeSBStore{sandboxes: map[string]*store.SandboxRow{}, execs: map[string]json.RawMessage{}}
+	return &fakeSBStore{
+		sandboxes:     map[string]*store.SandboxRow{},
+		execs:         map[string]json.RawMessage{},
+		prepared:      map[string]string{},
+		execsPrepared: map[string]*store.ExecRow{},
+	}
 }
 
 func (f *fakeSBStore) UpsertSandbox(_ context.Context, sb *store.SandboxRow) error {
@@ -103,11 +112,35 @@ func (f *fakeSBStore) UpdateSandboxTier(_ context.Context, id string, tier int, 
 	return nil
 }
 func (f *fakeSBStore) GetExec(_ context.Context, key string) (*store.ExecRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if raw, ok := f.execs[key]; ok {
-		return &store.ExecRow{IdempotencyKey: key, Result: raw}, nil
+		return &store.ExecRow{IdempotencyKey: key, Result: raw, State: "done"}, nil
+	}
+	if row, ok := f.execsPrepared[key]; ok {
+		return row, nil
+	}
+	if _, ok := f.prepared[key]; ok {
+		now := time.Now()
+		return &store.ExecRow{IdempotencyKey: key, State: "prepared", PreparedAt: &now}, nil
 	}
 	return nil, store.ErrNotFound
 }
+func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prepared[key] = sandboxID
+	return nil
+}
+
+func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, result json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.execs[key] = result
+	delete(f.prepared, key)
+	return nil
+}
+
 func (f *fakeSBStore) PutExec(_ context.Context, key, sandboxID string, result json.RawMessage) error {
 	f.execs[key] = result
 	return nil
@@ -287,3 +320,45 @@ func TestServerGCDestroyFailureKeepsRow(t *testing.T) {
 }
 
 func ptrStr(v string) *string { return &v }
+
+// TestExecuteCacheHitStream 缓存命中回放同形 SSE 流（评审 #2——曾发裸 JSON）。
+func TestExecuteCacheHitStream(t *testing.T) {
+	st := newFakeSBStore()
+	drv := &fakeDriver{execResult: &ExecuteResult{Exit: 0}}
+	srv := &Server{Driver: drv, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_1", SessionID: "s_1", Status: "ready"})
+	st.execs["k1"] = json.RawMessage(`{"exit":3,"output":"缓存结果"}`)
+
+	rec := doReq(t, srv.Router(), http.MethodPost, "/execute",
+		`{"sandbox_id":"sb_1","name":"bash","input":"echo hi","idempotency_key":"k1"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"type":"exit"`) ||
+		!strings.Contains(rec.Body.String(), `"exit":3`) {
+		t.Fatalf("缓存命中应回放 SSE exit 流: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(drv.executed) != 0 {
+		t.Fatalf("缓存命中不得复跑命令: %+v", drv.executed)
+	}
+}
+
+// TestExecuteInFlightConflict 同键 in-flight：prepared 新鲜 → 409 停派发（评审 #1）。
+func TestExecuteInFlightConflict(t *testing.T) {
+	st := newFakeSBStore()
+	drv := &fakeDriver{execResult: &ExecuteResult{Exit: 0}}
+	srv := &Server{Driver: drv, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_1", SessionID: "s_1", Status: "ready"})
+	now := time.Now()
+	st.prepared["k1"] = "sb_1"
+	_ = now // fake 的 GetExec 用 time.Now() 生成 prepared_at——直接构造行
+	st.mu.Lock()
+	st.execsPrepared["k1"] = &store.ExecRow{IdempotencyKey: "k1", State: "prepared", PreparedAt: &now}
+	st.mu.Unlock()
+
+	rec := doReq(t, srv.Router(), http.MethodPost, "/execute",
+		`{"sandbox_id":"sb_1","name":"bash","input":"echo hi","idempotency_key":"k1"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("in-flight 应 409，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(drv.executed) != 0 {
+		t.Fatalf("in-flight 不得执行: %+v", drv.executed)
+	}
+}
