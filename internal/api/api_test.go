@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/events"
@@ -701,5 +703,26 @@ func TestSessionActionUnfreeze(t *testing.T) {
 	}
 	if last := ing.lastCall(); !strings.HasSuffix(last, "/session_object/"+sessionID+"/Unfreeze") {
 		t.Fatalf("应调 Unfreeze 对象方法: %q", last)
+	}
+}
+
+func TestCorsMiddleware(t *testing.T) {
+	router := chi.NewRouter()
+	router.Use(CorsMiddleware(""))
+	router.Get("/x", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
+		t.Fatalf("默认源应放行: %q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+	// 非白名单源不放行
+	req2 := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req2.Header.Set("Origin", "http://evil.example")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	if rec2.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("非白名单源不应放行: %q", rec2.Header().Get("Access-Control-Allow-Origin"))
 	}
 }

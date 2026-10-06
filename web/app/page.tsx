@@ -16,7 +16,7 @@ export default function Home() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`/api/orgs/${org}/sessions`)
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}/orgs/${org}/sessions`)
       .then((r) => r.json())
       .then((d) => setSessions(d.sessions || []))
       .catch((e) => setError(String(e)));
