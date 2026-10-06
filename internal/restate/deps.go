@@ -58,6 +58,7 @@ type SessionSource interface {
 // Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
 // EM+ST 经 Store / MO 后置）。
 type Deps struct {
+	MCP      MCPCaller // MCP 客户端（nil = 未启用）
 	Store    Store
 	Harness  Harness
 	Executor Executor

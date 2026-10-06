@@ -934,3 +934,71 @@ func TestAuthMiddlewareAdminKey(t *testing.T) {
 		t.Fatalf("admin key 应全放行，得 %d", rec.Code)
 	}
 }
+
+// fakeExecutorClient 记录 skill 安装的 executor 调用。
+type fakeExecutorClient struct {
+	paths   []string
+	sandbox string
+}
+
+func (f *fakeExecutorClient) WriteFile(_ context.Context, path, content string) error {
+	f.paths = append(f.paths, "PUT "+path)
+	return nil
+}
+
+func (f *fakeExecutorClient) Call(_ context.Context, path, method string, body, out any) error {
+	f.paths = append(f.paths, method+" "+path)
+	if out != nil {
+		if sb, ok := out.(*struct {
+			SandboxID string `json:"sandbox_id"`
+		}); ok && f.sandbox == "" {
+			f.sandbox = "sb_skill_test"
+			sb.SandboxID = f.sandbox
+		}
+	}
+	return nil
+}
+
+// TestInstallSkill 沙箱文件写入 + 对象 AddSkill + 事件发布。
+func TestInstallSkill(t *testing.T) {
+	h, fs, ing := setup(t)
+	seedAgentSession(t, h, fs)
+	h.Executor = &fakeExecutorClient{}
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/skills",
+		`{"name":"data-tools","content":"# 数据工具\n用法说明。"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); !strings.HasSuffix(last, "/InstallSkill") {
+		t.Fatalf("应调 session_ops InstallSkill: %q", last)
+	}
+	ex := h.Executor.(*fakeExecutorClient)
+	if len(ex.paths) != 2 || !strings.Contains(ex.paths[1], "PUT /files/sb_skill_test/workspace/skills/data-tools/SKILL.md") {
+		t.Fatalf("executor 应建沙箱并写 SKILL.md: %v", ex.paths)
+	}
+	// 非法 name（路径分隔符）
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/skills",
+		`{"name":"../etc","content":"x"}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("路径穿越 name 应 422，得 %d", rec.Code)
+	}
+}
+
+// TestConnectMCP 连接注册：URL 校验 + 对象 ConnectMCP。
+func TestConnectMCP(t *testing.T) {
+	h, fs, ing := setup(t)
+	seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/mcp",
+		`{"server":"echo","url":"http://mcp.example"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); !strings.HasSuffix(last, "/ConnectMCP") {
+		t.Fatalf("应调 session_ops ConnectMCP: %q", last)
+	}
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/mcp",
+		`{"server":"bad","url":"file:///etc"}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("非 http(s) URL 应 422，得 %d", rec.Code)
+	}
+}

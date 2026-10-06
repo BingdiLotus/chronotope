@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -453,6 +454,97 @@ func (h *Handler) updateOrgBudget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "quotas": quotas})
+}
+
+// POST /sessions/{sessionID}/mcp —— 注册 MCP 连接（worker 托管客户端；§11）。
+// tools/list 由 run 时懒缓存；事件 mcp.connected。
+func (h *Handler) connectMCP(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req struct {
+		Server string `json:"server"`
+		URL    string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Server == "" || req.URL == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "server 与 url 必填")
+		return
+	}
+	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+		writeError(w, http.StatusUnprocessableEntity, 422, "url 必须为 http(s)://（MVP 仅 HTTP transport；stdio 沙箱内进程后置）")
+		return
+	}
+	// session_ops 工作流：worker 发射 mcp.connected 事件 + 对象 ConnectMCP
+	//（worker 是唯一事件写者；对象直调会丢事件）
+	var out restateVoid
+	if err := h.Ingress.Call(r.Context(), "/session_ops/ConnectMCP", http.MethodPost,
+		map[string]string{"session_id": sessionID, "server": req.Server, "url": req.URL}, &out); err != nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "connect mcp failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"server": req.Server, "connected": true})
+}
+
+// POST /sessions/{sessionID}/skills —— 安装 skill（沙箱 skills/<name>/SKILL.md +
+// 会话状态记录；事件 skill.install）。沙箱未创建时提示先提交一次 run。
+func (h *Handler) installSkill(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Content == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "name 与 content 必填")
+		return
+	}
+	if strings.ContainsAny(req.Name, "/\\") {
+		writeError(w, http.StatusUnprocessableEntity, 422, "name 不得含路径分隔符")
+		return
+	}
+	// 沙箱懒创建（复用 run 路径的 ensure 语义：经 executor /sandboxes）
+	if h.Executor == nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "executor client 未配置")
+		return
+	}
+	sess, err := h.Store.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	agent, err := h.Store.GetAgent(r.Context(), sess.AgentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	sb := &struct {
+		SandboxID string `json:"sandbox_id"`
+	}{}
+	if err := h.Executor.Call(r.Context(), "/sandboxes", http.MethodPost,
+		map[string]any{"session_id": sessionID, "image": firstNonEmpty(agent.Config.Environment.Sandbox.Image, "python:3.11-slim")}, sb); err != nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "sandbox create failed: "+err.Error())
+		return
+	}
+	if err := h.Executor.WriteFile(r.Context(), "/files/"+sb.SandboxID+"/workspace/skills/"+req.Name+"/SKILL.md", req.Content); err != nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "write skill failed: "+err.Error())
+		return
+	}
+	// session_ops 工作流：worker 发射 skill.install 事件 + 对象 AddSkill
+	var out restateVoid
+	if err := h.Ingress.Call(r.Context(), "/session_ops/InstallSkill", http.MethodPost,
+		map[string]string{"session_id": sessionID, "name": req.Name}, &out); err != nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "add skill failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"name": req.Name, "installed": true})
+}
+
+type restateVoid struct{}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // POST /orgs/{orgID}/keys —— 生成 API key（明文仅响应一次；库存 sha256 哈希）。

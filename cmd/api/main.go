@@ -45,6 +45,9 @@ func main() {
 	defer st.Close()
 
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
+	if v := os.Getenv("EXECUTOR_URL"); v != "" {
+		h.Executor = api.NewHTTPExecutor(v)
+	}
 	h.StartPoller(ctx)
 
 	// 三轴计量聚合（活跃秒 / token / 计算秒，1min 桶；重建式，W4）。

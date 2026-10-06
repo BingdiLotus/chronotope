@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,7 +57,8 @@ func (h *httpIngress) Call(ctx context.Context, path, method string, body any, o
 		return fmt.Errorf("ingress: %s %s: status %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		// 空响应体（工作流 Void 结果）视为成功——decode EOF 容忍
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("ingress: decode response: %w", err)
 		}
 	}

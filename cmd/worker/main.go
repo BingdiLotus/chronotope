@@ -54,6 +54,7 @@ func main() {
 		Store:                st,
 		Harness:              restate.NewHarnessClient(*harnessURL),
 		Executor:             restate.NewExecutorClient(*executorURL),
+		MCP:                  restate.NewHTTPMCPClient(),
 		Sessions:             restate.RestateSessionSource{},
 		ConsolidateThreshold: consolidateThreshold,
 	}

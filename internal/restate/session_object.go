@@ -25,6 +25,8 @@ type SessionState struct {
 	PendingAwakeable string                   `json:"pending_awakeable,omitempty"` // HITL 审批槽
 	FrozenAwakeable  string                   `json:"frozen_awakeable,omitempty"`  // 欠费冻结槽（与审批独立）
 	Participants     []sessionapi.Participant `json:"participants,omitempty"`      // 群聊成员（非空 = 群聊会话；moderator 主持）
+	MCP              []MCPConnection          `json:"mcp,omitempty"`               // MCP 连接（tools 懒缓存）
+	Skills           []string                 `json:"skills,omitempty"`            // 已安装 skill 名（沙箱 skills/<name>/）
 	SandboxID        string                   `json:"sandbox_id,omitempty"`        // 会话作用域沙箱（懒创建，W2）
 }
 
@@ -48,7 +50,9 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("SetPendingAwakeable", restate.NewObjectHandler[string, SessionState](setPendingAwakeable)).
 		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
 		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession)).
-		Handler("SetParticipants", restate.NewObjectHandler[[]sessionapi.Participant, SessionState](setParticipants))
+		Handler("SetParticipants", restate.NewObjectHandler[[]sessionapi.Participant, SessionState](setParticipants)).
+		Handler("ConnectMCP", restate.NewObjectHandler[MCPConnectRequest, SessionState](connectMCP)).
+		Handler("AddSkill", restate.NewObjectHandler[string, SessionState](addSkill))
 }
 
 // attachSandbox 记录会话作用域沙箱（懒创建后回填；幂等：同值重复设置无害）。
@@ -102,6 +106,54 @@ func unfreezeSession(ctx restate.ObjectContext, _ restate.Void) (SessionState, e
 	}
 	restate.ResolveAwakeable[string](ctx, state.FrozenAwakeable, "unfrozen")
 	state.FrozenAwakeable = ""
+	restate.Set(ctx, sessionStateKey, state)
+	return state, nil
+}
+
+// MCPConnection 是 MCP 服务器连接（tools 列表懒缓存——run 时 worker 建连刷新）。
+type MCPConnection struct {
+	Server string        `json:"server"`
+	URL    string        `json:"url"`
+	Tools  []MCPToolSpec `json:"tools,omitempty"`
+}
+
+// MCPConnectRequest 是 POST /sessions/:id/mcp 的载荷。
+type MCPConnectRequest struct {
+	Server string `json:"server"`
+	URL    string `json:"url"`
+}
+
+// connectMCP 注册 MCP 连接（同 server 幂等覆盖）。
+func connectMCP(ctx restate.ObjectContext, req MCPConnectRequest) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	for i := range state.MCP {
+		if state.MCP[i].Server == req.Server {
+			state.MCP[i].URL = req.URL
+			state.MCP[i].Tools = nil // URL 变更后工具缓存失效
+			restate.Set(ctx, sessionStateKey, state)
+			return state, nil
+		}
+	}
+	state.MCP = append(state.MCP, MCPConnection{Server: req.Server, URL: req.URL})
+	restate.Set(ctx, sessionStateKey, state)
+	return state, nil
+}
+
+// addSkill 记录已装 skill（幂等去重）。
+func addSkill(ctx restate.ObjectContext, name string) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	for _, s := range state.Skills {
+		if s == name {
+			return state, nil
+		}
+	}
+	state.Skills = append(state.Skills, name)
 	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }

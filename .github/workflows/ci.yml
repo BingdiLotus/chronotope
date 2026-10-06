@@ -180,6 +180,19 @@ jobs:
           done
           bash test/e2e/auth.sh http://localhost:8080
           docker compose -f deploy/docker-compose.yml up -d --force-recreate api
+      - name: W6 生态 e2e（MCP 连接 + skill 安装）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"mcp:echo:echo","arguments":{"text":"你好"}}},{"final":"MCP 回显完成。"}]'
+        run: |
+          nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/mcp-fixture.log 2>&1 &
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w6-mcp.sh http://localhost:8080
+          pkill -f 'mcp-server.py' || true
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

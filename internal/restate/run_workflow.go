@@ -106,7 +106,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
-	msgs, err := buildMessages(ctx, deps.Store, in, cfg)
+	msgs, err := buildMessages(ctx, deps.Store, in, cfg, state.Skills)
 	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
@@ -141,6 +141,16 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		stepTools := groupAwareTools(cfg, state)
 		if groupTurns >= maxGroupTurns {
 			stepTools = toolsFromConfig(cfg)
+		}
+		// MCP 工具（落地方案 §11：worker 托管客户端，harness 只见 schema）：
+		// 懒 tools/list（失败降级跳过该 server，不阻断 run）
+		mcpTools, mcpErr := mcpToolsFromState(ctx, deps.MCP, state.MCP)
+		if mcpErr != nil {
+			_ = emit.Emit(ctx, in.SessionID, runID, step, event.EventTruncated, "mcp", "tools", map[string]any{
+				"step": step, "error": mcpErr.Error(),
+			}) // 降级：该 server 工具本步不可用，不阻断 run
+		} else {
+			stepTools = append(stepTools, mcpTools...)
 		}
 		req := &runs.Request{
 			Protocol:       runs.ProtocolVersion,
@@ -295,12 +305,18 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 }
 
 // buildMessages 组装本轮消息（分层记忆的 W5 前简化形态：system 指令 + 历史 + 本 run 输入）。
-func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.AgentConfig) ([]runs.Message, error) {
+func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.AgentConfig, skills []string) ([]runs.Message, error) {
 	history, err := st.ListMessages(ctx, in.SessionID, 50)
 	if err != nil {
 		return nil, err
 	}
 	msgs := []runs.Message{{Role: "system", Content: cfg.Instructions, Source: "trusted"}}
+	// 已装技能提示（§11：模型经 read_file 使用 skills/<name>/SKILL.md）
+	if len(skills) > 0 {
+		msgs = append(msgs, runs.Message{Role: "system", Source: "trusted",
+			Content: "【已安装技能】" + strings.Join(skills, "、") +
+				"。使用前先 read_file /workspace/skills/<name>/SKILL.md 获取用法说明。"})
+	}
 	// 分层记忆注入（边界语义 §7 组装函数）：主题滚动摘要 + 检索片段（topic 作用域优先）
 	topic := topicOf(in)
 	if sum, err := st.LatestSummary(ctx, in.SessionID, topic); err == nil && sum != nil {

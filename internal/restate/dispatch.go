@@ -3,6 +3,7 @@ package restate
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	restate "github.com/restatedev/sdk-go"
@@ -28,8 +29,8 @@ type execOutcome struct {
 // 计算秒（沙箱执行时长）在 journaled Run 闭包内测量并随结果一起记账——
 // 重放时回放同一时长（确定性），run 级预算熔断据此累加（边界语义 §1）。
 func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, cfg sessionapi.AgentConfig, tc ToolCall, emit *Emitter) (string, float64, error) {
-	switch tc.Name {
-	case runs.ToolBash, runs.ToolRunPython, runs.ToolListFiles:
+	switch {
+	case tc.Name == runs.ToolBash || tc.Name == runs.ToolRunPython || tc.Name == runs.ToolListFiles:
 		input := codeToolInput(tc)
 		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
 		if err != nil {
@@ -56,7 +57,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		})
 		return jsonToolResult(tc.Name, res), outcome.Duration.Seconds(), nil
 
-	case runs.ToolWriteFile:
+	case tc.Name == runs.ToolWriteFile:
 		path, content := fileToolArgs(tc)
 		if path == "" {
 			return "", 0, restate.ToTerminalError(fmt.Errorf("write_file 缺 path"))
@@ -76,7 +77,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"written":%q}}`, tc.Name, path), 0, nil
 
-	case runs.ToolReadFile:
+	case tc.Name == runs.ToolReadFile:
 		path, _ := fileToolArgs(tc)
 		if path == "" {
 			return "", 0, restate.ToTerminalError(fmt.Errorf("read_file 缺 path"))
@@ -96,11 +97,15 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), 0, nil
 
-	case runs.ToolSpawnSubagent:
+	case tc.Name == runs.ToolSpawnSubagent:
 		// 子 Agent：建子会话 + child run_workflow（durable 等待）+ 结果回喂（W6）
 		return dispatchSubagent(ctx, deps, in, runID, step, cfg, tc, emit)
 
-	case runs.ToolNextSpeaker:
+	case strings.HasPrefix(tc.Name, runs.MCPToolPrefix):
+		// MCP 工具（落地方案 §11：worker 托管客户端调用；harness 零状态）
+		return dispatchMCP(ctx, deps, in, runID, step, tc, emit)
+
+	case tc.Name == runs.ToolNextSpeaker:
 		// 群聊：moderator 指定发言者 → 成员 child run（durable 等待）→ 回喂（W7）
 		state, err := deps.Sessions.GetState(ctx, in.SessionID)
 		if err != nil {
@@ -108,7 +113,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		}
 		return speakAsParticipant(ctx, deps, in, runID, step, state, tc, emit)
 
-	case runs.ToolRequestApproval:
+	case tc.Name == runs.ToolRequestApproval:
 		// 控制类工具：awakeable 挂起（零进程占用），webhook resolve 后继续（W3 HITL）
 		decision, err := awaitApproval(ctx, deps, in, runID, step, tc, emit, 0)
 		if err != nil {

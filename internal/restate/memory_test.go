@@ -27,7 +27,7 @@ func TestBuildMessagesInjectsMemory(t *testing.T) {
 	}
 	cfg := sessionapi.AgentConfig{Model: "m", Instructions: "你是助手。", Version: 1}
 
-	msgs, err := buildMessages(t.Context(), st, RunInput{SessionID: "s_1", Input: "继续", Topic: "default"}, cfg)
+	msgs, err := buildMessages(t.Context(), st, RunInput{SessionID: "s_1", Input: "继续", Topic: "default"}, cfg, nil)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}

@@ -85,6 +85,16 @@ for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&
 bash test/e2e/w7-group.sh "$API" > /tmp/demo-w7.log 2>&1 && pass "W7 群聊多 Agent（5 项断言）" || { fail "W7 群聊多 Agent"; tail -5 /tmp/demo-w7.log; }
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 12. W6 生态（MCP 连接 + skill 安装；worker 托管客户端 + 沙箱工作区卷）
+nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/demo-mcp-fixture.log 2>&1 &
+MCP_FIXTURE_PID=$!
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"mcp:echo:echo","arguments":{"text":"你好"}}},{"final":"MCP 回显完成。"}]' \
+  $DC up -d --force-recreate harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/skill（5 项断言）" || { fail "W6 生态 MCP/skill"; tail -5 /tmp/demo-w6m.log; }
+kill $MCP_FIXTURE_PID 2>/dev/null || true
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

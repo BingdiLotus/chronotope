@@ -168,6 +168,13 @@ func (d *DockerDriver) WriteFile(ctx context.Context, sandboxID, path string, da
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write staging: %w", err)
 	}
+	// 目标父目录缺失时 docker cp 报 "Could not find the file ... in container"
+	//（skill 安装写 skills/<name>/SKILL.md，目录首次不存在——w6 e2e 实证）
+	if dir := filepath.Dir(path); dir != "/" && dir != "." {
+		if out, err := d.Runner.Run(ctx, "exec", sandboxID, "mkdir", "-p", dir); err != nil {
+			return fmt.Errorf("docker exec mkdir: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
 	if out, err := d.Runner.Run(ctx, "cp", tmp, sandboxID+":"+path); err != nil {
 		return fmt.Errorf("docker cp in: %w: %s", err, strings.TrimSpace(string(out)))
 	}

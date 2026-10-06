@@ -63,9 +63,17 @@ type Handler struct {
 	Store        Store
 	Hub          *events.Hub
 	Ingress      RestateIngress
-	PollInterval time.Duration // 事件轮询间隔（默认 500ms）
+	Executor     ExecutorClient // 沙箱文件写入（skill 安装）；nil = 禁用
+	PollInterval time.Duration  // 事件轮询间隔（默认 500ms）
 	Logger       *slog.Logger
 	Limiter      *Limiter // 三级限流（nil = 禁用；默认在 New 中启用 session 桶）
+}
+
+// ExecutorClient 是 executor 协议的最小客户端（api 侧 skill 安装用）。
+// WriteFile 发原始字节体（executor 的 PUT /files 读裸 body，非 JSON 封装）。
+type ExecutorClient interface {
+	Call(ctx context.Context, path, method string, body, out any) error
+	WriteFile(ctx context.Context, path, content string) error
 }
 
 // New 构造默认配置的 Handler。
@@ -105,8 +113,8 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/actions", h.sessionAction)    // pause|resume|wake|cancel|steer
 		r.Post("/schedules", h.createSchedule) // 一次性定时唤醒（W3）
 		r.Post("/messages", notImplemented)    // 人类消息注入（W5+）
-		r.Post("/skills", notImplemented)      // skill 安装（W6）
-		r.Post("/mcp", notImplemented)         // MCP 连接（W6）
+		r.Post("/skills", h.installSkill)      // skill 安装（沙箱 skills/<name>/ + 事件）
+		r.Post("/mcp", h.connectMCP)           // MCP 连接（worker 托管客户端，§11）
 		r.Delete("/", h.deleteSession)         // tombstone 两段式删除（边界语义 §4）
 		r.Get("/export", h.exportSession)      // 标准 tar 导出（W8 交付物）
 		r.Get("/usage", h.getUsage)            // 三轴计量（活跃秒/token/计算秒，1min 桶）
