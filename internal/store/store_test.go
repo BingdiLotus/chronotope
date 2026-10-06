@@ -648,3 +648,36 @@ func TestSandboxLease(t *testing.T) {
 		t.Fatal("租约释放后的过期沙箱应可回收")
 	}
 }
+
+// TestSpecDigest ⑩：canonical JSON 哈希确定性（同 config 同哈希；map 键序无关）。
+func TestSpecDigest(t *testing.T) {
+	cfg1 := &sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{"bash", "read_file"}, Version: 1,
+		Budget: map[string]any{"max_tokens": float64(100)}}
+	cfg2 := &sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{"bash", "read_file"}, Version: 1,
+		Budget: map[string]any{"max_tokens": float64(100)}}
+	cfg3 := &sessionapi.AgentConfig{Model: "m2", Instructions: "i", Tools: []string{"bash"}, Version: 1}
+	if store.SpecDigestOf(cfg1) != store.SpecDigestOf(cfg2) {
+		t.Fatal("同 config 应同哈希（canonical 确定性）")
+	}
+	if store.SpecDigestOf(cfg1) == store.SpecDigestOf(cfg3) {
+		t.Fatal("不同 config 应不同哈希")
+	}
+
+	// 入库读回
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_digest_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", cfg1); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	got, err := s.GetAgent(ctx, "a_"+key)
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if got.SpecDigest == "" || got.SpecDigest != store.SpecDigestOf(cfg1) {
+		t.Fatalf("spec_digest 应入库且一致: %q", got.SpecDigest)
+	}
+}

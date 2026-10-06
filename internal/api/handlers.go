@@ -148,6 +148,8 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	runID := runIDFromIdempotency(sessionID, idem)
 	bound := map[string]any{
 		"agent_config_version": agent.Version,
+		"spec_digest":          agent.SpecDigest,
+		"agent_config":         agent.Config, // 全量快照：旧 run 永远用启动时 config（正确性二期 ⑩）
 		"protocol_version":     "1.0",
 		"model":                agent.Config.Model,
 	}

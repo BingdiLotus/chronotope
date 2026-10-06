@@ -71,7 +71,7 @@ func (f *fakeStore) CreateAgent(_ context.Context, id, orgID, name string, cfg *
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cfg.Version = 1
-	f.agents[id] = &store.Agent{ID: id, OrgID: orgID, Name: name, Config: *cfg, Version: 1}
+	f.agents[id] = &store.Agent{ID: id, OrgID: orgID, Name: name, Config: *cfg, Version: 1, SpecDigest: store.SpecDigestOf(cfg)}
 	return nil
 }
 
@@ -1170,5 +1170,31 @@ func TestAdmissionRecovery(t *testing.T) {
 	}
 	if redelivered != 2 {
 		t.Fatalf("应重投 2 个遗留 run: %v", calls)
+	}
+}
+
+// TestSubmitRunBindsConfigSnapshot ⑩：run 绑定 config 快照 + spec_digest + 协议版本。
+func TestSubmitRunBindsConfigSnapshot(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/runs",
+		`{"input":"x"}`, map[string]string{"Idempotency-Key": "k-snap"})
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusAccepted {
+		t.Fatalf("提交应成功: %d %s", rec.Code, rec.Body.String())
+	}
+	wantID := runIDFromIdempotency("s_seed", "k-snap")
+	run, ok := fs.runs[wantID]
+	if !ok {
+		t.Fatalf("run 应入 fake（want %s）: %v", wantID, fs.runs)
+	}
+	b, _ := json.Marshal(run.Bound)
+	var bound struct {
+		SpecDigest  string                 `json:"spec_digest"`
+		Protocol    string                 `json:"protocol_version"`
+		AgentConfig sessionapi.AgentConfig `json:"agent_config"`
+	}
+	_ = json.Unmarshal(b, &bound)
+	if bound.SpecDigest == "" || bound.Protocol != "1.0" || bound.AgentConfig.Model != "claude-sonnet-4-6" {
+		t.Fatalf("bound 应含 digest/协议/快照: %s", b)
 	}
 }

@@ -758,3 +758,65 @@ func TestRunLoopComputeLeaseCancelRelease(t *testing.T) {
 		t.Fatalf("已持有租约的取消应释放: %v", ex2.leased)
 	}
 }
+
+// TestRunLoopBoundConfigSnapshot ⑩：run 绑定启动时 config 快照——会话 config
+// 执行中变化（agent 升级）不影响本 run；旧 run 无快照回退会话 config。
+func TestRunLoopBoundConfigSnapshot(t *testing.T) {
+	// bound 快照生效：state 的 config 是「新」的，bound 是「旧」的 → 用 bound
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {
+		ID: "r_1", SessionID: "s_1",
+		Bound: map[string]any{
+			"agent_config": map[string]any{"model": "old-model", "instructions": "旧指令", "tools": []any{}, "version": float64(1)},
+		},
+	}}}
+	ha := &fakeHarness{script: []*Result{{Done: true, Final: "完成。"}}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "new-model", Instructions: "新指令", Tools: []string{}, Version: 1,
+		},
+	}}
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx := restate.WithMockContext(mockCtx)
+	out, err := runLoop(ctx, deps(st, ha, se, &fakeExecutor{}), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || out.Final != "完成。" {
+		t.Fatalf("run: %+v err=%v", out, err)
+	}
+	// harness 收到的请求 model = bound 快照的旧 model
+	if len(ha.calls) != 1 || ha.calls[0].Model != "old-model" {
+		t.Fatalf("应使用 bound 快照 config（old-model）: %+v", ha.calls)
+	}
+	if !strings.Contains(ha.calls[0].Messages[0].Content, "旧指令") {
+		t.Fatalf("指令应为旧指令: %+v", ha.calls[0].Messages[0])
+	}
+
+	// 旧 run 无 bound 快照 → 回退会话 config
+	st2 := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha2 := &fakeHarness{script: []*Result{{Done: true, Final: "完成。"}}}
+	mockCtx2 := mocks.NewMockContext(t)
+	mockCtx2.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx2 := restate.WithMockContext(mockCtx2)
+	if _, err := runLoop(ctx2, deps(st2, ha2, se, &fakeExecutor{}), RunInput{SessionID: "s_1", Input: "x"}, "r_1"); err != nil {
+		t.Fatalf("回退路径: %v", err)
+	}
+	if ha2.calls[0].Model != "new-model" {
+		t.Fatalf("旧 run 无快照应回退会话 config: %+v", ha2.calls)
+	}
+}

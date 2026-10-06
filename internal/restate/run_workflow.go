@@ -83,7 +83,21 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		return RunOutput{}, restate.ToTerminalError(
 			fmt.Errorf("session %s has no agent config（session_object 未初始化）", in.SessionID))
 	}
+	// 版本绑定（正确性二期 ⑩）：run 绑定启动时的 config 快照——agent 升级/
+	// 会话 config 变化不改变本 run 的后续步骤（run 内确定性）；旧 run 无快照
+	//（bound 缺失）回退会话 config 兼容。
 	cfg := state.AgentConfig
+	if runRow, gErr := deps.Store.GetRun(ctx, runID); gErr == nil && runRow != nil && len(runRow.Bound) > 0 {
+		raw, mErr := json.Marshal(runRow.Bound)
+		if mErr == nil {
+			var bound struct {
+				AgentConfig sessionapi.AgentConfig `json:"agent_config"`
+			}
+			if uErr := json.Unmarshal(raw, &bound); uErr == nil && bound.AgentConfig.Model != "" {
+				cfg = bound.AgentConfig
+			}
+		}
+	}
 
 	if err := emit.Emit(ctx, in.SessionID, runID, 0, event.RunStarted, "", "", map[string]any{
 		"input": in.Input, "model": cfg.Model, "topic": topicOf(in),

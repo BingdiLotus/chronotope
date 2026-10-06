@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,14 +27,26 @@ func (s *Store) CreateOrg(ctx context.Context, id, name string) error {
 
 // Agent 是 agents 表行（config 版本化：每次变更 version+1，run 启动时绑定）。
 type Agent struct {
-	ID      string
-	OrgID   string
-	Name    string
-	Config  sessionapi.AgentConfig
-	Version int
+	ID         string
+	OrgID      string
+	Name       string
+	Config     sessionapi.AgentConfig
+	Version    int
+	SpecDigest string // canonical JSON(Config) 的 sha256（正确性二期 ⑩）
 }
 
 // CreateAgent 创建 agent（id 由调用方生成，保证「api 生成 id」的单一职责）。
+// SpecDigestOf 计算 config 的规范哈希（encoding/json 对 map 键排序、struct
+// 按声明序——确定性；正确性二期 ⑩）。
+func SpecDigestOf(cfg *sessionapi.AgentConfig) string {
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *Store) CreateAgent(ctx context.Context, id, orgID, name string, cfg *sessionapi.AgentConfig) error {
 	cfg.Version = 1
 	cfgJSON, err := json.Marshal(cfg)
@@ -40,9 +54,9 @@ func (s *Store) CreateAgent(ctx context.Context, id, orgID, name string, cfg *se
 		return fmt.Errorf("store: marshal agent config: %w", err)
 	}
 	const q = `
-INSERT INTO agents (id, org_id, name, config, version)
-VALUES ($1, $2, $3, $4, $5)`
-	if _, err := s.Pool.Exec(ctx, q, id, orgID, name, cfgJSON, cfg.Version); err != nil {
+INSERT INTO agents (id, org_id, name, config, version, spec_digest)
+VALUES ($1, $2, $3, $4, $5, $6)`
+	if _, err := s.Pool.Exec(ctx, q, id, orgID, name, cfgJSON, cfg.Version, SpecDigestOf(cfg)); err != nil {
 		return fmt.Errorf("store: create agent: %w", err)
 	}
 	return nil
@@ -50,12 +64,12 @@ VALUES ($1, $2, $3, $4, $5)`
 
 // GetAgent 读取 agent（含当前 config）。
 func (s *Store) GetAgent(ctx context.Context, id string) (*Agent, error) {
-	const q = `SELECT id, org_id, name, config, version FROM agents WHERE id = $1`
+	const q = `SELECT id, org_id, name, config, version, spec_digest FROM agents WHERE id = $1`
 	var (
 		a       Agent
 		cfgJSON json.RawMessage
 	)
-	err := s.Pool.QueryRow(ctx, q, id).Scan(&a.ID, &a.OrgID, &a.Name, &cfgJSON, &a.Version)
+	err := s.Pool.QueryRow(ctx, q, id).Scan(&a.ID, &a.OrgID, &a.Name, &cfgJSON, &a.Version, &a.SpecDigest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
