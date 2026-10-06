@@ -154,9 +154,10 @@ jobs:
           CHILD_AGENT_ID="$CHILD_ID" bash test/e2e/w6-subagent.sh http://localhost:8080
       - name: W5 org 预算 + 欠费冻结 e2e（超限冻结 → 充值解冻）
         env:
-          API_AGGREGATE_INTERVAL: 5s
+          HARNESS_FAKE_MODEL: "1" # 预算 e2e 依赖 plain fake（4/7 tokens）——
+          HARNESS_FAKE_SCRIPT: "" # 前一阶段（W6 子 Agent）的脚本残留会破坏断言（CI 实证）
         run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate api
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate api harness
           for i in $(seq 1 30); do
             curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
             sleep 1
