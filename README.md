@@ -33,10 +33,10 @@ W7 群聊多 Agent → W8 会话导出 tar + 孤儿沙箱 GC。demo 一条命令
 显式打包）+ effect 账本与沙箱生命周期解耦、接纳屏障重投扫描 + 非抢占式
 取消。全部经单测 + e2e + 本地 CI 回归（demo 15 阶段 67 项断言）。
 
-**正确性二期（立项中，docs/正确性二期-立项.md）**：⑧ 冻结变化输入（run 级
-预算入口快照 journal 化，重放确定性）、⑨ ComputeLease（沙箱租约账本 +
-依赖安全 GC + generation fencing 雏形）、⑩ accepted spec digest + 版本绑定
-（agent 升级后旧 run 用启动时 config 快照路由）。
+**正确性二期（已落地）**：⑧ 冻结变化输入（预算入口快照 journal 化，消费即
+冻结无滞后窗口）、⑨ ComputeLease（沙箱租约账本 + 依赖安全 GC + generation
+fencing——挂起零成本、解冻快照重建衔接）、⑩ accepted spec digest + run 绑定
+config 快照（agent 升级不影响旧 run）。
 
 **后置迭代**：PG 分区 parquet 冷层归档与 usage 增量 rollup（MVP 事件量下
 收益低——单会话 <1 万行时全量导出/重建已足够；量大才痛）、E2B 真实实例
