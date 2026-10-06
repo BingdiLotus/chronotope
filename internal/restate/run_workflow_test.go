@@ -197,11 +197,12 @@ func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error
 }
 
 type fakeSessions struct {
-	state    SessionState
-	attached []string
-	pending  string
-	created  []string
-	frozen   string
+	state         SessionState
+	attached      []string
+	pending       string
+	pendingDigest string
+	created       []string
+	frozen        string
 }
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
@@ -213,8 +214,9 @@ func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) err
 	return nil
 }
 
-func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID string) error {
+func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID, actionDigest string) error {
 	f.pending = awakeableID
+	f.pendingDigest = actionDigest
 	return nil
 }
 

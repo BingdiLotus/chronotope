@@ -48,7 +48,7 @@ type SessionSource interface {
 	// AttachSandbox 回填会话作用域沙箱 id（懒创建后调用；幂等）。
 	AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error
 	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
-	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error
+	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest string) error
 	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
 	Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error
 	// SetFrozenAwakeable 记录欠费冻结的 awakeable id（与审批槽独立，避免互踩）。
@@ -86,9 +86,9 @@ func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandbo
 }
 
 // SetPendingAwakeable 记录挂起的审批 awakeable（HITL）。
-func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error {
+func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "SetPendingAwakeable").
-		Request(awakeableID)
+		Request(SetPendingApprovalInput{AwakeableID: awakeableID, ActionDigest: actionDigest})
 	return err
 }
 

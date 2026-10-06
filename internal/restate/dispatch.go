@@ -1,6 +1,8 @@
 package restate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -136,13 +138,14 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 // （class 2 门禁需要原文判定 approved/rejected）。
 func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall, emit *Emitter, riskClass int) (string, error) {
 	awakeable := restate.Awakeable[string](ctx)
-	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id()); err != nil {
+	digest := approvalDigest(runID, step, tc)
+	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest); err != nil {
 		return "", err
 	}
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunAwaitingApproval, "await", "", map[string]any{
 		"step": step, "awakeable_id": awakeable.Id(),
 		"tool": tc.Name, "arguments": json.RawMessage(tc.Arguments),
-		"risk_class": riskClass,
+		"risk_class": riskClass, "action_digest": digest,
 	})
 	result, err := awakeable.Result() // 挂起：零进程占用，直到跨 HTTP resolve
 	if err != nil {
@@ -199,6 +202,12 @@ func parseToolArguments(tc ToolCall) map[string]any {
 		_ = json.Unmarshal([]byte(raw), &args)
 	}
 	return args
+}
+
+// approvalDigest 待审批动作摘要（评审 #5：精确绑定 run/step/工具/参数）。
+func approvalDigest(runID string, step int, tc ToolCall) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s:%s", runID, step, tc.Name, string(tc.Arguments))))
+	return hex.EncodeToString(sum[:8])
 }
 
 // codeToolInput 从 tool_call.arguments 提取执行输入（bash→command、run_python→code、

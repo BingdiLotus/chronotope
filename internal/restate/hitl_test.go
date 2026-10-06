@@ -120,3 +120,61 @@ func TestWebhookResolveNoPending(t *testing.T) {
 		t.Fatal("无挂起审批应报错")
 	}
 }
+
+// TestResolveApprovalDigestBinding 评审 #5：审批精确绑定动作摘要与审批者。
+func TestResolveApprovalDigestBinding(t *testing.T) {
+	// digest 不匹配 → 拒绝（run 保持挂起，不 resolve）
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	sessions := &fakeSessions{state: SessionState{
+		PendingAwakeable: "aw_9", PendingActionDigest: "aaaa1111",
+	}}
+	mockCtx := mocks.NewMockContext(t) // 无 ResolveAwakeable 期望：若被调用即失败
+	ctx := restate.WithMockContext(mockCtx)
+	_, err := resolveApproval(ctx, &Deps{Store: st, Sessions: sessions}, WebhookResolveInput{
+		RunID: "r_1", Payload: "已批准", ActionDigest: "bbbb2222", Approver: "ops@x",
+	})
+	if err == nil || !strings.Contains(err.Error(), "不匹配") {
+		t.Fatalf("digest 不匹配应拒绝: %v", err)
+	}
+	mockCtx.AssertExpectations(t)
+
+	// digest 匹配 + approver → resolve + audit.approval 事件（审批者留痕）
+	st2 := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	sessions2 := &fakeSessions{state: SessionState{
+		PendingAwakeable: "aw_9", PendingActionDigest: "aaaa1111",
+	}}
+	mockCtx2 := mocks.NewMockContext(t)
+	mockCtx2.EXPECT().ResolveAwakeable("aw_9", "已批准").Once()
+	got, err := resolveApproval(ctx2(mockCtx2), &Deps{Store: st2, Sessions: sessions2}, WebhookResolveInput{
+		RunID: "r_1", Payload: "已批准", ActionDigest: "aaaa1111", Approver: "ops@x",
+	})
+	if err != nil || got != "resolved" {
+		t.Fatalf("digest 匹配应 resolve: %v %q", err, got)
+	}
+	audit := eventsOf(st2, event.AuditApproval)
+	if len(audit) != 1 || !strings.Contains(string(audit[0].payload), "ops@x") {
+		t.Fatalf("audit.approval 应记录审批者: %+v", audit)
+	}
+	mockCtx2.AssertExpectations(t)
+
+	// 旧客户端（无 digest）→ legacy 放行（后向兼容）+ 审计标记
+	st3 := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	sessions3 := &fakeSessions{state: SessionState{PendingAwakeable: "aw_9", PendingActionDigest: "aaaa1111"}}
+	mockCtx3 := mocks.NewMockContext(t)
+	mockCtx3.EXPECT().ResolveAwakeable("aw_9", "approve").Once()
+	got, err = resolveApproval(ctx2(mockCtx3), &Deps{Store: st3, Sessions: sessions3}, WebhookResolveInput{
+		RunID: "r_1", Payload: "approve",
+	})
+	if err != nil || got != "resolved" {
+		t.Fatalf("legacy 应放行: %v %q", err, got)
+	}
+	if audit := eventsOf(st3, event.AuditApproval); len(audit) != 1 || !strings.Contains(string(audit[0].payload), "\"legacy\":true") {
+		t.Fatalf("legacy 审计应标记: %+v", audit)
+	}
+	mockCtx3.AssertExpectations(t)
+}
+
+// ctx2 从 mock context 构造 restate 上下文（测试内联）。
+func ctx2(mockCtx *mocks.MockContext) restate.Context {
+	return restate.WithMockContext(mockCtx)
+}

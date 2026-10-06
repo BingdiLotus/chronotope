@@ -19,15 +19,16 @@ const (
 // SessionState 是 session_object 的持久状态（分层原则：Restate 只放协调态——
 // 游标/引用/版本/小配置；大载荷在 PG/MinIO，worker-架构设计 §4）。
 type SessionState struct {
-	Phase            sessionapi.SessionPhase  `json:"phase"`
-	AgentConfig      sessionapi.AgentConfig   `json:"agent_config"`
-	LastRunID        string                   `json:"last_run_id,omitempty"`
-	PendingAwakeable string                   `json:"pending_awakeable,omitempty"` // HITL 审批槽
-	FrozenAwakeable  string                   `json:"frozen_awakeable,omitempty"`  // 欠费冻结槽（与审批独立）
-	Participants     []sessionapi.Participant `json:"participants,omitempty"`      // 群聊成员（非空 = 群聊会话；moderator 主持）
-	MCP              []MCPConnection          `json:"mcp,omitempty"`               // MCP 连接（tools 懒缓存）
-	Skills           []string                 `json:"skills,omitempty"`            // 已安装 skill 名（沙箱 skills/<name>/）
-	SandboxID        string                   `json:"sandbox_id,omitempty"`        // 会话作用域沙箱（懒创建，W2）
+	Phase               sessionapi.SessionPhase  `json:"phase"`
+	AgentConfig         sessionapi.AgentConfig   `json:"agent_config"`
+	LastRunID           string                   `json:"last_run_id,omitempty"`
+	PendingAwakeable    string                   `json:"pending_awakeable,omitempty"`     // HITL 审批槽
+	PendingActionDigest string                   `json:"pending_action_digest,omitempty"` // 待审批动作摘要（精确绑定，评审 #5）
+	FrozenAwakeable     string                   `json:"frozen_awakeable,omitempty"`      // 欠费冻结槽（与审批独立）
+	Participants        []sessionapi.Participant `json:"participants,omitempty"`          // 群聊成员（非空 = 群聊会话；moderator 主持）
+	MCP                 []MCPConnection          `json:"mcp,omitempty"`                   // MCP 连接（tools 懒缓存）
+	Skills              []string                 `json:"skills,omitempty"`                // 已安装 skill 名（沙箱 skills/<name>/）
+	SandboxID           string                   `json:"sandbox_id,omitempty"`            // 会话作用域沙箱（懒创建，W2）
 }
 
 const sessionStateKey = "state"
@@ -47,7 +48,7 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("Pause", restate.NewObjectHandler[restate.Void, SessionState](pauseSession)).
 		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession)).
 		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
-		Handler("SetPendingAwakeable", restate.NewObjectHandler[string, SessionState](setPendingAwakeable)).
+		Handler("SetPendingAwakeable", restate.NewObjectHandler[SetPendingApprovalInput, SessionState](setPendingAwakeable)).
 		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
 		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession)).
 		Handler("SetParticipants", restate.NewObjectHandler[[]sessionapi.Participant, SessionState](setParticipants)).
@@ -69,13 +70,20 @@ func attachSandbox(ctx restate.ObjectContext, sandboxID string) (SessionState, e
 }
 
 // setPendingAwakeable 记录挂起的审批 awakeable（HITL；webhook resolve 前可查）。
-func setPendingAwakeable(ctx restate.ObjectContext, awakeableID string) (SessionState, error) {
+// SetPendingApprovalInput 是挂起审批的槽与动作摘要（评审 #5：精确绑定动作）。
+type SetPendingApprovalInput struct {
+	AwakeableID  string `json:"awakeable_id"`
+	ActionDigest string `json:"action_digest"`
+}
+
+func setPendingAwakeable(ctx restate.ObjectContext, in SetPendingApprovalInput) (SessionState, error) {
 	state, err := getSessionState(ctx, restate.Void{})
 	if err != nil {
 		return SessionState{}, err
 	}
-	if state.PendingAwakeable != awakeableID {
-		state.PendingAwakeable = awakeableID
+	if state.PendingAwakeable != in.AwakeableID || state.PendingActionDigest != in.ActionDigest {
+		state.PendingAwakeable = in.AwakeableID
+		state.PendingActionDigest = in.ActionDigest
 		restate.Set(ctx, sessionStateKey, state)
 	}
 	return state, nil

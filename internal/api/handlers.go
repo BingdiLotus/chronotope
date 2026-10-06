@@ -281,13 +281,18 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) approvalWebhook(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
 	var req struct {
-		Payload string `json:"payload"`
+		Payload      string `json:"payload"`
+		ActionDigest string `json:"action_digest"`
+		Approver     string `json:"approver"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	var out string // webhook 服务返回 JSON 字符串 "resolved"
 	err := h.Ingress.Call(r.Context(), "/webhook/Resolve", http.MethodPost,
-		map[string]any{"run_id": runID, "payload": req.Payload}, &out)
+		map[string]any{
+			"run_id": runID, "payload": req.Payload,
+			"action_digest": req.ActionDigest, "approver": req.Approver,
+		}, &out)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, 502, "webhook resolve failed: "+err.Error())
 		return

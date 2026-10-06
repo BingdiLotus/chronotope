@@ -38,9 +38,10 @@ const (
 	SessionWoken        Type = "session.woken"
 
 	// 能力
-	SkillInstall Type = "skill.install"
-	MCPConnected Type = "mcp.connected"
-	MCPUpdated   Type = "mcp.updated"
+	SkillInstall  Type = "skill.install"
+	AuditApproval Type = "audit.approval"
+	MCPConnected  Type = "mcp.connected"
+	MCPUpdated    Type = "mcp.updated"
 
 	// 多 Agent
 	SubagentSpawned   Type = "subagent.spawned"
@@ -61,7 +62,7 @@ func (t Type) Valid() bool {
 	case RunStarted, RunCompleted, RunFailed, RunCancelled,
 		LLMCall, ToolCall, SandboxExec, MCPCall, StepJournaled, EventTruncated,
 		RunPaused, RunResumed, RunAwaitingApproval, RunFrozen, RunUnfrozen, SessionWoken,
-		SkillInstall, MCPConnected, MCPUpdated,
+		SkillInstall, MCPConnected, MCPUpdated, AuditApproval,
 		SubagentSpawned, SubagentCompleted, GroupTurn,
 		MemoryConsolidated,
 		AuditToolDenied, BudgetExceeded:
