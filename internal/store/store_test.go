@@ -415,3 +415,49 @@ func TestMemorySummaryAndItems(t *testing.T) {
 		t.Fatalf("空 topic 应全量 2 条: %+v err=%v", all, err)
 	}
 }
+
+func TestOrgBudgetAndDailyUsage(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_budget_" + randSuffix()
+	orgID := "o_" + key
+	if err := s.CreateOrg(ctx, orgID, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	// 初始 quotas 空 → 无限
+	org, err := s.GetOrg(ctx, orgID)
+	if err != nil || len(org.Quotas) != 0 {
+		t.Fatalf("初始 quotas 应空: %+v err=%v", org, err)
+	}
+	// 更新预算（合并保留其他键）
+	if err := s.UpdateOrgQuotas(ctx, orgID, map[string]any{store.QuotaDailyTokenBudget: float64(1000), "other": "keep"}); err != nil {
+		t.Fatalf("update quotas: %v", err)
+	}
+	org, _ = s.GetOrg(ctx, orgID)
+	if org.Quotas[store.QuotaDailyTokenBudget] != float64(1000) || org.Quotas["other"] != "keep" {
+		t.Fatalf("quotas 合并更新不符: %+v", org.Quotas)
+	}
+	// 日用量：建会话 + usage 行 → 聚合
+	agentID := "a_" + key
+	if err := s.CreateAgent(ctx, agentID, orgID, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, orgID, agentID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Minute)
+	if err := s.UpsertUsage(ctx, store.UsageRow{SessionID: key, Bucket: bucket, TokensIn: 30, TokensOut: 20, ComputeSeconds: 1.5}); err != nil {
+		t.Fatalf("upsert usage: %v", err)
+	}
+	tokens, compute, err := s.OrgDailyUsage(ctx, orgID, now.Truncate(24*time.Hour))
+	if err != nil || tokens != 50 || compute != 1.5 {
+		t.Fatalf("日用量应 50 tokens/1.5s: %d/%v err=%v", tokens, compute, err)
+	}
+	// 其他 org 不受影响
+	other := "o_other_" + key
+	_ = s.CreateOrg(ctx, other, "other")
+	if t2, _, _ := s.OrgDailyUsage(ctx, other, now.Truncate(24*time.Hour)); t2 != 0 {
+		t.Fatalf("其他 org 应为 0，得 %d", t2)
+	}
+}
