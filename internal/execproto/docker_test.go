@@ -207,3 +207,57 @@ func TestDockerDriverMissingSandboxErrors(t *testing.T) {
 		t.Fatalf("缺失沙箱应报错: %v", err)
 	}
 }
+
+// TestDockerSnapshotIncludesVolume 评审 #7：快照 ref 编码镜像|卷 tar，命令序列
+// 含 commit 与卷打包；恢复时解回卷。
+func TestDockerSnapshotIncludesVolume(t *testing.T) {
+	r := newFakeRunner()
+	d := NewDockerDriver(r, "/tmp/ws")
+	ref, err := d.Snapshot(context.Background(), "sb_1")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if !strings.Contains(ref, "chronotope-snap:sb_1|") || !strings.HasSuffix(ref, "/sb_1/volume.tar") {
+		t.Fatalf("ref 应编码镜像|卷tar: %q", ref)
+	}
+	var sawCommit, sawTar bool
+	for _, c := range r.calls {
+		if c[0] == "commit" {
+			sawCommit = true
+		}
+		if c[0] == "run" && strings.Contains(strings.Join(c, " "), "--volumes-from") {
+			sawTar = true
+		}
+	}
+	if !sawCommit || !sawTar {
+		t.Fatalf("快照应含 commit 与卷打包: %v", r.calls)
+	}
+}
+
+// TestDockerRestoreUntarsVolume 恢复：从 ref 启动镜像 + 解回卷内容。
+func TestDockerRestoreUntarsVolume(t *testing.T) {
+	r := newFakeRunner()
+	d := NewDockerDriver(r, "/tmp/ws")
+	_, err := d.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Image: "python:3.11", RestoreFrom: "chronotope-snap:sb_1|/tmp/ws/sb_1/volume.tar",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var sawImage, sawCp, sawUntar bool
+	for _, c := range r.calls {
+		s := strings.Join(c, " ")
+		if strings.Contains(s, "chronotope-snap:sb_1") && strings.Contains(s, "infinity") {
+			sawImage = true
+		}
+		if c[0] == "cp" && strings.HasSuffix(c[1], "/sb_1/volume.tar") {
+			sawCp = true
+		}
+		if c[0] == "exec" && strings.Contains(strings.Join(c, " "), "tar -xf /workspace/restore.tar") {
+			sawUntar = true
+		}
+	}
+	if !sawImage || !sawCp || !sawUntar {
+		t.Fatalf("恢复应含快照镜像启动+解卷: %v", r.calls)
+	}
+}

@@ -77,7 +77,12 @@ func (c *executorClient) Execute(ctx context.Context, sandboxID, name, input, id
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("executor: POST /execute status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		body := strings.TrimSpace(string(b))
+		// 沙箱不存在 → 哨兵（dispatch 据此重建走快照恢复，评审 #7）
+		if resp.StatusCode == http.StatusNotFound && strings.Contains(body, "sandbox not found") {
+			return nil, execproto.ErrSandboxNotFound
+		}
+		return nil, fmt.Errorf("executor: POST /execute status %d: %s", resp.StatusCode, body)
 	}
 	return parseExecFrames(resp.Body)
 }
@@ -155,7 +160,11 @@ func (c *executorClient) ReadFile(ctx context.Context, sandboxID, path string) (
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("executor: GET file status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		body := strings.TrimSpace(string(b))
+		if resp.StatusCode == http.StatusNotFound && strings.Contains(body, "sandbox not found") {
+			return "", execproto.ErrSandboxNotFound
+		}
+		return "", fmt.Errorf("executor: GET file status %d: %s", resp.StatusCode, body)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {

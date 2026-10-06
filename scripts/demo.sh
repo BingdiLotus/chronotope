@@ -98,6 +98,15 @@ HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 # 13. W8 后置：交付清单 outbox（run 完成 → 交付行 → 投递回执）
 bash test/e2e/w8-delivery.sh "$API" > /tmp/demo-w8d.log 2>&1 && pass "W8 后置 交付清单（3 项断言）" || { fail "W8 后置 交付清单"; tail -5 /tmp/demo-w8d.log; }
 
+# 15. 快照含卷恢复（评审 #7：named volume 显式打包/解回——一周前会话还能继续）
+HARNESS_FAKE_MODEL=1 \
+HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/a.txt","content":"快照前内容"}}},{"final":"已写入。"}]' \
+HARNESS_FAKE_SCRIPT_ALT='[{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/a.txt"}}},{"final":"读取完成。"}]' \
+  $DC up -d --force-recreate harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w2-snapshot.sh "$API" > /tmp/demo-w2snap.log 2>&1 && pass "快照含卷恢复（5 项断言）" || { fail "快照含卷恢复"; tail -5 /tmp/demo-w2snap.log; }
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= HARNESS_FAKE_SCRIPT_ALT= $DC up -d --force-recreate harness
+
 # 14. W8 后置：outbox 事件投递（webhook 通道，事件同事务入队 → 投递 worker）
 nohup python3 test/fixtures/notify-sink.py 9300 > /tmp/demo-sink.log 2>&1 &
 SINK_PID=$!

@@ -45,6 +45,9 @@ var safeLimit = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?i?$`)
 type DockerDriver struct {
 	Runner        CommandRunner
 	WorkspaceRoot string // 宿主机工作区根（docker cp 文件快路径的暂存）
+	// restoreTar/restoreID 暂存待恢复的卷 tar（CreateSandbox 创建后解回；单请求内）。
+	restoreTar string
+	restoreID  string
 }
 
 // NewDockerDriver 构造 docker driver（workspaceRoot 为空时用系统临时目录）。
@@ -77,15 +80,34 @@ func (d *DockerDriver) CreateSandbox(ctx context.Context, req CreateSandboxReque
 		"-v", id + ":/workspace",
 	}
 	if req.RestoreFrom != "" {
-		// Tier2 快照恢复：从快照镜像启动（W2 仅 snapshot_ref 直传；校验后置）
+		// Tier2 快照恢复：镜像 + 卷内容（评审 #7——卷不进镜像，显式解回）
+		img, tarPath, found := strings.Cut(req.RestoreFrom, "|")
+		if !found {
+			img = req.RestoreFrom // 兼容旧 ref（仅镜像）
+		}
 		args = append(args, "--entrypoint", "sleep")
-		args = append(args, req.RestoreFrom, "infinity")
+		args = append(args, img, "infinity")
+		d.restoreTar = tarPath
+		d.restoreID = id
 	} else {
 		args = append(args, req.Image, "sleep", "infinity")
 	}
 	out, err := d.Runner.Run(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("docker create sandbox: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	// 快照恢复：卷内容解回（评审 #7——named volume 不进镜像，必须显式恢复）
+	if d.restoreID == id && d.restoreTar != "" {
+		if out, err := d.Runner.Run(ctx, "exec", id, "mkdir", "-p", "/workspace"); err != nil {
+			return nil, fmt.Errorf("restore mkdir: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		if out, err := d.Runner.Run(ctx, "cp", d.restoreTar, id+":/workspace/restore.tar"); err != nil {
+			return nil, fmt.Errorf("restore cp: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		if out, err := d.Runner.Run(ctx, "exec", id, "tar", "-xf", "/workspace/restore.tar", "-C", "/workspace"); err != nil {
+			return nil, fmt.Errorf("restore untar: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		d.restoreID, d.restoreTar = "", ""
 	}
 	return &Sandbox{ID: id, Status: "creating", Image: req.Image, Driver: "docker"}, nil
 }
@@ -190,12 +212,26 @@ func (d *DockerDriver) Unfreeze(ctx context.Context, sandboxID string) error {
 }
 
 // Snapshot 是 Tier2 快照（docker commit → snapshot_ref；W2 实现，恢复路径后置）。
+// Snapshot Tier 2 快照：docker commit 镜像 + /workspace 卷内容 tar 到宿主工作区。
+// 评审 #7：named volume 不进 commit——必须显式打包卷内容，ref 编码
+// "镜像|卷 tar 路径"（恢复时拆解）。
 func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, error) {
-	ref := "chronotope-snap:" + sandboxID
-	if out, err := d.Runner.Run(ctx, "commit", sandboxID, ref); err != nil {
+	img := "chronotope-snap:" + sandboxID
+	if out, err := d.Runner.Run(ctx, "commit", sandboxID, img); err != nil {
 		return "", fmt.Errorf("docker commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return ref, nil
+	// 卷内容打包（含 externalize 大输出——它们在 WorkspaceRoot 下同目录）
+	if err := d.prepareHostDir(sandboxID); err != nil {
+		return "", err
+	}
+	tarPath := filepath.Join(d.WorkspaceRoot, sandboxID, "volume.tar")
+	if out, err := d.Runner.Run(ctx, "run", "--rm",
+		"--volumes-from", sandboxID,
+		"-v", filepath.Dir(tarPath)+":/backup",
+		"alpine:3.20", "tar", "-cf", "/backup/volume.tar", "-C", "/workspace", "."); err != nil {
+		return "", fmt.Errorf("snapshot volume tar: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return img + "|" + tarPath, nil
 }
 
 func (d *DockerDriver) Destroy(ctx context.Context, sandboxID string) error {

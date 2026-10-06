@@ -153,6 +153,7 @@ services:
       # 1 = fake 模型流（无密钥 e2e/演示）；0 = 经 LiteLLM 网关调真实模型
       HARNESS_FAKE_MODEL: ${HARNESS_FAKE_MODEL:-0}
       HARNESS_FAKE_SCRIPT: ${HARNESS_FAKE_SCRIPT:-}
+      HARNESS_FAKE_SCRIPT_ALT: ${HARNESS_FAKE_SCRIPT_ALT:-}
       HARNESS_FAKE_REPLY: ${HARNESS_FAKE_REPLY:-}
     ports:
       - "8000:8000"

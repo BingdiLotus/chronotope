@@ -321,10 +321,15 @@ func (s *Server) externalize(sandboxID, body string) (string, error) {
 // GET/PUT /files/{sandboxID}/* —— 文件快路径（不经过 shell，契约规范 §4）。
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	sandboxID := chi.URLParam(r, "sandboxID")
+	// 行级存在性先查（统一 404 契约文本——客户端哨兵据此触发重建，评审 #7）
+	if _, err := s.Store.GetSandbox(r.Context(), sandboxID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "sandbox not found")
+		return
+	}
 	path := "/" + chi.URLParam(r, "*")
 	data, err := s.Driver.ReadFile(r.Context(), sandboxID, path)
 	if err != nil {
-		writeError(w, http.StatusNotFound, 404, err.Error())
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -333,6 +338,10 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 	sandboxID := chi.URLParam(r, "sandboxID")
+	if _, err := s.Store.GetSandbox(r.Context(), sandboxID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "sandbox not found")
+		return
+	}
 	path := "/" + chi.URLParam(r, "*")
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20)) // 单文件 8MB 上限（MVP）
 	if err != nil {

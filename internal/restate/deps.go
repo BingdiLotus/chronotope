@@ -22,6 +22,8 @@ type Store interface {
 	GetRun(ctx context.Context, runID string) (*store.Run, error)
 	// 交付清单（outbox，W8 后置）
 	CreateDeliverable(ctx context.Context, runID, sessionID, kind string, payload json.RawMessage) error
+	// 沙箱重建（快照恢复依据，评审 #7）
+	GetSandboxBySession(ctx context.Context, sessionID string) (*store.SandboxRow, error)
 	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
@@ -47,6 +49,7 @@ type SessionSource interface {
 	GetState(ctx restate.Context, sessionID string) (SessionState, error)
 	// AttachSandbox 回填会话作用域沙箱 id（懒创建后调用；幂等）。
 	AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error
+	ClearSandbox(ctx restate.Context, sessionID string) error
 	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
 	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest string) error
 	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
@@ -79,6 +82,12 @@ func (RestateSessionSource) GetState(ctx restate.Context, sessionID string) (Ses
 }
 
 // AttachSandbox 回填沙箱 id（对象调用幂等：同值重复设置无害，重放重发安全）。
+func (RestateSessionSource) ClearSandbox(ctx restate.Context, sessionID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "ClearSandbox").
+		Request(restate.Void{})
+	return err
+}
+
 func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "AttachSandbox").
 		Request(sandboxID)

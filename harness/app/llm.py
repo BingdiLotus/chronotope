@@ -131,12 +131,18 @@ class FakeProvider(LLMProvider):
         reply: str = "你好，我是 Chronotope 演示助手。",
         chunk_ms: int = 20,
         script: list[dict] | None = None,
+        alt_script: list[dict] | None = None,
     ) -> None:
         self.reply = reply
         self.chunk_ms = chunk_ms
         self.script = script
+        self.alt_script = alt_script
         self._last_key: tuple | None = None
         self._calls = 0
+        self._seen_runs: set[str] = set()   # 每个 run_id 只计一次（session 分组见 _run_counts）
+        self._run_counts: dict[str, int] = {}  # session_id → run 序数
+        self._active_scripts: dict[str, list[dict] | None] = {}
+        self._active_script = script
 
     async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
         # 记忆消化摘要模式：run_id 带 #consolidation 后缀（worker 分层记忆调用；
@@ -171,6 +177,17 @@ class FakeProvider(LLMProvider):
             yield StreamChunk(usage={"tokens_in": 4, "tokens_out": 8})
             return
         if self.script is not None:
+            # 脚本选择：进程内首个 run 用主脚本，后续 run 用 ALT（若设置）——
+            # e2e 多 run 场景（快照恢复：run1 写、run2 读）无需重启 harness
+            if self.alt_script is not None:
+                # 按 session 分组的 run 序数：该 session 首个 run 用主脚本，
+                # 之后用 ALT——跨 session 独立（e2e 重跑不被进程内状态污染）
+                if req.run_id not in self._seen_runs:
+                    self._seen_runs.add(req.run_id)
+                    self._run_counts[req.session_id] = self._run_counts.get(req.session_id, 0) + 1
+                    is_first = self._run_counts[req.session_id] == 1
+                    self._active_scripts[req.session_id] = self.script if is_first else self.alt_script
+                self._active_script = self._active_scripts.get(req.session_id, self.script)
             # 脚本索引 = run 内 step + 本次 /runs 内的调用序：
             # - 代码/控制工具交棒 → 新 /runs（step+1）→ 下一轮；
             # - 内联 API 工具 → 同一 /runs 内再次 stream() → 调用序推进到下一轮；
@@ -181,7 +198,7 @@ class FakeProvider(LLMProvider):
                 self._calls = 0
             else:
                 self._calls += 1
-            turn = self.script[(req.step + self._calls) % len(self.script)]
+            turn = self._active_script[(req.step + self._calls) % len(self._active_script)]
             if "tool_call" in turn:
                 tc = turn["tool_call"]
                 yield StreamChunk(tool_calls=[{
@@ -212,10 +229,14 @@ def build_provider() -> LLMProvider:
         script = None
         if raw := os.environ.get("HARNESS_FAKE_SCRIPT"):
             script = json.loads(raw)  # [{"tool_call":{...}} | {"final":"..."}, ...]
+        alt_script = None
+        if raw := os.environ.get("HARNESS_FAKE_SCRIPT_ALT"):
+            alt_script = json.loads(raw)  # 进程内第二个 run 起使用（多 run e2e）
         # 空串视为未设置（compose 默认透传 "" 不得覆盖默认回复——demo 实证）
         return FakeProvider(
             reply=os.environ.get("HARNESS_FAKE_REPLY") or "你好，我是 Chronotope 演示助手。",
             script=script,
+            alt_script=alt_script,
         )
     api_key = os.environ.get("LITELLM_API_KEY", "")
     if not api_key:

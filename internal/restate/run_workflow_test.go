@@ -37,12 +37,13 @@ type fakeStore struct {
 		sessionID, runID, role, content string
 		step                            int
 	}
-	runs            map[string]*store.Run
-	createdSessions []string
-	orgQuotas       map[string]any
-	deliverables    []map[string]any
-	orgTokens       int64
-	orgCompute      float64
+	runs             map[string]*store.Run
+	createdSessions  []string
+	orgQuotas        map[string]any
+	deliverables     []map[string]any
+	sandboxBySession *store.SandboxRow
+	orgTokens        int64
+	orgCompute       float64
 	// 分层记忆（W5）：预置摘要/条目供注入测试；创建动作落记录供消化断言
 	summaries        []store.Summary
 	memoryItems      []store.MemoryItem
@@ -53,6 +54,13 @@ type fakeStore struct {
 func (f *fakeStore) AppendEvent(_ context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error) {
 	f.events = append(f.events, storedEvent{sessionID, runID, typ, payload, dedupeKey})
 	return int64(len(f.events)), nil
+}
+
+func (f *fakeStore) GetSandboxBySession(_ context.Context, _ string) (*store.SandboxRow, error) {
+	if f.sandboxBySession == nil {
+		return nil, store.ErrNotFound
+	}
+	return f.sandboxBySession, nil
 }
 
 func (f *fakeStore) CreateDeliverable(_ context.Context, runID, sessionID, kind string, payload json.RawMessage) error {
@@ -207,6 +215,11 @@ type fakeSessions struct {
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
 	return f.state, nil
+}
+
+func (f *fakeSessions) ClearSandbox(_ restate.Context, _ string) error {
+	f.state.SandboxID = ""
+	return nil
 }
 
 func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) error {

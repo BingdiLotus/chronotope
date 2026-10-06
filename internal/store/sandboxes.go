@@ -154,6 +154,35 @@ WHERE idempotency_key = $1`
 }
 
 // PutExec 写入幂等缓存（TTL 24h，契约规范 §4）。
+// GetSandboxBySession 取会话最新沙箱行（快照恢复依据：ensureSandbox 重建时读
+// snapshot_ref——评审 #7 恢复路径）。
+func (s *Store) GetSandboxBySession(ctx context.Context, sessionID string) (*SandboxRow, error) {
+	const q = `
+SELECT sandbox_id, org_id, session_id, driver, container_ref, image, limits, tier,
+       snapshot_ref, file_sync_state, ttl, status, created_at
+FROM sandboxes WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`
+	var (
+		sb         SandboxRow
+		limitsJSON json.RawMessage
+		ttl        pgtype.Interval
+	)
+	err := s.Pool.QueryRow(ctx, q, sessionID).Scan(
+		&sb.SandboxID, &sb.OrgID, &sb.SessionID, &sb.Driver, &sb.ContainerRef, &sb.Image,
+		&limitsJSON, &sb.Tier, &sb.SnapshotRef, &sb.FileSyncState, &ttl, &sb.Status, &sb.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get sandbox by session: %w", err)
+	}
+	_ = json.Unmarshal(limitsJSON, &sb.Limits)
+	if ttl.Valid {
+		d := time.Duration(ttl.Microseconds+int64(ttl.Days)*24*3600*1e6) * time.Microsecond
+		sb.TTL = &d
+	}
+	return &sb, nil
+}
+
 // PutExec 保留（兼容旧调用方语义 = prepared + done 一步）。
 func (s *Store) PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
 	const q = `

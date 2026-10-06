@@ -9,6 +9,7 @@ package execproto
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -66,6 +67,10 @@ func ExecuteIdempotencyKey(runID string, step int, toolID string) string {
 }
 
 // Driver 是 executor 双实现的统一接口（docker / e2b_selfhosted）。
+// ErrSandboxNotFound 沙箱不存在（已销毁/回收）——worker 据此触发重建
+// （快照恢复路径，评审 #7「一周前会话今天还能继续」的触发条件）。
+var ErrSandboxNotFound = errors.New("sandbox not found")
+
 type Driver interface {
 	CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error)
 	// Execute 把流式日志写入 log（SSE 日志帧的原始流），返回最终结果。

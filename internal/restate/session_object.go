@@ -48,6 +48,7 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("Pause", restate.NewObjectHandler[restate.Void, SessionState](pauseSession)).
 		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession)).
 		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
+		Handler("ClearSandbox", restate.NewObjectHandler[restate.Void, SessionState](clearSandbox)).
 		Handler("SetPendingAwakeable", restate.NewObjectHandler[SetPendingApprovalInput, SessionState](setPendingAwakeable)).
 		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
 		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession)).
@@ -66,6 +67,17 @@ func attachSandbox(ctx restate.ObjectContext, sandboxID string) (SessionState, e
 		state.SandboxID = sandboxID
 		restate.Set(ctx, sessionStateKey, state)
 	}
+	return state, nil
+}
+
+// clearSandbox 清除会话沙箱绑定（沙箱已销毁 → 下次 ensure 重建，快照恢复）。
+func clearSandbox(ctx restate.ObjectContext, _ restate.Void) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	state.SandboxID = ""
+	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }
 

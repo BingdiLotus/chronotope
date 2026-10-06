@@ -244,7 +244,8 @@ func TestServerExecuteMissingSandbox404(t *testing.T) {
 }
 
 func TestServerFilesFastPath(t *testing.T) {
-	s, d, _ := testServer(t)
+	s, d, st := testServer(t)
+	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_fake", SessionID: "s_1", Status: "ready"})
 	rec := doReq(t, s.Router(), http.MethodPut, "/files/sb_fake/workspace/hello.py", "print(42)")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("写文件应 204，得 %d", rec.Code)

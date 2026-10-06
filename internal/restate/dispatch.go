@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,6 +22,30 @@ import (
 type execOutcome struct {
 	Result   *ExecResult   `json:"result"`
 	Duration time.Duration `json:"duration_ns"`
+}
+
+// execWithSandboxRecovery 执行沙箱操作；沙箱不存在（已销毁/回收）→ 清绑定 +
+// 重建（快照恢复路径）→ 重试一次（评审 #7「一周前会话今天还能继续」的机制）。
+func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg sessionapi.AgentConfig, fn func(sandboxID string) error) error {
+	sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
+	if err != nil {
+		return err
+	}
+	if err := fn(sandboxID); err != nil {
+		if !errors.Is(err, execproto.ErrSandboxNotFound) {
+			return err
+		}
+		// 沙箱已被回收：清绑定 → 重建（带 snapshot_ref 恢复）→ 重试一次
+		if err := deps.Sessions.ClearSandbox(ctx, in.SessionID); err != nil {
+			return err
+		}
+		sandboxID, err = ensureSandbox(ctx, deps, in.SessionID, cfg)
+		if err != nil {
+			return err
+		}
+		return fn(sandboxID)
+	}
+	return nil
 }
 
 // dispatchTool 是四类工具路由（worker-架构设计 §1 dispatcher）的 W2 实现：
@@ -75,7 +100,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			return "", 0, err
 		}
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
-			"step": step, "tool": tc.Name, "exit": 0, "path": path,
+			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": sandboxID,
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"written":%q}}`, tc.Name, path), 0, nil
 
@@ -84,18 +109,21 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		if path == "" {
 			return "", 0, restate.ToTerminalError(fmt.Errorf("read_file 缺 path"))
 		}
-		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
-		if err != nil {
-			return "", 0, err
-		}
-		content, err := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
-			return deps.Executor.ReadFile(rc, sandboxID, path)
-		}, restate.WithName(StepName("exec", step, tc.ID)))
+		var content string
+		var sandboxID string
+		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sb string) error {
+			sandboxID = sb
+			var e error
+			content, e = restate.Run(ctx, func(rc restate.RunContext) (string, error) {
+				return deps.Executor.ReadFile(rc, sb, path)
+			}, restate.WithName(StepName("exec", step, tc.ID)))
+			return e
+		})
 		if err != nil {
 			return "", 0, err
 		}
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
-			"step": step, "tool": tc.Name, "exit": 0, "path": path,
+			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": sandboxID,
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), 0, nil
 
@@ -172,12 +200,19 @@ func ensureSandbox(ctx restate.Context, deps *Deps, sessionID string, cfg sessio
 	if image == "" {
 		image = "python:3.12-slim" // 默认镜像（agent.config 未指定环境时）
 	}
+	// Tier2 快照恢复（评审 #7）：旧沙箱行 snapshot_ref 存在 → 从快照重建
+	//（镜像 + 卷内容；「一周前会话今天还能继续」的机制）
+	restoreFrom := ""
+	if prev, err := deps.Store.GetSandboxBySession(ctx, sessionID); err == nil && prev.SnapshotRef != nil && *prev.SnapshotRef != "" {
+		restoreFrom = *prev.SnapshotRef
+	}
 	sandboxID, err := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 		return deps.Executor.CreateSandbox(rc, execproto.CreateSandboxRequest{
-			Image:     image,
-			Limits:    execproto.Limits{CPU: spec.Limits["cpu"], Mem: spec.Limits["mem"], Disk: spec.Limits["disk"]},
-			TTL:       spec.TTL,
-			SessionID: sessionID,
+			Image:       image,
+			Limits:      execproto.Limits{CPU: spec.Limits["cpu"], Mem: spec.Limits["mem"], Disk: spec.Limits["disk"]},
+			TTL:         spec.TTL,
+			SessionID:   sessionID,
+			RestoreFrom: restoreFrom,
 		})
 	}, restate.WithName("sandbox-create"))
 	if err != nil {
