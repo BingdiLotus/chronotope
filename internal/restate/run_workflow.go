@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -91,6 +92,15 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	// run 状态行记账（幂等）：worker 是终态记账者，api 崩溃后状态仍收敛
 	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunRunning)
 
+	// 三级熔断 ②：org 日预算入口检查 → 超限冻结（挂起等待充值，零成本不杀 run）
+	if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+		if exceeded, key := orgQuotaExceeded(ctx, deps, sess.OrgID, time.Now()); exceeded {
+			if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
+				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
+			}
+		}
+	}
+
 	msgs, err := buildMessages(ctx, deps.Store, in, cfg)
 	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
@@ -161,6 +171,14 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		accTokens += int64(res.Usage.TokensIn + res.Usage.TokensOut)
 		if maxTokens > 0 && float64(accTokens) > maxTokens {
 			return failBudget(step, budgetKeyTokens)
+		}
+		// 三级熔断 ②：org 日预算每步检查 → 超限冻结（充值后继续本 run）
+		if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+			if exceeded, key := orgQuotaExceeded(ctx, deps, sess.OrgID, time.Now()); exceeded {
+				if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
+					return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
+				}
+			}
 		}
 
 		if res.ErrCode != "" { // harness 失败终态（error 帧）

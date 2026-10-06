@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 	"github.com/restatedev/sdk-go/x/mocks"
@@ -38,6 +39,9 @@ type fakeStore struct {
 	}
 	runs            map[string]*store.Run
 	createdSessions []string
+	orgQuotas       map[string]any
+	orgTokens       int64
+	orgCompute      float64
 	// 分层记忆（W5）：预置摘要/条目供注入测试；创建动作落记录供消化断言
 	summaries        []store.Summary
 	memoryItems      []store.MemoryItem
@@ -60,6 +64,15 @@ func (f *fakeStore) AppendMessage(_ context.Context, sessionID, runID string, st
 
 func (f *fakeStore) GetSession(_ context.Context, sessionID string) (*store.Session, error) {
 	return &store.Session{ID: sessionID, OrgID: "org_test", AgentID: "a_1"}, nil
+}
+
+// orgDailyTokens 模拟 org 日用量（fake 预算测试注入）。
+func (f *fakeStore) GetOrg(_ context.Context, orgID string) (*store.Org, error) {
+	return &store.Org{ID: orgID, Name: "org", Quotas: f.orgQuotas}, nil
+}
+
+func (f *fakeStore) OrgDailyUsage(_ context.Context, _ string, _ time.Time) (int64, float64, error) {
+	return f.orgTokens, f.orgCompute, nil
 }
 
 func (f *fakeStore) GetAgent(_ context.Context, agentID string) (*store.Agent, error) {
@@ -182,6 +195,7 @@ type fakeSessions struct {
 	attached []string
 	pending  string
 	created  []string
+	frozen   string
 }
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
@@ -200,6 +214,16 @@ func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID str
 
 func (f *fakeSessions) Create(_ restate.Context, sessionID string, cfg sessionapi.AgentConfig) error {
 	f.created = append(f.created, sessionID)
+	return nil
+}
+
+func (f *fakeSessions) SetFrozenAwakeable(_ restate.Context, _, awakeableID string) error {
+	f.frozen = awakeableID
+	return nil
+}
+
+func (f *fakeSessions) Unfreeze(_ restate.Context, _ string) error {
+	f.frozen = ""
 	return nil
 }
 

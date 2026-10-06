@@ -22,8 +22,9 @@ type SessionState struct {
 	Phase            sessionapi.SessionPhase `json:"phase"`
 	AgentConfig      sessionapi.AgentConfig  `json:"agent_config"`
 	LastRunID        string                  `json:"last_run_id,omitempty"`
-	PendingAwakeable string                  `json:"pending_awakeable,omitempty"`
-	SandboxID        string                  `json:"sandbox_id,omitempty"` // 会话作用域沙箱（懒创建，W2）
+	PendingAwakeable string                  `json:"pending_awakeable,omitempty"` // HITL 审批槽
+	FrozenAwakeable  string                  `json:"frozen_awakeable,omitempty"`  // 欠费冻结槽（与审批独立）
+	SandboxID        string                  `json:"sandbox_id,omitempty"`        // 会话作用域沙箱（懒创建，W2）
 }
 
 const sessionStateKey = "state"
@@ -43,7 +44,9 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("Pause", restate.NewObjectHandler[restate.Void, SessionState](pauseSession)).
 		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession)).
 		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
-		Handler("SetPendingAwakeable", restate.NewObjectHandler[string, SessionState](setPendingAwakeable))
+		Handler("SetPendingAwakeable", restate.NewObjectHandler[string, SessionState](setPendingAwakeable)).
+		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
+		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession))
 }
 
 // attachSandbox 记录会话作用域沙箱（懒创建后回填；幂等：同值重复设置无害）。
@@ -69,6 +72,35 @@ func setPendingAwakeable(ctx restate.ObjectContext, awakeableID string) (Session
 		state.PendingAwakeable = awakeableID
 		restate.Set(ctx, sessionStateKey, state)
 	}
+	return state, nil
+}
+
+// setFrozenAwakeable 记录欠费冻结的 awakeable id（与审批槽独立，避免互踩）。
+func setFrozenAwakeable(ctx restate.ObjectContext, awakeableID string) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	if state.FrozenAwakeable != awakeableID {
+		state.FrozenAwakeable = awakeableID
+		restate.Set(ctx, sessionStateKey, state)
+	}
+	return state, nil
+}
+
+// unfreezeSession 解析冻结：resolve FrozenAwakeable 并清槽（充值后继续执行）。
+// 对象内部可 resolve awakeable（Context 操作在对象 handler 中合法）。
+func unfreezeSession(ctx restate.ObjectContext, _ restate.Void) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	if state.FrozenAwakeable == "" {
+		return SessionState{}, fmt.Errorf("session %s 无挂起冻结", restate.Key(ctx))
+	}
+	restate.ResolveAwakeable[string](ctx, state.FrozenAwakeable, "unfrozen")
+	state.FrozenAwakeable = ""
+	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }
 

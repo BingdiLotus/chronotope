@@ -41,11 +41,12 @@ const (
 type ActionName string
 
 const (
-	ActionPause  ActionName = "pause"
-	ActionResume ActionName = "resume"
-	ActionWake   ActionName = "wake"
-	ActionCancel ActionName = "cancel"
-	ActionSteer  ActionName = "steer"
+	ActionPause    ActionName = "pause"
+	ActionResume   ActionName = "resume"
+	ActionWake     ActionName = "wake"
+	ActionUnfreeze ActionName = "unfreeze" // 充值后解析欠费冻结（三级熔断 ②）
+	ActionCancel   ActionName = "cancel"
+	ActionSteer    ActionName = "steer"
 )
 
 // AgentConfig 是 agent.config（每次变更 version+1；run 启动时绑定版本）。

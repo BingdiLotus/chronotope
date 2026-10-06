@@ -3,6 +3,7 @@ package restate
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -24,6 +25,9 @@ type Store interface {
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
 	// 事件才是真相，状态行是投影；chaos 套件 kill9-api 实证）。
 	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
+	// org 级预算（三级熔断 ②）：org 配额 + 当日消费（worker 校验冻结）。
+	GetOrg(ctx context.Context, orgID string) (*store.Org, error)
+	OrgDailyUsage(ctx context.Context, orgID string, day time.Time) (tokens int64, computeSeconds float64, err error)
 	// 子 Agent（W6）：父会话/agent 元数据 + 子会话建行（确定性 id，journaled）。
 	GetSession(ctx context.Context, sessionID string) (*store.Session, error)
 	GetAgent(ctx context.Context, agentID string) (*store.Agent, error)
@@ -45,6 +49,10 @@ type SessionSource interface {
 	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error
 	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
 	Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error
+	// SetFrozenAwakeable 记录欠费冻结的 awakeable id（与审批槽独立，避免互踩）。
+	SetFrozenAwakeable(ctx restate.Context, sessionID, awakeableID string) error
+	// Unfreeze 解析冻结：resolve FrozenAwakeable 并清槽（充值后继续执行）。
+	Unfreeze(ctx restate.Context, sessionID string) error
 }
 
 // Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
@@ -85,5 +93,19 @@ func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, 
 func (RestateSessionSource) Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "Create").
 		Request(cfg)
+	return err
+}
+
+// SetFrozenAwakeable 记录欠费冻结的 awakeable id（与审批槽独立）。
+func (RestateSessionSource) SetFrozenAwakeable(ctx restate.Context, sessionID, awakeableID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "SetFrozenAwakeable").
+		Request(awakeableID)
+	return err
+}
+
+// Unfreeze 解析冻结（充值后继续执行；对象内部 resolve 并清槽）。
+func (RestateSessionSource) Unfreeze(ctx restate.Context, sessionID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "Unfreeze").
+		Request(restate.Void{})
 	return err
 }

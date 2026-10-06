@@ -241,6 +241,18 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": sessionID, "action": req.Action, "phase": state.Phase})
+	case sessionapi.ActionUnfreeze:
+		// 充值后解析冻结（session_object 内部 resolve FrozenAwakeable 并清槽）
+		var state struct {
+			Phase string `json:"phase"`
+		}
+		err := h.Ingress.Call(r.Context(), "/session_object/"+sessionID+"/Unfreeze",
+			http.MethodPost, nil, &state)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, 502, "unfreeze failed: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": sessionID, "action": req.Action, "phase": state.Phase})
 	case sessionapi.ActionCancel, sessionapi.ActionSteer:
 		writeError(w, http.StatusNotImplemented, 501, "action "+string(req.Action)+" 未实现（W3+）")
 	default:
@@ -393,4 +405,37 @@ func (h *Handler) getMemory(w http.ResponseWriter, r *http.Request) {
 		iOut = append(iOut, itemOut{Topic: it.Topic, Kind: it.Kind, Content: it.Content, SourceRunID: it.SourceRunID, SourceStep: it.SourceStep})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "summaries": sOut, "items": iOut})
+}
+
+// PUT /orgs/{orgID}/budget —— 更新 org 预算（三级熔断 ②；充值入口）。
+func (h *Handler) updateOrgBudget(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	if _, err := h.Store.GetOrg(r.Context(), orgID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "org not found")
+		return
+	}
+	var req struct {
+		DailyTokenBudget   *float64 `json:"daily_token_budget"`
+		DailyComputeBudget *float64 `json:"daily_compute_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, 422, "invalid budget request")
+		return
+	}
+	quotas := map[string]any{}
+	if req.DailyTokenBudget != nil {
+		quotas[store.QuotaDailyTokenBudget] = *req.DailyTokenBudget
+	}
+	if req.DailyComputeBudget != nil {
+		quotas[store.QuotaDailyComputeBudget] = *req.DailyComputeBudget
+	}
+	if len(quotas) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, 422, "no budget fields")
+		return
+	}
+	if err := h.Store.UpdateOrgQuotas(r.Context(), orgID, quotas); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "quotas": quotas})
 }

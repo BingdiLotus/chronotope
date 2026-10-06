@@ -51,22 +51,30 @@ func (a *Aggregator) Run(ctx context.Context) {
 	}
 }
 
-// pass 一轮：扫描水位后的事件，对涉及会话重建用量。
+// pass 一轮：排空水位后的全部事件（分批扫描直至清空）并对涉及会话重建用量。
+// 排空语义：进程重启后水位归零，积压事件在一轮内全部追平（每批 1000 条，
+// 上限 100 批防御）。单批实现曾导致 demo 中途重启 api 时预算会话的用量
+// 滞后两轮才入桶（w5-budget e2e 实证冻结未触发）。
 func (a *Aggregator) pass(ctx context.Context) error {
-	rows, err := a.Store.ListEventsAfterID(ctx, a.watermark, 1000)
-	if err != nil {
-		return err
-	}
-	sessions := map[string]bool{}
-	for _, row := range rows {
-		sessions[row.SessionID] = true
-		if row.ID > a.watermark {
-			a.watermark = row.ID
-		}
-	}
-	for sessionID := range sessions {
-		if err := a.rebuildSession(ctx, sessionID); err != nil {
+	for batch := 0; batch < 100; batch++ {
+		rows, err := a.Store.ListEventsAfterID(ctx, a.watermark, 1000)
+		if err != nil {
 			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		sessions := map[string]bool{}
+		for _, row := range rows {
+			sessions[row.SessionID] = true
+			if row.ID > a.watermark {
+				a.watermark = row.ID
+			}
+		}
+		for sessionID := range sessions {
+			if err := a.rebuildSession(ctx, sessionID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

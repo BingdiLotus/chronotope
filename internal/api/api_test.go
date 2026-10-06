@@ -22,6 +22,7 @@ import (
 type fakeStore struct {
 	mu          sync.Mutex
 	orgs        map[string]bool
+	orgRows     map[string]*store.Org
 	agents      map[string]*store.Agent
 	sessions    map[string]*store.Session
 	runs        map[string]*store.Run
@@ -135,6 +136,37 @@ func (f *fakeStore) UpdateRunStatus(_ context.Context, id string, status session
 }
 
 func (f *fakeStore) CreateSchedule(_ context.Context, id, orgID, sessionID string, delay time.Duration, payload json.RawMessage) error {
+	return nil
+}
+
+func (f *fakeStore) GetOrg(_ context.Context, orgID string) (*store.Org, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.orgRows == nil {
+		f.orgRows = map[string]*store.Org{}
+	}
+	if o, ok := f.orgRows[orgID]; ok {
+		return o, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (f *fakeStore) UpdateOrgQuotas(_ context.Context, orgID string, quotas map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.orgRows == nil {
+		f.orgRows = map[string]*store.Org{}
+	}
+	if o, ok := f.orgRows[orgID]; !ok {
+		return store.ErrNotFound
+	} else {
+		if o.Quotas == nil {
+			o.Quotas = map[string]any{}
+		}
+		for k, v := range quotas {
+			o.Quotas[k] = v
+		}
+	}
 	return nil
 }
 
@@ -639,5 +671,35 @@ func TestCreateAgentToolClassesPassthrough(t *testing.T) {
 	}
 	if out.Config.ToolClasses["bash"] != 2 {
 		t.Fatalf("tool_classes 应透传: %+v", out.Config.ToolClasses)
+	}
+}
+
+func TestUpdateOrgBudget(t *testing.T) {
+	h, fs, _ := setup(t)
+	fs.orgRows = map[string]*store.Org{"org-b1": {ID: "org-b1", Name: "o", Quotas: map[string]any{}}}
+	rec := doJSON(t, h.Router(), http.MethodPut, "/orgs/org-b1/budget",
+		`{"daily_token_budget":5000,"daily_compute_seconds":600}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("应 200，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.orgRows["org-b1"].Quotas[store.QuotaDailyTokenBudget] != float64(5000) {
+		t.Fatalf("quotas 应更新: %+v", fs.orgRows["org-b1"].Quotas)
+	}
+	// org 不存在 → 404
+	rec = doJSON(t, h.Router(), http.MethodPut, "/orgs/org-missing/budget", `{"daily_token_budget":1}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("org 不存在应 404，得 %d", rec.Code)
+	}
+}
+
+func TestSessionActionUnfreeze(t *testing.T) {
+	h, fs, ing := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/actions", `{"action":"unfreeze"}`, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unfreeze 应 202，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if last := ing.lastCall(); !strings.HasSuffix(last, "/session_object/"+sessionID+"/Unfreeze") {
+		t.Fatalf("应调 Unfreeze 对象方法: %q", last)
 	}
 }

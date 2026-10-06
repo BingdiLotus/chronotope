@@ -47,8 +47,15 @@ func main() {
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
 	h.StartPoller(ctx)
 
-	// 三轴计量聚合（活跃秒 / token / 计算秒，1min 桶；重建式，W4）
-	agg := &api.Aggregator{Store: st, Logger: slog.Default()}
+	// 三轴计量聚合（活跃秒 / token / 计算秒，1min 桶；重建式，W4）。
+	// 周期可经环境变量调小（e2e 预算冻结依赖聚合结果；默认 1min）。
+	aggInterval := time.Minute
+	if v := os.Getenv("API_AGGREGATE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			aggInterval = d
+		}
+	}
+	agg := &api.Aggregator{Store: st, Logger: slog.Default(), Interval: aggInterval}
 	go agg.Run(ctx)
 
 	r := chi.NewRouter()

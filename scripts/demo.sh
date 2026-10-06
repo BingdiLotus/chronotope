@@ -72,6 +72,12 @@ for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&
 CHILD_AGENT_ID="$CHILD_ID" bash test/e2e/w6-subagent.sh "$API" > /tmp/demo-w6.log 2>&1 && pass "W6 子 Agent（5 项断言）" || { fail "W6 子 Agent"; tail -5 /tmp/demo-w6.log; }
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 10. W5 org 预算 + 欠费冻结（api 聚合周期调小 → 超限冻结 → 充值解冻）
+API_AGGREGATE_INTERVAL=5s $DC up -d --force-recreate api
+for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w5-budget.sh "$API" > /tmp/demo-w5b.log 2>&1 && pass "W5 org 预算冻结（3 项断言）" || { fail "W5 org 预算冻结"; tail -5 /tmp/demo-w5b.log; }
+API_AGGREGATE_INTERVAL=1m $DC up -d --force-recreate api
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]
