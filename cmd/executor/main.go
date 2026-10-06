@@ -42,11 +42,26 @@ func main() {
 	}
 	defer st.Close()
 
-	driver := execproto.NewDockerDriver(nil, *workspaceRoot)
+	var driver execproto.Driver
+	workspace := ""
+	switch os.Getenv("EXECUTOR_DRIVER") {
+	case "e2b":
+		// prod 档（落地方案 §12）：E2B 沙箱；E2B_API_URL 指向自托管网关（同协议）
+		driver = execproto.NewE2BDriver(
+			execproto.NewHTTPE2BAPI(os.Getenv("E2B_API_URL"), os.Getenv("E2B_API_KEY")),
+			os.Getenv("E2B_TEMPLATE"),
+		)
+		log.Printf("chronotope-executor（e2b driver）listening on %s", *addr)
+	default:
+		d := execproto.NewDockerDriver(nil, *workspaceRoot)
+		driver = d
+		workspace = d.WorkspaceRoot
+		log.Printf("chronotope-executor（docker driver）listening on %s", *addr)
+	}
 	server := &execproto.Server{
 		Driver:        driver,
 		Store:         st,
-		WorkspaceRoot: driver.WorkspaceRoot,
+		WorkspaceRoot: workspace,
 		Logger:        slog.Default(),
 	}
 
@@ -89,7 +104,6 @@ func main() {
 		}
 	}()
 
-	log.Printf("chronotope-executor（docker driver）listening on %s", *addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
