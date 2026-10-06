@@ -13,24 +13,48 @@ import (
 
 // orgQuotaExceeded 三级熔断 ② 级检查：org 当日用量 vs 预算（0/缺省 = 无限）。
 // 返回 (超限, 键, error)；org 读失败按不阻断处理（fail-open，防御配额元数据故障）。
-func orgQuotaExceeded(ctx context.Context, deps *Deps, orgID string, now time.Time) (bool, string) {
+// budgetSnapshot 是 org 预算入口快照（正确性二期 ⑧：journal 化——run 内检查
+// 只基于快照 + 本 run 累计，不再读可变 org 用量；重放回放同一快照，确定性）。
+// 字段必须导出 + json 标签（journal 序列化；未导出会重放成 nil——e2e 实证过的坑）。
+type budgetSnapshot struct {
+	OrgID        string  `json:"org_id"`
+	QuotaTokens  float64 `json:"quota_tokens"`
+	QuotaCompute float64 `json:"quota_compute"`
+	UsageTokens  int64   `json:"usage_tokens"`
+	UsageCompute float64 `json:"usage_compute"`
+}
+
+// snapshotOrgBudget 读 org 配额 + 当日用量（一次；失败 fail-open 零值）。
+func snapshotOrgBudget(ctx context.Context, deps *Deps, orgID string) (budgetSnapshot, error) {
 	org, err := deps.Store.GetOrg(ctx, orgID)
 	if err != nil || org == nil {
-		return false, ""
+		return budgetSnapshot{OrgID: orgID}, nil
 	}
-	tokens, compute, err := deps.Store.OrgDailyUsage(ctx, orgID, now.UTC().Truncate(24*time.Hour))
+	tokens, compute, err := deps.Store.OrgDailyUsage(ctx, orgID, time.Now().UTC().Truncate(24*time.Hour))
 	if err != nil {
-		return false, ""
+		return budgetSnapshot{OrgID: orgID}, nil
 	}
+	snap := budgetSnapshot{OrgID: orgID, UsageTokens: tokens, UsageCompute: compute}
 	if b, ok := org.Quotas[store.QuotaDailyTokenBudget]; ok {
-		if f, ok := b.(float64); ok && f > 0 && float64(tokens) >= f {
-			return true, store.QuotaDailyTokenBudget
+		if f, ok := b.(float64); ok && f > 0 {
+			snap.QuotaTokens = f
 		}
 	}
 	if b, ok := org.Quotas[store.QuotaDailyComputeBudget]; ok {
-		if f, ok := b.(float64); ok && f > 0 && compute >= f {
-			return true, store.QuotaDailyComputeBudget
+		if f, ok := b.(float64); ok && f > 0 {
+			snap.QuotaCompute = f
 		}
+	}
+	return snap, nil
+}
+
+// quotaExceededSnap 快照判定：快照用量 + 本 run 累计 vs 快照配额（0 = 无限）。
+func quotaExceededSnap(snap budgetSnapshot, accTokens int64, accCompute float64) (bool, string) {
+	if snap.QuotaTokens > 0 && float64(snap.UsageTokens+accTokens) >= snap.QuotaTokens {
+		return true, store.QuotaDailyTokenBudget
+	}
+	if snap.QuotaCompute > 0 && snap.UsageCompute+accCompute >= snap.QuotaCompute {
+		return true, store.QuotaDailyComputeBudget
 	}
 	return false, ""
 }

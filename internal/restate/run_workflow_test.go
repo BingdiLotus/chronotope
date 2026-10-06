@@ -193,9 +193,13 @@ func (f *fakeStore) CreateRun(_ context.Context, id, sessionID string, trigger j
 type fakeHarness struct {
 	script []*Result
 	calls  []*runs.Request
+	onCall func() // 每次 Call 前的钩子（确定性测试注入副作用）
 }
 
 func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error) {
+	if f.onCall != nil {
+		f.onCall()
+	}
 	if len(f.calls) >= len(f.script) {
 		return nil, fmt.Errorf("fakeHarness: 超出脚本（共 %d 次调用）", len(f.script))
 	}

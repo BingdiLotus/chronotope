@@ -2,9 +2,9 @@ package restate
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	restate "github.com/restatedev/sdk-go"
 	"github.com/restatedev/sdk-go/x/mocks"
@@ -15,34 +15,85 @@ import (
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
-// TestOrgQuotaExceeded ② 级检查：token/计算秒双轴、0/缺省 = 无限、非法值忽略。
-func TestOrgQuotaExceeded(t *testing.T) {
+// TestOrgBudgetSnapshotAndCheck ② 级快照判定（正确性二期 ⑧）：
+// token/计算秒双轴、0/缺省 = 无限、非法值忽略、快照+累计语义。
+func TestOrgBudgetSnapshotAndCheck(t *testing.T) {
 	st := &fakeStore{orgQuotas: map[string]any{store.QuotaDailyTokenBudget: float64(100)}}
 	deps := &Deps{Store: st}
 
 	st.orgTokens = 99
-	if exceeded, _ := orgQuotaExceeded(t.Context(), deps, "org_test", time.Now()); exceeded {
+	snap, err := snapshotOrgBudget(t.Context(), deps, "org_test")
+	if err != nil || snap.QuotaTokens != 100 || snap.UsageTokens != 99 {
+		t.Fatalf("快照不符: %+v err=%v", snap, err)
+	}
+	if exceeded, _ := quotaExceededSnap(snap, 0, 0); exceeded {
 		t.Fatal("99 < 100 不应超限")
 	}
-	st.orgTokens = 100
-	if exceeded, key := orgQuotaExceeded(t.Context(), deps, "org_test", time.Now()); !exceeded || (key != store.QuotaDailyTokenBudget) {
-		t.Fatalf("100 >= 100 应超限: %v %s", exceeded, key)
+	// 本 run 累计使快照超限（其他会话用量不变）
+	if exceeded, key := quotaExceededSnap(snap, 1, 0); !exceeded || key != store.QuotaDailyTokenBudget {
+		t.Fatalf("99+1 >= 100 应超限: %s", key)
 	}
 	// 计算秒轴
 	st.orgTokens = 0
 	st.orgQuotas = map[string]any{store.QuotaDailyComputeBudget: float64(10)}
 	st.orgCompute = 10
-	if exceeded, key := orgQuotaExceeded(t.Context(), deps, "org_test", time.Now()); !exceeded || (key != store.QuotaDailyComputeBudget) {
-		t.Fatalf("计算秒应超限: %v %s", exceeded, key)
+	snap, _ = snapshotOrgBudget(t.Context(), deps, "org_test")
+	if exceeded, key := quotaExceededSnap(snap, 0, 0); !exceeded || key != store.QuotaDailyComputeBudget {
+		t.Fatalf("计算秒应超限: %s", key)
 	}
 	// 缺省/非法 → 无限
 	st.orgQuotas = map[string]any{store.QuotaDailyTokenBudget: "bad"}
-	if exceeded, _ := orgQuotaExceeded(t.Context(), deps, "org_test", time.Now()); exceeded {
-		t.Fatal("非法值应视为无限")
+	snap, _ = snapshotOrgBudget(t.Context(), deps, "org_test")
+	if snap.QuotaTokens != 0 {
+		t.Fatalf("非法值应视为无限: %+v", snap)
 	}
 	st.orgQuotas = nil
-	if exceeded, _ := orgQuotaExceeded(t.Context(), deps, "org_test", time.Now()); exceeded {
+	snap, _ = snapshotOrgBudget(t.Context(), deps, "org_test")
+	if exceeded, _ := quotaExceededSnap(snap, 100000, 0); exceeded {
 		t.Fatal("无预算应视为无限")
+	}
+}
+
+// TestRunLoopBudgetSnapshotDeterministic ⑧ 确定性：run 执行中其他会话推进 org
+// 用量 → 本 run 的每步检查仍用入口快照（分支不变）。
+func TestRunLoopBudgetSnapshotDeterministic(t *testing.T) {
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha := &fakeHarness{script: []*Result{
+		{Done: false, ToolCalls: []ToolCall{{ID: "t_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}}},
+		{Done: true, Final: "完成。"},
+	}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{"bash"}, Version: 1,
+		},
+	}}
+	ex := &fakeExecutor{}
+	st.orgQuotas = map[string]any{store.QuotaDailyTokenBudget: float64(100)}
+	st.orgTokens = 90 // 入口快照 90 < 100
+
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+
+	ctx := restate.WithMockContext(mockCtx)
+	// 首次 harness 调用前把 org 用量推进到 200（模拟其他会话消费）——
+	// 旧实现每步读库会冻结；新实现用入口快照（90）不受影响
+	ha.onCall = func() { st.orgTokens = 200 }
+	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || out.Final != "完成。" {
+		t.Fatalf("快照确定性：应正常完成: %+v err=%v", out, err)
+	}
+	frozen := eventsOf(st, event.RunFrozen)
+	if len(frozen) != 0 {
+		t.Fatalf("执行中推进的用量不得触发本 run 冻结（快照确定性）: %+v", frozen)
 	}
 }
 

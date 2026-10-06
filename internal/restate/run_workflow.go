@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -94,11 +93,26 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	// run 状态行记账（幂等）：worker 是终态记账者，api 崩溃后状态仍收敛
 	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunRunning)
 
-	// 三级熔断 ②：org 日预算入口检查 → 超限冻结（挂起等待充值，零成本不杀 run）
+	// 三级熔断 ②：org 日预算入口快照（正确性二期 ⑧——journal 化，run 内检查
+	// 只基于快照+累计；重放回放同一快照，执行中其他会话推进用量不影响分支）
+	var budgetSnap budgetSnapshot
 	if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
-		if exceeded, key := orgQuotaExceeded(ctx, deps, sess.OrgID, time.Now()); exceeded {
+		budgetSnap, err = restate.Run(ctx, func(rc restate.RunContext) (budgetSnapshot, error) {
+			return snapshotOrgBudget(rc, deps, sess.OrgID)
+		}, restate.WithName("budget-snapshot"))
+		if err != nil {
+			budgetSnap = budgetSnapshot{OrgID: sess.OrgID} // fail-open
+		}
+		if exceeded, key := quotaExceededSnap(budgetSnap, 0, 0); exceeded {
 			if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
 				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
+			}
+			// 解冻 = 充值后继续：重新快照（journaled）——充值后的配额对后续检查生效
+			budgetSnap, err = restate.Run(ctx, func(rc restate.RunContext) (budgetSnapshot, error) {
+				return snapshotOrgBudget(rc, deps, sess.OrgID)
+			}, restate.WithName("budget-snapshot"))
+			if err != nil {
+				budgetSnap = budgetSnapshot{OrgID: sess.OrgID}
 			}
 		}
 	}
@@ -201,12 +215,16 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		if maxTokens > 0 && float64(accTokens) > maxTokens {
 			return failBudget(step, budgetKeyTokens)
 		}
-		// 三级熔断 ②：org 日预算每步检查 → 超限冻结（充值后继续本 run）
-		if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
-			if exceeded, key := orgQuotaExceeded(ctx, deps, sess.OrgID, time.Now()); exceeded {
-				if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
-					return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
-				}
+		// 三级熔断 ②：org 日预算每步检查（快照 + 本 run 累计——确定性）→ 冻结
+		if exceeded, key := quotaExceededSnap(budgetSnap, accTokens, accCompute); exceeded {
+			if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
+				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
+			}
+			// 解冻后重新快照（充值生效；journaled 重放确定性）
+			if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+				budgetSnap, _ = restate.Run(ctx, func(rc restate.RunContext) (budgetSnapshot, error) {
+					return snapshotOrgBudget(rc, deps, sess.OrgID)
+				}, restate.WithName("budget-snapshot"))
 			}
 		}
 
