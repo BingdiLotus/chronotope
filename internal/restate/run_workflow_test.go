@@ -375,10 +375,12 @@ func TestRunLoopUninitializedSession(t *testing.T) {
 
 func TestRunLoopMaxSteps(t *testing.T) {
 	store := &fakeStore{}
-	// 永不 done 的脚本：每次返回工具调用，打到 maxSteps 封顶
+	// 永不 done 的脚本：每次返回工具调用，打到 maxSteps 封顶。
+	// 参数逐次变化：绕开无进展检测（同指纹 5 轮即熔断——那是另一个用例）。
 	script := make([]*Result, 0, maxSteps)
 	for i := 0; i < maxSteps; i++ {
-		script = append(script, &Result{ToolCalls: []ToolCall{{ID: "t", Name: "bash"}}})
+		args, _ := json.Marshal(map[string]string{"command": fmt.Sprintf("cmd-%d", i)})
+		script = append(script, &Result{ToolCalls: []ToolCall{{ID: "t", Name: "bash", Arguments: args}}})
 	}
 	harness := &fakeHarness{script: script}
 	sessions := &fakeSessions{state: SessionState{

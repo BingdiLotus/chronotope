@@ -13,79 +13,96 @@ import (
 	"github.com/bingdilotus/chronotope/internal/execproto"
 )
 
+// execOutcome 是 journaled 的 exec 结果（含执行时长；重放回放同一时长——确定性）。
+// 字段必须导出：SDK 以 JSON 序列化 journal 条目，未导出字段重放后为零值（nil 解引用实证）。
+type execOutcome struct {
+	Result   *ExecResult   `json:"result"`
+	Duration time.Duration `json:"duration_ns"`
+}
+
 // dispatchTool 是四类工具路由（worker-架构设计 §1 dispatcher）的 W2 实现：
 // 代码/命令类 → executor（本文件）；控制类（request_approval）→ W3 awakeable；
 // MCP 类 → W6；API 类已在 harness 内联，不会到达这里。
 // 返回 tool_result 内容（作为 tool 消息回喂模型）。
-func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, cfg sessionapi.AgentConfig, tc ToolCall, emit *Emitter) (string, error) {
+// dispatchTool 分流一个工具调用；返回 (结果 JSON 字符串, 计算秒, error)。
+// 计算秒（沙箱执行时长）在 journaled Run 闭包内测量并随结果一起记账——
+// 重放时回放同一时长（确定性），run 级预算熔断据此累加（边界语义 §1）。
+func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, cfg sessionapi.AgentConfig, tc ToolCall, emit *Emitter) (string, float64, error) {
 	switch tc.Name {
 	case runs.ToolBash, runs.ToolRunPython, runs.ToolListFiles:
 		input := codeToolInput(tc)
 		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
-		started := time.Now()
-		res, err := restate.Run(ctx, func(rc restate.RunContext) (*ExecResult, error) {
-			return deps.Executor.Execute(rc, sandboxID, tc.Name, input,
+		// 时长在 Run 闭包内测量并随结果 journal（重放回放同一时长）
+		outcome, err := restate.Run(ctx, func(rc restate.RunContext) (*execOutcome, error) {
+			started := time.Now()
+			res, err := deps.Executor.Execute(rc, sandboxID, tc.Name, input,
 				execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
+			if err != nil {
+				return nil, err
+			}
+			return &execOutcome{Result: res, Duration: time.Since(started)}, nil
 		}, restate.WithName(StepName("exec", step, tc.ID)))
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
+		res := outcome.Result
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
 			"step": step, "tool": tc.Name, "exit": res.Exit,
 			"output": truncate(res.Output, 4096), "output_ref": res.OutputRef, "truncated": res.Truncated,
-			"duration_ms": time.Since(started).Milliseconds(), // 计算秒计量依据（W4）
+			"duration_ms": outcome.Duration.Milliseconds(), // 计算秒计量依据（W4）+ 预算熔断
 		})
-		return jsonToolResult(tc.Name, res), nil
+		return jsonToolResult(tc.Name, res), outcome.Duration.Seconds(), nil
 
 	case runs.ToolWriteFile:
 		path, content := fileToolArgs(tc)
 		if path == "" {
-			return "", restate.ToTerminalError(fmt.Errorf("write_file 缺 path"))
+			return "", 0, restate.ToTerminalError(fmt.Errorf("write_file 缺 path"))
 		}
 		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		_, err = restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 			return "", deps.Executor.WriteFile(rc, sandboxID, path, content)
 		}, restate.WithName(StepName("exec", step, tc.ID)))
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
 			"step": step, "tool": tc.Name, "exit": 0, "path": path,
 		})
-		return fmt.Sprintf(`{"name":%q,"result":{"written":%q}}`, tc.Name, path), nil
+		return fmt.Sprintf(`{"name":%q,"result":{"written":%q}}`, tc.Name, path), 0, nil
 
 	case runs.ToolReadFile:
 		path, _ := fileToolArgs(tc)
 		if path == "" {
-			return "", restate.ToTerminalError(fmt.Errorf("read_file 缺 path"))
+			return "", 0, restate.ToTerminalError(fmt.Errorf("read_file 缺 path"))
 		}
 		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		content, err := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 			return deps.Executor.ReadFile(rc, sandboxID, path)
 		}, restate.WithName(StepName("exec", step, tc.ID)))
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
 			"step": step, "tool": tc.Name, "exit": 0, "path": path,
 		})
-		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), nil
+		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), 0, nil
 
 	case runs.ToolRequestApproval:
 		// 控制类工具：awakeable 挂起（零进程占用），webhook resolve 后继续（W3 HITL）
-		return awaitApproval(ctx, deps, in, runID, step, tc, emit)
+		result, err := awaitApproval(ctx, deps, in, runID, step, tc, emit)
+		return result, 0, err
 
 	default:
-		return "", restate.ToTerminalError(fmt.Errorf("工具 %q 不支持（四类路由：代码→executor / 控制→awakeable / MCP→W6 / API→harness 内联）", tc.Name))
+		return "", 0, restate.ToTerminalError(fmt.Errorf("工具 %q 不支持（四类路由：代码→executor / 控制→awakeable / MCP→W6 / API→harness 内联）", tc.Name))
 	}
 }
 

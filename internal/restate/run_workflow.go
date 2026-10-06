@@ -2,6 +2,8 @@ package restate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -12,8 +14,36 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 )
 
-// maxSteps 是 MVP 防失控上限（无进展检测/三级熔断在 W5 完整落地，边界语义 §1）。
+// maxSteps 是 MVP 防失控上限（边界语义 §1 的 无进展检测/预算熔断 在其内触发）。
 const maxSteps = 16
+
+// noProgressStreak 是「连续指纹不变轮数」阈值（边界语义 §1：N=5 → run.failed{no_progress}）。
+const noProgressStreak = 5
+
+// budgetKeys 是 run 级预算键（AgentConfig.Budget；边界语义 §1：累加 token/计算秒）。
+const (
+	budgetKeyTokens  = "max_tokens"
+	budgetKeyCompute = "max_compute_seconds"
+)
+
+// parseBudget 解析预算（未知键/非法值忽略——契约向后兼容）。
+func parseBudget(b map[string]any) (maxTokens, maxCompute float64) {
+	asFloat := func(k string) float64 {
+		if v, ok := b[k]; ok {
+			if f, ok := v.(float64); ok && f > 0 {
+				return f
+			}
+		}
+		return 0
+	}
+	return asFloat(budgetKeyTokens), asFloat(budgetKeyCompute)
+}
+
+// toolFingerprint 计算工具调用指纹（无进展检测；边界语义 §1：hash(工具+参数)）。
+func toolFingerprint(name string, args json.RawMessage) string {
+	h := sha256.Sum256([]byte(name + "\x00" + string(args)))
+	return hex.EncodeToString(h[:])
+}
 
 // RunInput 是 run_workflow 的输入（api 经 Restate ingress 提交）。
 type RunInput struct {
@@ -64,6 +94,30 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
 
+	maxTokens, maxCompute := parseBudget(cfg.Budget)
+	var accTokens int64
+	var accCompute float64
+	lastFingerprint := ""
+	streak := 0
+
+	failBudget := func(step int, key string) (RunOutput, error) {
+		_ = emit.Emit(ctx, in.SessionID, runID, step, event.BudgetExceeded, "budget", "", map[string]any{
+			"run_id": runID, "key": key,
+		})
+		_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
+			"reason": "budget_exceeded", "key": key,
+		})
+		_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("budget exceeded: %s", key))
+	}
+	failNoProgress := func(step int) (RunOutput, error) {
+		_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
+			"reason": "no_progress", "streak": noProgressStreak,
+		})
+		_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("no progress: %d 轮指纹不变", noProgressStreak))
+	}
+
 	for step := 0; step < maxSteps; step++ {
 		req := &runs.Request{
 			Protocol:       runs.ProtocolVersion,
@@ -96,6 +150,12 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			return RunOutput{}, restate.ToTerminalError(err)
 		}
 
+		// 预算累加：token（每次 harness 调用后；边界语义 §1 run 级预算）
+		accTokens += int64(res.Usage.TokensIn + res.Usage.TokensOut)
+		if maxTokens > 0 && float64(accTokens) > maxTokens {
+			return failBudget(step, budgetKeyTokens)
+		}
+
 		if res.ErrCode != "" { // harness 失败终态（error 帧）
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
 				"code": res.ErrCode, "message": res.ErrMsg,
@@ -111,10 +171,25 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
 					"step": step, "id": tc.ID, "name": tc.Name, "arguments": json.RawMessage(tc.Arguments),
 				})
-				result, err := dispatchTool(ctx, deps, in, runID, step, cfg, tc, emit)
+				// 无进展检测：连续指纹不变 → 熔断（dispatch 前，避免第 N 次重复执行）
+				fp := toolFingerprint(tc.Name, tc.Arguments)
+				if fp == lastFingerprint {
+					streak++
+				} else {
+					lastFingerprint = fp
+					streak = 1
+				}
+				if streak >= noProgressStreak {
+					return failNoProgress(step)
+				}
+				result, computeSeconds, err := dispatchTool(ctx, deps, in, runID, step, cfg, tc, emit)
 				if err != nil {
 					return RunOutput{}, restate.ToTerminalError(
 						fmt.Errorf("dispatch %s (step %d): %w", tc.Name, step, err))
+				}
+				accCompute += computeSeconds
+				if maxCompute > 0 && accCompute > maxCompute {
+					return failBudget(step, budgetKeyCompute)
 				}
 				content, _ := json.Marshal(result)
 				if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); err != nil {
