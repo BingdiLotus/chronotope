@@ -125,6 +125,7 @@ func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID str
 // fakeExecutor 实现 Executor 接口（W2 工具分流的测试替身）。
 type fakeExecutor struct {
 	execs   []string // "name:input"
+	ops     []string // 全操作序（golden 轨迹）
 	files   map[string]string
 	created int
 }
@@ -136,10 +137,12 @@ func (f *fakeExecutor) CreateSandbox(context.Context, execproto.CreateSandboxReq
 
 func (f *fakeExecutor) Execute(_ context.Context, sandboxID, name, input, idempotencyKey string) (*ExecResult, error) {
 	f.execs = append(f.execs, name+":"+input)
+	f.ops = append(f.ops, "exec:"+name)
 	return &ExecResult{Exit: 0, Output: "ok\n"}, nil
 }
 
 func (f *fakeExecutor) ReadFile(_ context.Context, sandboxID, path string) (string, error) {
+	f.ops = append(f.ops, "read:"+path)
 	return f.files[path], nil
 }
 
@@ -148,6 +151,7 @@ func (f *fakeExecutor) WriteFile(_ context.Context, sandboxID, path, content str
 		f.files = map[string]string{}
 	}
 	f.files[path] = content
+	f.ops = append(f.ops, "write:"+path)
 	return nil
 }
 

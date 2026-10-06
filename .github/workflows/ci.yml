@@ -6,18 +6,31 @@ on:
 
 jobs:
   go:
-    name: go（build / vet / 契约测试）
+    name: go（build / vet / 单测+集成测试）
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: chronotope
+          POSTGRES_USER: chronotope
+          POSTGRES_PASSWORD: chronotope_dev
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U chronotope"
+          --health-interval 5s --health-timeout 3s --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x" # 模块要求 go ≥1.25（restate-sdk-go v1.1.0）
       - name: build
         run: go build ./...
       - name: vet
         run: go vet ./...
-      - name: test（含 test/contract 契约测试）
+      - name: test（单测 + store 集成 + golden journal 重放）
+        env:
+          STORE_TEST_DATABASE_URL: postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable
         run: go test ./...
 
   harness:
@@ -47,6 +60,8 @@ jobs:
           go-version: "1.25.x" # sdk-go v1.1.0 要求
       - name: build（GOWORK=off，spike 为独立模块）
         run: GOWORK=off go build ./...
+      - name: test（五项原语 spike 测试）
+        run: GOWORK=off go test ./...
 
   e2e:
     name: e2e（compose 全链路 W1/W2 闭环，fake 模型无密钥）
@@ -71,6 +86,7 @@ jobs:
         run: bash test/e2e/w1-loop.sh http://localhost:8080
       - name: W2 沙箱闭环 e2e（harness 切脚本模式 → 重启容器）
         env:
+          HARNESS_FAKE_MODEL: "1" # 必带：否则 harness 落入真实模式调 litellm（demo 实证）
           HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/hello.py","content":"print(42)"}}},{"tool_call":{"name":"bash","arguments":{"command":"python3 /workspace/hello.py"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/hello.py"}}},{"final":"沙箱闭环完成，输出 42。"}]'
         run: |
           docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
@@ -79,9 +95,30 @@ jobs:
             sleep 1
           done
           bash test/e2e/w2-sandbox.sh http://localhost:8080
+      - name: W3 HITL e2e（harness 切审批脚本 → 重启）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"request_approval","arguments":{"question":"允许删除生产数据吗？"}}},{"final":"已获批准，执行完成。"}]'
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w3-hitl.sh http://localhost:8080
+      - name: W3 定时唤醒 e2e（harness 回默认 fake）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+          HARNESS_FAKE_SCRIPT: ""
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w3-schedule.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100
 
-  # TODO(W3+)：golden journal 重放测试
   # TODO(W3)：chaos 套件（kill -9 矩阵）在专用 runner 上执行
