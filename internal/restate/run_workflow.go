@@ -57,8 +57,9 @@ type RunInput struct {
 
 // RunOutput 是 run_workflow 的结果摘要（journal 只存摘要，契约规范 §7）。
 type RunOutput struct {
-	Final string `json:"final"`
-	Steps int    `json:"steps"`
+	Final    string `json:"final"`
+	Steps    int    `json:"steps"`
+	Canceled bool   `json:"canceled,omitempty"`
 }
 
 // runWorkflowDef 注册任务编排 workflow（key=run_id；agent 主循环，worker-架构设计 §3）。
@@ -138,6 +139,16 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	}
 
 	for step := 0; step < maxSteps; step++ {
+		// 取消检查点（评审 #6 非抢占式：每步 harness 调用前检查会话取消标志）
+		stepState, err := deps.Sessions.GetState(ctx, in.SessionID)
+		if err == nil && stepState.CancelRequested {
+			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCanceled, "", "", map[string]any{
+				"step": step,
+			})
+			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
+			return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
+		}
+
 		// 群聊决策护栏：轮次用尽后移除 next_speaker，强制 moderator 终答
 		stepTools := groupAwareTools(cfg, state)
 		if groupTurns >= maxGroupTurns {

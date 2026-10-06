@@ -69,6 +69,10 @@ func main() {
 			deliverInterval = d
 		}
 	}
+	// 接纳屏障恢复（评审 #6）：queued 遗留 run 重投扫描
+	admission := &api.AdmissionRecovery{Store: st, Ingress: h.Ingress, Logger: slog.Default()}
+	go admission.Run(ctx, time.Minute)
+
 	deliverer := &api.Deliverer{
 		Store:        st,
 		Logger:       slog.Default(),

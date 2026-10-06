@@ -270,7 +270,15 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": sessionID, "action": req.Action, "phase": state.Phase})
-	case sessionapi.ActionCancel, sessionapi.ActionSteer:
+	case sessionapi.ActionCancel:
+		// 非抢占式取消（评审 #6）：置会话取消标志，run 下一步检查点终止
+		var out restateVoid
+		if err := h.Ingress.Call(r.Context(), "/session_object/"+sessionID+"/Cancel", http.MethodPost, map[string]any{}, &out); err != nil {
+			writeError(w, http.StatusServiceUnavailable, 503, "cancel failed: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": sessionID, "action": req.Action})
+	case sessionapi.ActionSteer:
 		writeError(w, http.StatusNotImplemented, 501, "action "+string(req.Action)+" 未实现（W3+）")
 	default:
 		writeError(w, http.StatusUnprocessableEntity, 422, "unknown action: "+string(req.Action))

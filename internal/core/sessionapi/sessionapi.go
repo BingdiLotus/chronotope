@@ -33,6 +33,7 @@ const (
 	RunAwaitingApproval RunStatus = "awaiting_approval"
 	RunFrozen           RunStatus = "frozen"
 	RunCompleted        RunStatus = "completed"
+	RunCanceled         RunStatus = "canceled"
 	RunFailed           RunStatus = "failed"
 	RunCancelled        RunStatus = "cancelled"
 )

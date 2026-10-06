@@ -292,3 +292,33 @@ ORDER BY created_at DESC LIMIT 1`
 	_ = json.Unmarshal(boundJSON, &r.Bound)
 	return &r, nil
 }
+
+// ListStaleQueuedRuns 接纳屏障扫描（评审 #6）：api 崩溃窗口遗留的 queued run
+// （行已建但 ingress 未达/已失）——恢复扫描重投（worker run_workflow 幂等键
+// = run_id，重投安全）。
+func (s *Store) ListStaleQueuedRuns(ctx context.Context, olderThan time.Time, limit int) ([]*Run, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	const q = `
+SELECT id, session_id, status, bound
+FROM runs
+WHERE status = 'queued' AND created_at < $1
+ORDER BY created_at
+LIMIT $2`
+	rows, err := s.Pool.Query(ctx, q, olderThan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list stale queued runs: %w", err)
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		var r Run
+		var boundJSON json.RawMessage
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON); err != nil {
+			return nil, fmt.Errorf("store: scan stale run: %w", err)
+		}
+		out = append(out, &r)
+	}
+	return out, rows.Err()
+}

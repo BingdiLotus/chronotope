@@ -217,6 +217,11 @@ func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, erro
 	return f.state, nil
 }
 
+func (f *fakeSessions) Cancel(_ restate.Context, _ string) error {
+	f.state.CancelRequested = true
+	return nil
+}
+
 func (f *fakeSessions) ClearSandbox(_ restate.Context, _ string) error {
 	f.state.SandboxID = ""
 	return nil
@@ -564,5 +569,39 @@ func TestRunLoopWritesOutbox(t *testing.T) {
 	}
 	if len(st.deliverables) != 1 || st.deliverables[0]["kind"] != "run_completed" || !strings.Contains(st.deliverables[0]["payload"].(string), "交付完成") {
 		t.Fatalf("交付清单应一行: %+v", st.deliverables)
+	}
+}
+
+// TestRunLoopCancelCheckpoint 评审 #6：取消检查点——会话取消标志置位后 run 终止。
+func TestRunLoopCancelCheckpoint(t *testing.T) {
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha := &fakeHarness{script: []*Result{{Done: true, Final: "正常完成。"}}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{}, Version: 1,
+		},
+		CancelRequested: true,
+	}}
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx := restate.WithMockContext(mockCtx)
+	out, err := runLoop(ctx, deps(st, ha, se, &fakeExecutor{}), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || !out.Canceled || out.Final != "已取消" {
+		t.Fatalf("取消检查点应终止 run: %+v err=%v", out, err)
+	}
+	if len(ha.calls) != 0 {
+		t.Fatalf("取消后不得调 harness: %d", len(ha.calls))
+	}
+	if len(eventsOf(st, event.RunCanceled)) != 1 {
+		t.Fatalf("应有 run.canceled 事件: %+v", st.events)
 	}
 }

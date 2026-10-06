@@ -28,6 +28,7 @@ type SessionState struct {
 	Participants        []sessionapi.Participant `json:"participants,omitempty"`          // 群聊成员（非空 = 群聊会话；moderator 主持）
 	MCP                 []MCPConnection          `json:"mcp,omitempty"`                   // MCP 连接（tools 懒缓存）
 	Skills              []string                 `json:"skills,omitempty"`                // 已安装 skill 名（沙箱 skills/<name>/）
+	CancelRequested     bool                     `json:"cancel_requested,omitempty"`      // 取消请求（run 检查点生效，非抢占——评审 #6）
 	SandboxID           string                   `json:"sandbox_id,omitempty"`            // 会话作用域沙箱（懒创建，W2）
 }
 
@@ -49,6 +50,7 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("Resume", restate.NewObjectHandler[restate.Void, SessionState](resumeSession)).
 		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
 		Handler("ClearSandbox", restate.NewObjectHandler[restate.Void, SessionState](clearSandbox)).
+		Handler("Cancel", restate.NewObjectHandler[restate.Void, SessionState](cancelSessionRun)).
 		Handler("SetPendingAwakeable", restate.NewObjectHandler[SetPendingApprovalInput, SessionState](setPendingAwakeable)).
 		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
 		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession)).
@@ -67,6 +69,17 @@ func attachSandbox(ctx restate.ObjectContext, sandboxID string) (SessionState, e
 		state.SandboxID = sandboxID
 		restate.Set(ctx, sessionStateKey, state)
 	}
+	return state, nil
+}
+
+// cancelSessionRun 置取消标志（runLoop 下一步检查点生效——非抢占式取消）。
+func cancelSessionRun(ctx restate.ObjectContext, _ restate.Void) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	state.CancelRequested = true
+	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }
 

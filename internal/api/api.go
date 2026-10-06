@@ -48,6 +48,8 @@ type Store interface {
 	MarkDeliverableDelivered(ctx context.Context, id int64) error
 	// 事件投递（outbox，落地方案 §5）
 	Subscribe(ctx context.Context, sessionID, channel, target string) error
+	// 接纳屏障（评审 #6：queued 遗留重投扫描）
+	ListStaleQueuedRuns(ctx context.Context, olderThan time.Time, limit int) ([]*store.Run, error)
 	ListPendingOutbox(ctx context.Context, limit int) ([]*store.PendingOutboxRow, error)
 	GetEvent(ctx context.Context, eventID int64) (string, []byte, time.Time, error)
 	OutboxDelivered(ctx context.Context, id int64) error

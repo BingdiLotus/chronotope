@@ -40,6 +40,7 @@ const (
 	// 能力
 	SkillInstall  Type = "skill.install"
 	AuditApproval Type = "audit.approval"
+	RunCanceled   Type = "run.canceled"
 	MCPConnected  Type = "mcp.connected"
 	MCPUpdated    Type = "mcp.updated"
 
@@ -62,7 +63,7 @@ func (t Type) Valid() bool {
 	case RunStarted, RunCompleted, RunFailed, RunCancelled,
 		LLMCall, ToolCall, SandboxExec, MCPCall, StepJournaled, EventTruncated,
 		RunPaused, RunResumed, RunAwaitingApproval, RunFrozen, RunUnfrozen, SessionWoken,
-		SkillInstall, MCPConnected, MCPUpdated, AuditApproval,
+		SkillInstall, MCPConnected, MCPUpdated, AuditApproval, RunCanceled,
 		SubagentSpawned, SubagentCompleted, GroupTurn,
 		MemoryConsolidated,
 		AuditToolDenied, BudgetExceeded:

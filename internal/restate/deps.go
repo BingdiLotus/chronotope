@@ -50,6 +50,7 @@ type SessionSource interface {
 	// AttachSandbox 回填会话作用域沙箱 id（懒创建后调用；幂等）。
 	AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error
 	ClearSandbox(ctx restate.Context, sessionID string) error
+	Cancel(ctx restate.Context, sessionID string) error
 	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
 	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest string) error
 	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
@@ -82,6 +83,12 @@ func (RestateSessionSource) GetState(ctx restate.Context, sessionID string) (Ses
 }
 
 // AttachSandbox 回填沙箱 id（对象调用幂等：同值重复设置无害，重放重发安全）。
+func (RestateSessionSource) Cancel(ctx restate.Context, sessionID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "Cancel").
+		Request(restate.Void{})
+	return err
+}
+
 func (RestateSessionSource) ClearSandbox(ctx restate.Context, sessionID string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "ClearSandbox").
 		Request(restate.Void{})

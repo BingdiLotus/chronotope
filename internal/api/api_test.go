@@ -38,6 +38,7 @@ type fakeStore struct {
 	apiKeys        []*store.APIKeyRow
 	deliverables   []*store.DeliverableRow
 	subs           []map[string]string
+	staleQueued    []*store.Run
 	pendingOutbox  []*store.PendingOutboxRow
 	pendingType    string
 	pendingPayload []byte
@@ -266,6 +267,12 @@ func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, s
 	return nil
 }
 
+func (f *fakeStore) ListStaleQueuedRuns(_ context.Context, _ time.Time, _ int) ([]*store.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.staleQueued, nil
+}
+
 func (f *fakeStore) Subscribe(_ context.Context, sessionID, channel, target string) error {
 	f.subs = append(f.subs, map[string]string{"session": sessionID, "channel": channel, "target": target})
 	return nil
@@ -400,6 +407,12 @@ func (f *fakeIngress) Call(_ context.Context, path, method string, body any, out
 		}
 	}
 	return nil
+}
+
+func (f *fakeIngress) allCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 func (f *fakeIngress) lastCall() string {
@@ -1134,5 +1147,28 @@ func TestDelivererPass(t *testing.T) {
 	}
 	if len(fs.retriedIDs) != 1 || fs.retriedIDs[0] != 2 {
 		t.Fatalf("失败行应退避: %v", fs.retriedIDs)
+	}
+}
+
+// TestAdmissionRecovery 评审 #6：queued 遗留重投（崩溃窗口接纳屏障）。
+func TestAdmissionRecovery(t *testing.T) {
+	h, fs, ing := setup(t)
+	fs.staleQueued = []*store.Run{
+		{ID: "r_stale1", SessionID: "s_seed"},
+		{ID: "r_stale2", SessionID: "s_seed"},
+	}
+	rec := &AdmissionRecovery{Store: fs, Ingress: h.Ingress, Stale: 5 * time.Minute}
+	if err := rec.pass(context.Background()); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	calls := ing.allCalls()
+	var redelivered int
+	for _, c := range calls {
+		if strings.Contains(c, "/run_workflow/r_stale") {
+			redelivered++
+		}
+	}
+	if redelivered != 2 {
+		t.Fatalf("应重投 2 个遗留 run: %v", calls)
 	}
 }
