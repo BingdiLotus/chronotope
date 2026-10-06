@@ -46,6 +46,12 @@ type Store interface {
 	// 交付清单（outbox，W8 后置）
 	ListDeliverables(ctx context.Context, sessionID string, limit int) ([]*store.DeliverableRow, error)
 	MarkDeliverableDelivered(ctx context.Context, id int64) error
+	// 事件投递（outbox，落地方案 §5）
+	Subscribe(ctx context.Context, sessionID, channel, target string) error
+	ListPendingOutbox(ctx context.Context, limit int) ([]*store.PendingOutboxRow, error)
+	GetEvent(ctx context.Context, eventID int64) (string, []byte, time.Time, error)
+	OutboxDelivered(ctx context.Context, id int64) error
+	OutboxRetry(ctx context.Context, id, attempts int64) error
 	// 多租户认证（api_keys）
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (*store.APIKeyRow, error)
 	CreateAPIKey(ctx context.Context, id, orgID, keyHash string, scopes []string) error
@@ -63,13 +69,14 @@ type RestateIngress interface {
 
 // Handler 是网关依赖集。
 type Handler struct {
-	Store        Store
-	Hub          *events.Hub
-	Ingress      RestateIngress
-	Executor     ExecutorClient // 沙箱文件写入（skill 安装）；nil = 禁用
-	PollInterval time.Duration  // 事件轮询间隔（默认 500ms）
-	Logger       *slog.Logger
-	Limiter      *Limiter // 三级限流（nil = 禁用；默认在 New 中启用 session 桶）
+	Store                Store
+	DeliveryAllowPrivate bool // 事件投递 SSRF 放行（本地/e2e；生产拒绝）
+	Hub                  *events.Hub
+	Ingress              RestateIngress
+	Executor             ExecutorClient // 沙箱文件写入（skill 安装）；nil = 禁用
+	PollInterval         time.Duration  // 事件轮询间隔（默认 500ms）
+	Logger               *slog.Logger
+	Limiter              *Limiter // 三级限流（nil = 禁用；默认在 New 中启用 session 桶）
 }
 
 // ExecutorClient 是 executor 协议的最小客户端（api 侧 skill 安装用）。
@@ -124,6 +131,7 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/memory", h.getMemory)                         // 分层记忆（主题摘要 + 长期记忆条目，W5）
 		r.Get("/deliveries", h.listDeliveries)                // 交付清单（outbox，W8 后置）
 		r.Post("/deliveries/{deliveryID}/ack", h.ackDelivery) // 投递回执
+		r.Post("/subscriptions", h.subscribe)                 // 事件投递订阅（webhook/email）
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)

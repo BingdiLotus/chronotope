@@ -45,6 +45,7 @@ func main() {
 	defer st.Close()
 
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
+	h.DeliveryAllowPrivate = os.Getenv("OUTBOX_ALLOW_PRIVATE") == "true"
 	if v := os.Getenv("EXECUTOR_URL"); v != "" {
 		h.Executor = api.NewHTTPExecutor(v)
 	}
@@ -60,6 +61,26 @@ func main() {
 	}
 	agg := &api.Aggregator{Store: st, Logger: slog.Default(), Interval: aggInterval}
 	go agg.Run(ctx)
+
+	// 事件投递 worker（outbox，§5）：webhook/email 通道，指数退避
+	deliverInterval := 5 * time.Second
+	if v := os.Getenv("OUTBOX_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			deliverInterval = d
+		}
+	}
+	deliverer := &api.Deliverer{
+		Store:        st,
+		Logger:       slog.Default(),
+		Batch:        100,
+		AllowPrivate: os.Getenv("OUTBOX_ALLOW_PRIVATE") == "true",
+		SMTP: api.SMTPConfig{
+			Host: os.Getenv("SMTP_HOST"),
+			Port: firstNonEmpty(os.Getenv("SMTP_PORT"), "25"),
+			From: firstNonEmpty(os.Getenv("SMTP_FROM"), "chronotope@localhost"),
+		},
+	}
+	go deliverer.Run(ctx, deliverInterval)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -88,6 +109,15 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func envOr(key, fallback string) string {

@@ -520,3 +520,63 @@ func TestSandboxGCScanAndDelete(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestEventDeliveryEnqueue 订阅 → 事件同事务入队 → 投递成功删行 / 失败退避。
+func TestEventDeliveryEnqueue(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_dlv_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, "a_"+key); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := s.Subscribe(ctx, key, "webhook", "http://sink.example/hook"); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	// 事件入队（同事务）
+	seq, err := s.AppendEvent(ctx, key, "", event.RunStarted, json.RawMessage(`{"v":1}`), key+":run:0:run.started")
+	if err != nil || seq == 0 {
+		t.Fatalf("append: seq=%d err=%v", seq, err)
+	}
+	mine := func(rows []*store.PendingOutboxRow) []*store.PendingOutboxRow {
+		var out []*store.PendingOutboxRow
+		for _, r := range rows {
+			if r.SessionID == key {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	pending, err := s.ListPendingOutbox(ctx, 100)
+	if err != nil || len(mine(pending)) != 1 || mine(pending)[0].Channel != "webhook" {
+		t.Fatalf("应 1 行待投递: %+v err=%v", mine(pending), err)
+	}
+	// 投递成功 → 删除
+	if err := s.OutboxDelivered(ctx, mine(pending)[0].ID); err != nil {
+		t.Fatalf("delivered: %v", err)
+	}
+	pending, _ = s.ListPendingOutbox(ctx, 100)
+	if len(mine(pending)) != 0 {
+		t.Fatalf("投递后应无待投递: %+v", mine(pending))
+	}
+	// 失败退避：再入队 → retry → next_at 后移
+	if _, err := s.AppendEvent(ctx, key, "", event.RunCompleted, json.RawMessage(`{"v":1}`), key+":run:0:run.completed"); err != nil {
+		t.Fatalf("append2: %v", err)
+	}
+	pending, _ = s.ListPendingOutbox(ctx, 100)
+	if len(mine(pending)) != 1 {
+		t.Fatalf("应 1 行: %+v", mine(pending))
+	}
+	if err := s.OutboxRetry(ctx, mine(pending)[0].ID, mine(pending)[0].ID); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	pending, _ = s.ListPendingOutbox(ctx, 100)
+	if len(mine(pending)) != 0 {
+		t.Fatalf("退避后立即拉取应为空（next_at 后移）: %+v", mine(pending))
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,20 +28,26 @@ import (
 // --- fakes ---
 
 type fakeStore struct {
-	mu           sync.Mutex
-	orgs         map[string]bool
-	orgRows      map[string]*store.Org
-	agents       map[string]*store.Agent
-	sessions     map[string]*store.Session
-	runs         map[string]*store.Run
-	msgs         []store.Message
-	apiKeys      []*store.APIKeyRow
-	deliverables []*store.DeliverableRow
-	events       []store.EventRow
-	usage        []store.UsageRow
-	summaries    []store.Summary
-	memoryItems  []store.MemoryItem
-	seq          int64
+	mu             sync.Mutex
+	orgs           map[string]bool
+	orgRows        map[string]*store.Org
+	agents         map[string]*store.Agent
+	sessions       map[string]*store.Session
+	runs           map[string]*store.Run
+	msgs           []store.Message
+	apiKeys        []*store.APIKeyRow
+	deliverables   []*store.DeliverableRow
+	subs           []map[string]string
+	pendingOutbox  []*store.PendingOutboxRow
+	pendingType    string
+	pendingPayload []byte
+	deliveredIDs   []int64
+	retriedIDs     []int64
+	events         []store.EventRow
+	usage          []store.UsageRow
+	summaries      []store.Summary
+	memoryItems    []store.MemoryItem
+	seq            int64
 }
 
 func newFakeStore() *fakeStore {
@@ -256,6 +263,29 @@ func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.apiKeys = append(f.apiKeys, &store.APIKeyRow{ID: id, OrgID: orgID, KeyHash: keyHash, Scopes: scopes})
+	return nil
+}
+
+func (f *fakeStore) Subscribe(_ context.Context, sessionID, channel, target string) error {
+	f.subs = append(f.subs, map[string]string{"session": sessionID, "channel": channel, "target": target})
+	return nil
+}
+
+func (f *fakeStore) ListPendingOutbox(_ context.Context, _ int) ([]*store.PendingOutboxRow, error) {
+	return f.pendingOutbox, nil
+}
+
+func (f *fakeStore) GetEvent(_ context.Context, eventID int64) (string, []byte, time.Time, error) {
+	return f.pendingType, f.pendingPayload, time.Now(), nil
+}
+
+func (f *fakeStore) OutboxDelivered(_ context.Context, id int64) error {
+	f.deliveredIDs = append(f.deliveredIDs, id)
+	return nil
+}
+
+func (f *fakeStore) OutboxRetry(_ context.Context, id, _ int64) error {
+	f.retriedIDs = append(f.retriedIDs, id)
 	return nil
 }
 
@@ -1037,5 +1067,72 @@ func TestListDeliveriesAndAck(t *testing.T) {
 	}
 	if fs.deliverables[0].DeliveredAt == nil {
 		t.Fatal("ack 后应标记投递")
+	}
+}
+
+// TestSubscribeValidation 订阅校验：webhook SSRF 拒绝 / email 格式。
+func TestSubscribeValidation(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	// 内网地址拒绝（SSRF）
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/subscriptions",
+		`{"channel":"webhook","target":"http://192.168.1.10/hook"}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("内网 webhook 应 422，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	// 非 http(s)
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/subscriptions",
+		`{"channel":"webhook","target":"file:///etc/passwd"}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("非 http(s) 应 422，得 %d", rec.Code)
+	}
+	// 合法 webhook（allow-private 放行本地）
+	h.DeliveryAllowPrivate = true
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/subscriptions",
+		`{"channel":"webhook","target":"http://localhost:9999/hook"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("本地 webhook（放行）应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	// email 格式
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/subscriptions",
+		`{"channel":"email","target":"ops@example.com"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("email 应 201，得 %d", rec.Code)
+	}
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/subscriptions",
+		`{"channel":"email","target":"not-an-email"}`, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("非法 email 应 422，得 %d", rec.Code)
+	}
+}
+
+// TestDelivererPass 投递循环：成功删行 / 失败退避（fake store + httptest 接收器）。
+func TestDelivererPass(t *testing.T) {
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "run.completed") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer sink.Close()
+
+	_, fs, _ := setup(t)
+	fs.pendingType = "run.completed"
+	fs.pendingPayload = []byte(`{"final":"完成"}`)
+	fs.pendingOutbox = []*store.PendingOutboxRow{
+		{ID: 1, SessionID: "s_seed", EventID: 1, URL: sink.URL, Channel: "webhook"},
+		{ID: 2, SessionID: "s_seed", EventID: 2, URL: "ops@example.com", Channel: "email"}, // SMTP 未配置 → 失败退避
+	}
+	d := &Deliverer{Store: fs, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Batch: 10}
+	if err := d.pass(context.Background()); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(fs.deliveredIDs) != 1 || fs.deliveredIDs[0] != 1 {
+		t.Fatalf("成功行应删除: %v", fs.deliveredIDs)
+	}
+	if len(fs.retriedIDs) != 1 || fs.retriedIDs[0] != 2 {
+		t.Fatalf("失败行应退避: %v", fs.retriedIDs)
 	}
 }

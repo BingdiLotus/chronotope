@@ -98,6 +98,15 @@ HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 # 13. W8 后置：交付清单 outbox（run 完成 → 交付行 → 投递回执）
 bash test/e2e/w8-delivery.sh "$API" > /tmp/demo-w8d.log 2>&1 && pass "W8 后置 交付清单（3 项断言）" || { fail "W8 后置 交付清单"; tail -5 /tmp/demo-w8d.log; }
 
+# 14. W8 后置：outbox 事件投递（webhook 通道，事件同事务入队 → 投递 worker）
+nohup python3 test/fixtures/notify-sink.py 9300 > /tmp/demo-sink.log 2>&1 &
+SINK_PID=$!
+OUTBOX_INTERVAL=2s OUTBOX_ALLOW_PRIVATE=true $DC up -d --force-recreate api
+for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w8-notify.sh "$API" "http://host.docker.internal:9300" > /tmp/demo-w8n.log 2>&1 && pass "W8 后置 事件投递（4 项断言）" || { fail "W8 后置 事件投递"; tail -5 /tmp/demo-w8n.log; }
+kill $SINK_PID 2>/dev/null || true
+OUTBOX_INTERVAL=5s OUTBOX_ALLOW_PRIVATE=false $DC up -d --force-recreate api
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

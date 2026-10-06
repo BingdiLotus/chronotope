@@ -575,6 +575,38 @@ func (h *Handler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /sessions/{sessionID}/subscriptions —— 事件投递订阅（outbox 事件投递，
+// §5）：webhook（URL POST，Slack/Feishu incoming webhook 形态）| email（SMTP）。
+func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if _, err := h.Store.GetSession(r.Context(), sessionID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	var req struct {
+		Channel string `json:"channel"`
+		Target  string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "target 必填")
+		return
+	}
+	if req.Channel == "" {
+		req.Channel = "webhook"
+	}
+	if err := validateDeliveryTarget(req.Channel, req.Target, h.DeliveryAllowPrivate); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, 422, err.Error())
+		return
+	}
+	if err := h.Store.Subscribe(r.Context(), sessionID, req.Channel, req.Target); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"channel": req.Channel, "target": req.Target, "subscribed": true,
+	})
+}
+
 // GET /sessions/{sessionID}/deliveries —— 交付清单（run 完成产物：final/steps/
 // tokens/计算秒；投递状态可见——未投递行由投递方轮询消费）。
 func (h *Handler) listDeliveries(w http.ResponseWriter, r *http.Request) {

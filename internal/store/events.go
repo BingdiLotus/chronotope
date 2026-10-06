@@ -19,19 +19,36 @@ func (s *Store) AppendEvent(ctx context.Context, sessionID, runID string, typ ev
 INSERT INTO events (session_id, run_id, type, payload, dedupe_key)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (dedupe_key) DO NOTHING
-RETURNING seq`
-	err = s.Pool.QueryRow(ctx, insert, sessionID, nullable(runID), string(typ), payload, dedupeKey).Scan(&seq)
+RETURNING id, seq`
+	// 事件与投递入队同事务（落地方案 §5 outbox 语义）：订阅方在事件提交的
+	// 同一事务内获得投递行——无两阶段问题，投递 worker 只管拉取。
+	// 注意：outbox.event_id 引用 events.id（PK），而 seq 是每会话单调号——
+	// 两者是不同的序列（e2e 实证曾用 seq 入队致 GetEvent 失配静默丢弃）。
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("store: append event begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var eventID int64
+	err = tx.QueryRow(ctx, insert, sessionID, nullable(runID), string(typ), payload, dedupeKey).Scan(&eventID, &seq)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// 重放重复发射：读回既有 seq，不再入队（幂等吞掉）
 		const readBack = `SELECT seq FROM events WHERE dedupe_key = $1`
-		if err = s.Pool.QueryRow(ctx, readBack, dedupeKey).Scan(&seq); err != nil {
+		if err = tx.QueryRow(ctx, readBack, dedupeKey).Scan(&seq); err != nil {
 			return 0, fmt.Errorf("store: read back event %q: %w", dedupeKey, err)
 		}
-		return seq, nil
+		return seq, tx.Commit(ctx)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("store: append event %q: %w", dedupeKey, err)
 	}
-	return seq, nil
+	// 订阅入队（同事务）
+	if _, err := tx.Exec(ctx, `
+INSERT INTO outbox (session_id, event_id, url)
+SELECT $1, $2, target FROM subscriptions WHERE session_id = $1`, sessionID, eventID); err != nil {
+		return 0, fmt.Errorf("store: enqueue deliveries: %w", err)
+	}
+	return seq, tx.Commit(ctx)
 }
 
 // EventRow 是 events 表的查询结果行。

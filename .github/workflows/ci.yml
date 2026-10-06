@@ -193,9 +193,16 @@ jobs:
           done
           bash test/e2e/w6-mcp.sh http://localhost:8080
           pkill -f 'mcp-server.py' || true
-      - name: W8 后置 e2e（交付清单 outbox + PITR 恢复演练）
+      - name: W8 后置 e2e（交付清单 + 事件投递 + PITR 恢复演练）
         run: |
           bash test/e2e/w8-delivery.sh http://localhost:8080
+          nohup python3 test/fixtures/notify-sink.py 9300 > /tmp/sink.log 2>&1 &
+          OUTBOX_INTERVAL=2s OUTBOX_ALLOW_PRIVATE=true docker compose -f deploy/docker-compose.yml up -d --force-recreate api
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w8-notify.sh http://localhost:8080 http://host.docker.internal:9300
           bash test/chaos/pitr.sh
       - name: 容器日志（失败时诊断）
         if: failure()
