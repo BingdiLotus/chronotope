@@ -65,6 +65,30 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	// 孤儿 GC（W8）：周期扫描 ttl 过期沙箱 → 销毁容器（尽力）+ 删行
+	gcInterval := 5 * time.Minute
+	if v := os.Getenv("EXECUTOR_GC_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			gcInterval = d
+		}
+	}
+	go func() {
+		ticker := time.NewTicker(gcInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n, err := server.GC(ctx); err != nil {
+					slog.Error("gc pass failed", "err", err)
+				} else if n > 0 {
+					slog.Info("gc pass", "cleaned", n)
+				}
+			}
+		}
+	}()
+
 	log.Printf("chronotope-executor（docker driver）listening on %s", *addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)

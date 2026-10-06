@@ -30,6 +30,9 @@ type SandboxStore interface {
 	GetExec(ctx context.Context, idempotencyKey string) (*store.ExecRow, error)
 	PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
 	SessionOrg(ctx context.Context, sessionID string) (string, error)
+	// 孤儿 GC（W8）：过期沙箱扫描 + 行删除。
+	ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*store.SandboxRow, error)
+	DeleteSandbox(ctx context.Context, sandboxID string) error
 }
 
 // Server 实现 Executor 协议 HTTP 端点（契约规范 §4）。
@@ -39,6 +42,31 @@ type Server struct {
 	// WorkspaceRoot 与 docker driver 同源（大输出外置的宿主目录）。
 	WorkspaceRoot string
 	Logger        *slog.Logger
+}
+
+// GC 执行一轮孤儿清理（W8）：扫描 ttl 过期沙箱 → 销毁容器（尽力）→ 删行。
+// 返回清理数；单沙箱失败不阻断其余。
+func (s *Server) GC(ctx context.Context) (int, error) {
+	expired, err := s.Store.ListExpiredSandboxes(ctx, time.Now())
+	if err != nil {
+		return 0, err
+	}
+	cleaned := 0
+	for _, sb := range expired {
+		// 容器名 = 沙箱 id（docker driver 约定）：无条件销毁（container_ref 缺失的
+		// 历史行同样按 id 清理——否则孤儿容器永久残留，w8 e2e 实证）
+		if err := s.Driver.Destroy(ctx, sb.SandboxID); err != nil {
+			s.Logger.Warn("gc: destroy failed（行保留待下轮）", "sandbox", sb.SandboxID, "err", err)
+			continue
+		}
+		if err := s.Store.DeleteSandbox(ctx, sb.SandboxID); err != nil {
+			s.Logger.Warn("gc: delete row failed", "sandbox", sb.SandboxID, "err", err)
+			continue
+		}
+		s.Logger.Info("gc: removed expired sandbox", "sandbox", sb.SandboxID, "ttl", sb.TTL)
+		cleaned++
+	}
+	return cleaned, nil
 }
 
 // Router 挂载 executor 协议路由。

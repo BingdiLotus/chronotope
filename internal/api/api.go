@@ -42,6 +42,7 @@ type Store interface {
 	ResetSessionUsage(ctx context.Context, sessionID string) error
 	UpsertUsage(ctx context.Context, u store.UsageRow) error
 	ListUsage(ctx context.Context, sessionID string) ([]store.UsageRow, error)
+	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
 	ListSummaries(ctx context.Context, sessionID string) ([]store.Summary, error)
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 	GetOrg(ctx context.Context, orgID string) (*store.Org, error)
@@ -103,7 +104,7 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/skills", notImplemented)      // skill 安装（W6）
 		r.Post("/mcp", notImplemented)         // MCP 连接（W6）
 		r.Delete("/", h.deleteSession)         // tombstone 两段式删除（边界语义 §4）
-		r.Get("/export", notImplemented)       // 标准 tar 导出（W8）
+		r.Get("/export", h.exportSession)      // 标准 tar 导出（W8 交付物）
 		r.Get("/usage", h.getUsage)            // 三轴计量（活跃秒/token/计算秒，1min 桶）
 		r.Get("/memory", h.getMemory)          // 分层记忆（主题摘要 + 长期记忆条目，W5）
 	})

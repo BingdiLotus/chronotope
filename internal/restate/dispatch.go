@@ -50,7 +50,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		}
 		res := outcome.Result
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
-			"step": step, "tool": tc.Name, "exit": res.Exit,
+			"step": step, "tool": tc.Name, "exit": res.Exit, "sandbox_id": sandboxID,
 			"output": truncate(res.Output, 4096), "output_ref": res.OutputRef, "truncated": res.Truncated,
 			"duration_ms": outcome.Duration.Milliseconds(), // 计算秒计量依据（W4）+ 预算熔断
 		})

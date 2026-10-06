@@ -1,15 +1,20 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"archive/tar"
 
 	"github.com/go-chi/chi/v5"
 
@@ -28,6 +33,7 @@ type fakeStore struct {
 	agents      map[string]*store.Agent
 	sessions    map[string]*store.Session
 	runs        map[string]*store.Run
+	msgs        []store.Message
 	events      []store.EventRow
 	usage       []store.UsageRow
 	summaries   []store.Summary
@@ -231,6 +237,18 @@ func (f *fakeStore) UpsertUsage(_ context.Context, u store.UsageRow) error {
 	}
 	f.usage = append(f.usage, u)
 	return nil
+}
+
+func (f *fakeStore) ListMessages(_ context.Context, _ string, limit int) ([]store.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.Message
+	for _, m := range f.msgs {
+		if len(out) < limit {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) ListSummaries(_ context.Context, sessionID string) ([]store.Summary, error) {
@@ -742,4 +760,56 @@ func TestCreateSessionWithParticipants(t *testing.T) {
 	if !strings.HasSuffix(last, "/SetParticipants") {
 		t.Fatalf("应调 SetParticipants: %q", last)
 	}
+}
+
+func TestExportSessionTar(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	fs.addEvent("s_seed", event.RunCompleted)
+	fs.msgs = []store.Message{{SessionID: sessionID, RunID: "r_1", Step: 0, Role: "assistant", Content: json.RawMessage(`"你好"`)}}
+	fs.summaries = []store.Summary{{SessionID: sessionID, Topic: "default", Version: 1, Summary: "摘要"}}
+
+	rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/"+sessionID+"/export", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("应 200，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	tr := tar.NewReader(gz)
+	entries := map[string][]byte{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar: %v", err)
+		}
+		b, _ := io.ReadAll(tr)
+		entries[hdr.Name] = b
+	}
+	for _, name := range []string{"manifest.json", "events.ndjson", "messages.ndjson", "memory.json", "usage.csv"} {
+		if _, ok := entries[name]; !ok {
+			t.Fatalf("缺条目 %s: %v", name, keysOf(entries))
+		}
+	}
+	var manifest struct {
+		Counts struct {
+			Events int `json:"events"`
+		} `json:"counts"`
+	}
+	_ = json.Unmarshal(entries["manifest.json"], &manifest)
+	if manifest.Counts.Events != 1 || !strings.Contains(string(entries["events.ndjson"]), "run.completed") {
+		t.Fatalf("manifest/events 不符: %s %s", entries["manifest.json"], entries["events.ndjson"])
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

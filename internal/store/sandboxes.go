@@ -131,3 +131,50 @@ VALUES ($1, $2, $3, now() + interval '24 hours')`
 	}
 	return nil
 }
+
+// ListExpiredSandboxes 孤儿 GC 扫描（W8）：ttl 过期且未删除的沙箱。
+func (s *Store) ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*SandboxRow, error) {
+	const q = `
+SELECT sandbox_id, org_id, session_id, driver, container_ref, image, limits, tier,
+       snapshot_ref, file_sync_state, ttl, status, created_at
+FROM sandboxes
+WHERE ttl IS NOT NULL AND created_at + ttl < $1 AND status <> 'deleted'
+ORDER BY created_at`
+	rows, err := s.Pool.Query(ctx, q, now)
+	if err != nil {
+		return nil, fmt.Errorf("store: list expired sandboxes: %w", err)
+	}
+	defer rows.Close()
+	var out []*SandboxRow
+	for rows.Next() {
+		var (
+			sb         SandboxRow
+			limitsJSON json.RawMessage
+			ttl        pgtype.Interval
+		)
+		if err := rows.Scan(&sb.SandboxID, &sb.OrgID, &sb.SessionID, &sb.Driver, &sb.ContainerRef, &sb.Image,
+			&limitsJSON, &sb.Tier, &sb.SnapshotRef, &sb.FileSyncState, &ttl, &sb.Status, &sb.CreatedAt); err != nil {
+			return nil, fmt.Errorf("store: scan expired sandbox: %w", err)
+		}
+		_ = json.Unmarshal(limitsJSON, &sb.Limits)
+		if ttl.Valid {
+			d := time.Duration(ttl.Microseconds+int64(ttl.Days)*24*3600*1e6) * time.Microsecond
+			sb.TTL = &d
+		}
+		out = append(out, &sb)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSandbox 删除沙箱事实行（GC 清理成功后调用）。
+func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	const q = `DELETE FROM sandboxes WHERE sandbox_id = $1`
+	tag, err := s.Pool.Exec(ctx, q, sandboxID)
+	if err != nil {
+		return fmt.Errorf("store: delete sandbox: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

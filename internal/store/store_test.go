@@ -461,3 +461,62 @@ func TestOrgBudgetAndDailyUsage(t *testing.T) {
 		t.Fatalf("其他 org 应为 0，得 %d", t2)
 	}
 }
+
+func TestSandboxGCScanAndDelete(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_gc_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agentID := "a_" + key
+	if err := s.CreateAgent(ctx, agentID, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, agentID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// 过期沙箱：ttl 1s（created_at 由 DB now()，等 1.5s 后扫描命中）
+	ttl := time.Second
+	if err := s.UpsertSandbox(ctx, &store.SandboxRow{
+		SandboxID: "sb_gc_" + key, OrgID: "o_" + key, SessionID: key,
+		Driver: "docker", ContainerRef: ptr("sb_gc_ctr"), Image: "python:3.12-slim",
+		Status: "ready", TTL: &ttl,
+	}); err != nil {
+		t.Fatalf("upsert sandbox: %v", err)
+	}
+	// 未过期：ttl 1h
+	long := time.Hour
+	if err := s.UpsertSandbox(ctx, &store.SandboxRow{
+		SandboxID: "sb_live_" + key, OrgID: "o_" + key, SessionID: key,
+		Driver: "docker", ContainerRef: ptr("sb_live_ctr"), Image: "python:3.12-slim",
+		Status: "ready", TTL: &long,
+	}); err != nil {
+		t.Fatalf("upsert live sandbox: %v", err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	expired, err := s.ListExpiredSandboxes(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var mine []string
+	for _, sb := range expired {
+		if sb.SandboxID == "sb_gc_"+key {
+			mine = append(mine, sb.SandboxID)
+		}
+		if sb.SandboxID == "sb_live_"+key {
+			t.Fatalf("未过期沙箱不应被扫到: %+v", sb)
+		}
+	}
+	if len(mine) != 1 {
+		t.Fatalf("应扫到测试的过期沙箱（历史脏数据不计）: %v", mine)
+	}
+	if err := s.DeleteSandbox(ctx, "sb_gc_"+key); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteSandbox(ctx, "sb_gc_"+key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("重复删除应 ErrNotFound，得 %v", err)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

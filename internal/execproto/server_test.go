@@ -3,26 +3,29 @@ package execproto
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 // fakeDriver 实现 Driver（服务器单测替身）。
 type fakeDriver struct {
-	created    CreateSandboxRequest
-	sandboxID  string
-	executed   []ExecuteRequest
-	execResult *ExecuteResult
-	files      map[string]string
-	frozen     bool
-	destroyed  bool
-	snapshot   string
+	created     CreateSandboxRequest
+	sandboxID   string
+	executed    []ExecuteRequest
+	execResult  *ExecuteResult
+	files       map[string]string
+	frozen      bool
+	destroyed   map[string]bool
+	failDestroy bool
+	snapshot    string
 }
 
 func (f *fakeDriver) CreateSandbox(_ context.Context, req CreateSandboxRequest) (*Sandbox, error) {
@@ -58,12 +61,22 @@ func (f *fakeDriver) Snapshot(context.Context, string) (string, error) {
 	f.snapshot = "snap_ref"
 	return f.snapshot, nil
 }
-func (f *fakeDriver) Destroy(context.Context, string) error { f.destroyed = true; return nil }
+func (f *fakeDriver) Destroy(_ context.Context, id string) error {
+	if f.destroyed == nil {
+		f.destroyed = map[string]bool{}
+	}
+	if f.failDestroy {
+		return fmt.Errorf("destroy failed")
+	}
+	f.destroyed[id] = true
+	return nil
+}
 
-// fakeSBStore 实现 SandboxStore（服务器单测替身）。
 type fakeSBStore struct {
-	sandboxes map[string]*store.SandboxRow
-	execs     map[string]json.RawMessage
+	sandboxes   map[string]*store.SandboxRow
+	execs       map[string]json.RawMessage
+	expiredRows []*store.SandboxRow
+	deletedIDs  []string
 }
 
 func newFakeSBStore() *fakeSBStore {
@@ -99,6 +112,16 @@ func (f *fakeSBStore) PutExec(_ context.Context, key, sandboxID string, result j
 	f.execs[key] = result
 	return nil
 }
+func (f *fakeSBStore) ListExpiredSandboxes(context.Context, time.Time) ([]*store.SandboxRow, error) {
+	return f.expiredRows, nil
+}
+
+func (f *fakeSBStore) DeleteSandbox(_ context.Context, id string) error {
+	delete(f.sandboxes, id)
+	f.deletedIDs = append(f.deletedIDs, id)
+	return nil
+}
+
 func (f *fakeSBStore) SessionOrg(_ context.Context, sessionID string) (string, error) {
 	return "org_1", nil
 }
@@ -216,7 +239,51 @@ func TestServerLifecycleEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "snap_ref") {
 		t.Fatalf("snapshot 失败: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doReq(t, s.Router(), http.MethodDelete, "/sandboxes/sb_fake", ""); rec.Code != http.StatusNoContent || !d.destroyed {
+	if rec := doReq(t, s.Router(), http.MethodDelete, "/sandboxes/sb_fake", ""); rec.Code != http.StatusNoContent || len(d.destroyed) == 0 {
 		t.Fatalf("destroy 失败: %d", rec.Code)
 	}
 }
+
+func TestServerGC(t *testing.T) {
+	st := newFakeSBStore()
+	drv := &fakeDriver{}
+	srv := &Server{Driver: drv, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	// 预置两个过期沙箱（一个带容器引用，一个不带）
+	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_1", SessionID: "s_1", Status: "ready", ContainerRef: ptrStr("ctr_1")})
+	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_2", SessionID: "s_2", Status: "ready"})
+	// 扫描返回预置行（经 fakeSBStore 的 expired 通道）
+	expired, _ := st.ListExpiredSandboxes(context.Background(), time.Now())
+	_ = expired // fake 默认空；直接测试 GC 的销毁/删行逻辑——注入过期行
+	st.expiredRows = []*store.SandboxRow{
+		{SandboxID: "sb_1", SessionID: "s_1", Status: "ready", ContainerRef: ptrStr("ctr_1")},
+		{SandboxID: "sb_2", SessionID: "s_2", Status: "ready"},
+	}
+	n, err := srv.GC(context.Background())
+	if err != nil || n != 2 {
+		t.Fatalf("应清理 2 个: n=%d err=%v", n, err)
+	}
+	if _, ok := drv.destroyed["sb_1"]; !ok {
+		t.Fatal("sb_1 容器应被销毁")
+	}
+	if len(st.deletedIDs) != 2 {
+		t.Fatalf("应删除 2 行: %v", st.deletedIDs)
+	}
+}
+
+func TestServerGCDestroyFailureKeepsRow(t *testing.T) {
+	st := newFakeSBStore()
+	drv := &fakeDriver{failDestroy: true}
+	srv := &Server{Driver: drv, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	st.expiredRows = []*store.SandboxRow{
+		{SandboxID: "sb_1", SessionID: "s_1", Status: "ready", ContainerRef: ptrStr("ctr_1")},
+	}
+	n, err := srv.GC(context.Background())
+	if err != nil || n != 0 {
+		t.Fatalf("销毁失败应清理 0: n=%d err=%v", n, err)
+	}
+	if len(st.deletedIDs) != 0 {
+		t.Fatalf("销毁失败不得删行: %v", st.deletedIDs)
+	}
+}
+
+func ptrStr(v string) *string { return &v }
