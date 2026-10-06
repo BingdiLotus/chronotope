@@ -621,3 +621,23 @@ func TestGetMemory(t *testing.T) {
 		t.Fatalf("memory 应含摘要与条目: %s", rec.Body.String())
 	}
 }
+
+func TestCreateAgentToolClassesPassthrough(t *testing.T) {
+	h, _, _ := setup(t)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/orgs/org-rc/agents", `{
+		"name":"rc-agent",
+		"config":{"model":"m","instructions":"i","tools":["read_file","bash"],
+			"tool_classes":{"bash":2},"version":1}}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Config sessionapi.AgentConfig `json:"config"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("解析: %v", err)
+	}
+	if out.Config.ToolClasses["bash"] != 2 {
+		t.Fatalf("tool_classes 应透传: %+v", out.Config.ToolClasses)
+	}
+}

@@ -98,8 +98,11 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 
 	case runs.ToolRequestApproval:
 		// 控制类工具：awakeable 挂起（零进程占用），webhook resolve 后继续（W3 HITL）
-		result, err := awaitApproval(ctx, deps, in, runID, step, tc, emit)
-		return result, 0, err
+		decision, err := awaitApproval(ctx, deps, in, runID, step, tc, emit, 0)
+		if err != nil {
+			return "", 0, err
+		}
+		return fmt.Sprintf(`{"name":%q,"result":{"approved":%s}}`, tc.Name, mustJSONString(decision)), 0, nil
 
 	default:
 		return "", 0, restate.ToTerminalError(fmt.Errorf("工具 %q 不支持（四类路由：代码→executor / 控制→awakeable / MCP→W6 / API→harness 内联）", tc.Name))
@@ -110,7 +113,11 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 // 建 awakeable（journaled）→ id 存入会话状态 → awaiting_approval 事件 →
 // 直接阻塞在 Result()（挂起 = 零进程占用；SDK 1.x 禁在 Run 闭包内使用 Context 操作，
 // 阻塞本身即挂起点）→ webhook resolve 后从 journal 恢复 → resumed 事件 → 结果回喂。
-func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall, emit *Emitter) (string, error) {
+// awaitApproval 挂起审批（HITL；riskClass 0 = 控制工具自身的审批请求，
+// 2 = class 2 危险工具的强制审批门禁——事件载荷携带分级供人审）。
+// 返回**原始审批决定**（resolve payload 原文）；tool_result 包装由调用方负责
+// （class 2 门禁需要原文判定 approved/rejected）。
+func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall, emit *Emitter, riskClass int) (string, error) {
 	awakeable := restate.Awakeable[string](ctx)
 	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id()); err != nil {
 		return "", err
@@ -118,6 +125,7 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunAwaitingApproval, "await", "", map[string]any{
 		"step": step, "awakeable_id": awakeable.Id(),
 		"tool": tc.Name, "arguments": json.RawMessage(tc.Arguments),
+		"risk_class": riskClass,
 	})
 	result, err := awakeable.Result() // 挂起：零进程占用，直到跨 HTTP resolve
 	if err != nil {
@@ -126,7 +134,7 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunResumed, "resume", "", map[string]any{
 		"step": step, "result": result,
 	})
-	return fmt.Sprintf(`{"name":%q,"result":{"approved":%s}}`, tc.Name, mustJSONString(result)), nil
+	return result, nil
 }
 
 // ensureSandbox 会话作用域沙箱懒创建（journaled：重放返回缓存 sandbox_id，不重复创建）

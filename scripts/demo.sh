@@ -56,6 +56,13 @@ sleep 3
 bash test/e2e/w5-memory.sh "$API" > /tmp/demo-w5.log 2>&1 && pass "W5 分层记忆（4 项断言）" || { fail "W5 分层记忆"; tail -5 /tmp/demo-w5.log; }
 CONSOLIDATE_THRESHOLD=40 $DC up -d --force-recreate worker
 
+# 8. W5 工具风险分级（class 2 强制审批：批准执行 / 拒绝拦截）
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"bash","arguments":{"command":"sleep 1; echo ok"}}},{"final":"危险操作已批准执行。"}]' \
+  $DC up -d --force-recreate harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w5-risk.sh "$API" > /tmp/demo-w5r.log 2>&1 && pass "W5 工具风险分级（4 项断言）" || { fail "W5 工具风险分级"; tail -5 /tmp/demo-w5r.log; }
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

@@ -178,6 +178,24 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
 					"step": step, "id": tc.ID, "name": tc.Name, "arguments": json.RawMessage(tc.Arguments),
 				})
+				// class 2 强制审批门禁（边界语义 §2：永不自动执行）——
+				// 挂起 → 批准则照常 dispatch；拒绝 → audit.tool_denied + run.failed{tool_denied}
+				if riskClassOf(tc.Name, cfg) >= 2 {
+					decision, err := awaitApproval(ctx, deps, in, runID, step, tc, emit, 2)
+					if err != nil {
+						return RunOutput{}, restate.ToTerminalError(fmt.Errorf("await approval (class 2): %w", err))
+					}
+					if !approvalGranted(decision) {
+						_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
+							"step": step, "tool": tc.Name, "risk_class": 2,
+						})
+						_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
+							"reason": "tool_denied", "tool": tc.Name,
+						})
+						_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+						return RunOutput{}, restate.ToTerminalError(fmt.Errorf("工具 %s 的 class 2 审批被拒绝", tc.Name))
+					}
+				}
 				// 无进展检测：连续指纹不变 → 熔断（dispatch 前，避免第 N 次重复执行）
 				fp := toolFingerprint(tc.Name, tc.Arguments)
 				if fp == lastFingerprint {
@@ -269,7 +287,7 @@ func toolsFromConfig(cfg sessionapi.AgentConfig) []runs.Tool {
 		if !runs.IsVocabularyName(name) {
 			continue // 契约硬约束：非法工具名不发往 harness
 		}
-		tools = append(tools, runs.Tool{Type: "function", Name: name, RiskClass: 1})
+		tools = append(tools, runs.Tool{Type: "function", Name: name, RiskClass: riskClassOf(name, cfg)})
 	}
 	return tools
 }

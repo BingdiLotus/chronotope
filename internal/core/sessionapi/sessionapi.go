@@ -57,7 +57,11 @@ type AgentConfig struct {
 	Skills       []string       `json:"skills,omitempty"`
 	Environment  Environment    `json:"environment,omitempty"`
 	Budget       map[string]any `json:"budget,omitempty"`
-	Version      int            `json:"version"` // 每次变更 +1
+	// ToolClasses 是工具风险分级覆盖表（边界语义 §2）：name → 0/1/2；
+	// 缺省按内置词汇分级（read_file/list_files=0 只读，其余=1 敏感）。
+	// class 2（危险）→ 强制 request_approval，永不自动执行。
+	ToolClasses map[string]int `json:"tool_classes,omitempty"`
+	Version     int            `json:"version"` // 每次变更 +1
 }
 
 // Environment 是 agent.config.environment（契约规范 §1：environment{sandbox{...}}）。

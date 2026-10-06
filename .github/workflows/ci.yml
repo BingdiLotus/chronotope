@@ -126,6 +126,17 @@ jobs:
             -d '{"uri":"http://worker:9080","version":"v1","use_http_11":true,"force":true}'
           sleep 3
           bash test/e2e/w5-memory.sh http://localhost:8080
+      - name: W5 工具风险分级 e2e（class 2 强制审批：批准/拒绝双路径）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"bash","arguments":{"command":"sleep 1; echo ok"}}},{"final":"危险操作已批准执行。"}]'
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w5-risk.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100
