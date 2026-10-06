@@ -17,9 +17,14 @@ scheduler 定时唤醒 / webhook HITL）+ 四类工具分流、api Session API �
 after=seq 续读 + 审批回调 + actions + 计量）、executor docker driver（受限容器 + 幂等缓存）、
 harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）、Next.js 控制台。
 
-**后置迭代（落地方案 §4 W5–W8）**：分层记忆 + consolidation、熔断/无进展检测/限流、
-skill/MCP + 子 Agent、群聊多 Agent、存储分层与运营。真实模型调用待配
-`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
+**DoD 六条全部达成**（落地方案 §8）：① 一条 `bash scripts/demo.sh` 复现全部场景
+（实测 6/6）② 三个持久性 demo 可重放脚本 ③ 时间轴回看 ④ 计量三轴 ⑤ 契约测试
+⑥ 边界语义契约测试（终止帧/截断、tombstone、限流 429 + Retry-After、双开 409、
+无进展检测、run 级预算熔断）。本地 CI 门禁 `bash scripts/ci.sh [--e2e]` 全绿。
+
+**后置迭代（落地方案 §4 W5–W8）**：分层记忆 + consolidation、工具风险分级
+class 2 强制审批、org/user 级预算与冻结、skill/MCP + 子 Agent、群聊多 Agent、
+存储分层与运营。真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
 
 ## 快速开始（W1 闭环）
 
