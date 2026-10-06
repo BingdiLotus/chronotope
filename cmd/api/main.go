@@ -62,6 +62,7 @@ func main() {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
+	r.Use(api.CorsMiddleware(os.Getenv("API_CORS_ORIGINS")))
 	r.Use(middleware.Recoverer)
 	// 不设全局 Timeout：SSE 时间轴是长连接（由客户端断开控制生命周期）；
 	// 提交任务的阻塞时长由 ingress 客户端超时（10min）约束
