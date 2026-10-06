@@ -20,14 +20,16 @@ import (
 // --- fakes ---
 
 type fakeStore struct {
-	mu       sync.Mutex
-	orgs     map[string]bool
-	agents   map[string]*store.Agent
-	sessions map[string]*store.Session
-	runs     map[string]*store.Run
-	events   []store.EventRow
-	usage    []store.UsageRow
-	seq      int64
+	mu          sync.Mutex
+	orgs        map[string]bool
+	agents      map[string]*store.Agent
+	sessions    map[string]*store.Session
+	runs        map[string]*store.Run
+	events      []store.EventRow
+	usage       []store.UsageRow
+	summaries   []store.Summary
+	memoryItems []store.MemoryItem
+	seq         int64
 }
 
 func newFakeStore() *fakeStore {
@@ -195,6 +197,24 @@ func (f *fakeStore) UpsertUsage(_ context.Context, u store.UsageRow) error {
 	}
 	f.usage = append(f.usage, u)
 	return nil
+}
+
+func (f *fakeStore) ListSummaries(_ context.Context, sessionID string) ([]store.Summary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.summaries, nil
+}
+
+func (f *fakeStore) ListMemoryItems(_ context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.MemoryItem
+	for _, it := range f.memoryItems {
+		if it.SessionID == sessionID && (topic == "" || it.Topic == topic) && len(out) < limit {
+			out = append(out, it)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) ListUsage(_ context.Context, sessionID string) ([]store.UsageRow, error) {
@@ -584,5 +604,20 @@ func TestCreateScheduleInvalid(t *testing.T) {
 	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/schedules", `{"delay_ms":0}`, nil)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("非法 schedule 应 422，得 %d", rec.Code)
+	}
+}
+
+func TestGetMemory(t *testing.T) {
+	h, fs, _ := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	fs.summaries = []store.Summary{{SessionID: sessionID, Topic: "default", Version: 1, Summary: "摘要一", CreatedByRun: "r_1"}}
+	fs.memoryItems = []store.MemoryItem{{SessionID: sessionID, Topic: "default", Kind: "long_term", Content: "用户偏好：Go", SourceRunID: "r_1", SourceStep: 3}}
+
+	rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/"+sessionID+"/memory", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("应 200，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "摘要一") || !strings.Contains(rec.Body.String(), "用户偏好：Go") {
+		t.Fatalf("memory 应含摘要与条目: %s", rec.Body.String())
 	}
 }

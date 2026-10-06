@@ -155,3 +155,19 @@ def test_build_provider_empty_reply_env_falls_back():
     finally:
         os.environ.pop("HARNESS_FAKE_MODEL", None)
         os.environ.pop("HARNESS_FAKE_REPLY", None)
+
+
+async def test_fake_provider_consolidation_summary():
+    """run_id 带 #consolidation 后缀 → 确定性摘要（worker 记忆消化路径）。"""
+    from app.llm import FakeProvider
+
+    provider = FakeProvider()
+    req = p.RunRequest(
+        protocol="1.0", run_id="r_1#consolidation", session_id="s_1", step=0, model="m",
+        messages=[p.Message(role="user", content="转录全文")],
+    )
+    chunks = [c async for c in provider.stream(req)]
+    final = "".join(c.delta for c in chunks if c.delta)
+    assert final == "摘要：本轮对话已消化——记录用户目标、关键事实与未完成事项。"
+    usage = [c.usage for c in chunks if c.usage]
+    assert usage and usage[-1]["tokens_out"] == 8

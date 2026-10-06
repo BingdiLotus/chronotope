@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -43,11 +44,18 @@ func main() {
 	}
 	defer st.Close()
 
+	consolidateThreshold := 40
+	if v := os.Getenv("CONSOLIDATE_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			consolidateThreshold = n
+		}
+	}
 	deps := &restate.Deps{
-		Store:    st,
-		Harness:  restate.NewHarnessClient(*harnessURL),
-		Executor: restate.NewExecutorClient(*executorURL),
-		Sessions: restate.RestateSessionSource{},
+		Store:                st,
+		Harness:              restate.NewHarnessClient(*harnessURL),
+		Executor:             restate.NewExecutorClient(*executorURL),
+		Sessions:             restate.RestateSessionSource{},
+		ConsolidateThreshold: consolidateThreshold,
 	}
 	handler, err := restate.BuildEndpoint(deps)
 	if err != nil {

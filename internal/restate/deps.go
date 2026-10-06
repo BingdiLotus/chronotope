@@ -24,6 +24,11 @@ type Store interface {
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
 	// 事件才是真相，状态行是投影；chaos 套件 kill9-api 实证）。
 	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
+	// 分层记忆（边界语义 §7）：主题摘要与长期记忆条目（派生数据，worker 唯一写入）。
+	LatestSummary(ctx context.Context, sessionID, topic string) (*store.Summary, error)
+	CreateSummary(ctx context.Context, sum store.Summary) (bool, error)
+	CreateMemoryItem(ctx context.Context, item store.MemoryItem) (bool, error)
+	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 }
 
 // SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object
@@ -43,6 +48,8 @@ type Deps struct {
 	Harness  Harness
 	Executor Executor
 	Sessions SessionSource
+	// ConsolidateThreshold 是记忆消化触发的消息数阈值（默认 40；测试/演示可调小）。
+	ConsolidateThreshold int
 }
 
 // RestateSessionSource 是生产实现：经 Restate virtual object 调用读写会话状态。

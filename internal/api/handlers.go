@@ -162,7 +162,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		Steps int    `json:"steps"`
 	}
 	err = h.Ingress.Call(r.Context(), "/run_workflow/"+runID+"/run", http.MethodPost,
-		map[string]any{"session_id": sessionID, "input": req.Input}, &out)
+		map[string]any{"session_id": sessionID, "input": req.Input, "topic": req.Topic}, &out)
 	if err != nil {
 		_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunFailed)
 		writeError(w, http.StatusBadGateway, 502, "run_workflow failed: "+err.Error())
@@ -352,4 +352,45 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 		out = append(out, sessionOut{ID: sess.ID, AgentID: sess.AgentID, Status: sess.Status, LastActiveAt: sess.LastActiveAt})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "sessions": out})
+}
+
+// GET /sessions/{sessionID}/memory —— 分层记忆控制面（边界语义 §7）：主题摘要 + 记忆条目。
+func (h *Handler) getMemory(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if _, err := h.Store.GetSession(r.Context(), sessionID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	summaries, err := h.Store.ListSummaries(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	items, err := h.Store.ListMemoryItems(r.Context(), sessionID, "", 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	type summaryOut struct {
+		Topic        string `json:"topic"`
+		Version      int    `json:"version"`
+		Summary      string `json:"summary"`
+		CreatedByRun string `json:"created_by_run,omitempty"`
+	}
+	type itemOut struct {
+		Topic       string `json:"topic"`
+		Kind        string `json:"kind"`
+		Content     string `json:"content"`
+		SourceRunID string `json:"source_run_id,omitempty"`
+		SourceStep  int    `json:"source_step"`
+	}
+	sOut := make([]summaryOut, 0, len(summaries))
+	for _, s := range summaries {
+		sOut = append(sOut, summaryOut{Topic: s.Topic, Version: s.Version, Summary: s.Summary, CreatedByRun: s.CreatedByRun})
+	}
+	iOut := make([]itemOut, 0, len(items))
+	for _, it := range items {
+		iOut = append(iOut, itemOut{Topic: it.Topic, Kind: it.Kind, Content: it.Content, SourceRunID: it.SourceRunID, SourceStep: it.SourceStep})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "summaries": sOut, "items": iOut})
 }

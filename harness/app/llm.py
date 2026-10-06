@@ -133,6 +133,15 @@ class FakeProvider(LLMProvider):
         self._calls = 0
 
     async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
+        # 记忆消化摘要模式：run_id 带 #consolidation 后缀（worker 分层记忆调用；
+        # 确定性文本——重放安全，真实模式不受影响）
+        if req.run_id.endswith("#consolidation"):
+            final = "摘要：本轮对话已消化——记录用户目标、关键事实与未完成事项。"
+            for i in range(0, len(final), 3):
+                await asyncio.sleep(self.chunk_ms / 1000)
+                yield StreamChunk(delta=final[i : i + 3])
+            yield StreamChunk(usage={"tokens_in": 4, "tokens_out": 8})
+            return
         if self.script is not None:
             # 脚本索引 = run 内 step + 本次 /runs 内的调用序：
             # - 代码/控制工具交棒 → 新 /runs（step+1）→ 下一轮；

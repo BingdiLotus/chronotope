@@ -76,6 +76,7 @@ type SandboxSpec struct {
 type SubmitRunRequest struct {
 	IdempotencyKey string         `json:"-" header:"Idempotency-Key"` // → run_id 去重
 	Input          string         `json:"input"`
+	Topic          string         `json:"topic,omitempty"` // 记忆 topic 标签（分层记忆）
 	Trigger        map[string]any `json:"trigger,omitempty"`
 	Queue          bool           `json:"queue,omitempty"` // true 时双开改排队
 }

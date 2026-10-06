@@ -42,6 +42,8 @@ type Store interface {
 	ResetSessionUsage(ctx context.Context, sessionID string) error
 	UpsertUsage(ctx context.Context, u store.UsageRow) error
 	ListUsage(ctx context.Context, sessionID string) ([]store.UsageRow, error)
+	ListSummaries(ctx context.Context, sessionID string) ([]store.Summary, error)
+	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 }
 
 // RestateIngress 是 worker 控制面的最小接口（api → Restate ingress，worker-架构设计 §8）。
@@ -100,6 +102,7 @@ func (h *Handler) Router() chi.Router {
 		r.Delete("/", h.deleteSession)         // tombstone 两段式删除（边界语义 §4）
 		r.Get("/export", notImplemented)       // 标准 tar 导出（W8）
 		r.Get("/usage", h.getUsage)            // 三轴计量（活跃秒/token/计算秒，1min 桶）
+		r.Get("/memory", h.getMemory)          // 分层记忆（主题摘要 + 长期记忆条目，W5）
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)

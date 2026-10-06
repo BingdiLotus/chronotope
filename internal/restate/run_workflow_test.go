@@ -37,6 +37,11 @@ type fakeStore struct {
 		step                            int
 	}
 	runs map[string]*store.Run
+	// 分层记忆（W5）：预置摘要/条目供注入测试；创建动作落记录供消化断言
+	summaries        []store.Summary
+	memoryItems      []store.MemoryItem
+	createdSummaries []store.Summary
+	createdItems     []store.MemoryItem
 }
 
 func (f *fakeStore) AppendEvent(_ context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error) {
@@ -52,8 +57,64 @@ func (f *fakeStore) AppendMessage(_ context.Context, sessionID, runID string, st
 	return nil
 }
 
-func (f *fakeStore) ListMessages(context.Context, string, int) ([]store.Message, error) {
-	return nil, nil
+func (f *fakeStore) ListMessages(_ context.Context, _ string, limit int) ([]store.Message, error) {
+	out := f.messages
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	msgs := make([]store.Message, 0, len(out))
+	for _, m := range out {
+		msgs = append(msgs, store.Message{Role: m.role, Content: json.RawMessage(m.content), RunID: m.runID, Step: m.step})
+	}
+	return msgs, nil
+}
+
+func (f *fakeStore) LatestSummary(_ context.Context, _ string, topic string) (*store.Summary, error) {
+	for i := len(f.summaries) - 1; i >= 0; i-- {
+		if f.summaries[i].Topic == topic {
+			s := f.summaries[i]
+			return &s, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (f *fakeStore) CreateSummary(_ context.Context, sum store.Summary) (bool, error) {
+	for _, s := range f.summaries {
+		if s.Topic == sum.Topic && s.Version == sum.Version {
+			return false, nil
+		}
+	}
+	f.summaries = append(f.summaries, sum)
+	f.createdSummaries = append(f.createdSummaries, sum)
+	return true, nil
+}
+
+func (f *fakeStore) CreateMemoryItem(_ context.Context, item store.MemoryItem) (bool, error) {
+	if item.ContentHash == "" {
+		item.ContentHash = store.HashContent(item.Content)
+	}
+	for _, it := range f.memoryItems {
+		if it.Topic == item.Topic && it.ContentHash == item.ContentHash {
+			return false, nil
+		}
+	}
+	f.memoryItems = append(f.memoryItems, item)
+	f.createdItems = append(f.createdItems, item)
+	return true, nil
+}
+
+func (f *fakeStore) ListMemoryItems(_ context.Context, _ string, topic string, limit int) ([]store.MemoryItem, error) {
+	var out []store.MemoryItem
+	for _, it := range f.memoryItems {
+		if topic == "" || it.Topic == topic {
+			out = append(out, it)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) GetRun(_ context.Context, runID string) (*store.Run, error) {

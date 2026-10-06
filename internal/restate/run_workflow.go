@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -49,6 +50,7 @@ func toolFingerprint(name string, args json.RawMessage) string {
 type RunInput struct {
 	SessionID string `json:"session_id"`
 	Input     string `json:"input"`
+	Topic     string `json:"topic,omitempty"` // 记忆 topic 标签（分层记忆；默认 default）
 }
 
 // RunOutput 是 run_workflow 的结果摘要（journal 只存摘要，契约规范 §7）。
@@ -82,7 +84,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	cfg := state.AgentConfig
 
 	if err := emit.Emit(ctx, in.SessionID, runID, 0, event.RunStarted, "", "", map[string]any{
-		"input": in.Input, "model": cfg.Model,
+		"input": in.Input, "model": cfg.Model, "topic": topicOf(in),
 	}); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
@@ -210,6 +212,8 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCompleted)
+			// 记忆消化（run 结束后；失败不影响主流程——内部已吞错）
+			_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
 			return RunOutput{Final: res.Final, Steps: step + 1}, nil
 		}
 	}
@@ -228,6 +232,19 @@ func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.Ag
 		return nil, err
 	}
 	msgs := []runs.Message{{Role: "system", Content: cfg.Instructions, Source: "trusted"}}
+	// 分层记忆注入（边界语义 §7 组装函数）：主题滚动摘要 + 检索片段（topic 作用域优先）
+	topic := topicOf(in)
+	if sum, err := st.LatestSummary(ctx, in.SessionID, topic); err == nil && sum != nil {
+		msgs = append(msgs, runs.Message{Role: "system", Content: "【主题摘要】" + sum.Summary, Source: "trusted"})
+	}
+	if items, err := st.ListMemoryItems(ctx, in.SessionID, topic, memoryRetrieveK); err == nil && len(items) > 0 {
+		var b strings.Builder
+		b.WriteString("【相关记忆】")
+		for _, it := range items {
+			b.WriteString("\n- " + it.Content)
+		}
+		msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
+	}
 	for _, m := range history {
 		var text string
 		if err := json.Unmarshal(m.Content, &text); err != nil {
