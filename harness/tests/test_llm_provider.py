@@ -55,12 +55,15 @@ async def test_request_shape_and_stream_parsing():
     assert captured["body"]["tools"][0]["function"]["name"] == "bash"
     assert captured["auth"] == "Bearer sk-test"
 
-    # 流式解析：delta 逐块；tool_calls 按 index 累积拼接；流末 usage
+    # 流式解析：delta 逐块；tool_calls 为**原始 delta 片段**（契约：harness 侧按
+    # index 累计合并——provider 不预合并，否则 harness 再合并会双写工具名）
     texts = [c.delta for c in chunks if c.delta]
     assert texts == ["你好"]
     calls = [c for c in chunks if c.tool_calls]
-    assert calls[-1].tool_calls[0]["function"]["name"] == "bash"
-    assert calls[-1].tool_calls[0]["function"]["arguments"] == '{"command":"pytest"}'
+    assert calls[0].tool_calls[0]["function"]["name"] == "bash"
+    assert calls[0].tool_calls[0]["function"]["arguments"] == '{"command":'
+    assert calls[1].tool_calls[0]["function"]["name"] == ""  # 续片段无名称
+    assert calls[1].tool_calls[0]["function"]["arguments"] == '"pytest"}'
     usages = [c.usage for c in chunks if c.usage]
     assert usages[-1] == {"tokens_in": 10, "tokens_out": 5}
 

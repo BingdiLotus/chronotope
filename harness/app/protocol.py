@@ -46,6 +46,7 @@ class Message(BaseModel):
     role: Role
     content: str
     tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None  # tool 消息回喂关联（Anthropic 兼容 API 硬校验）
     source: Source = "trusted"
 
 

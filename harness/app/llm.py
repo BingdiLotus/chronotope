@@ -66,6 +66,7 @@ class OpenAIProvider(LLMProvider):
                 "role": m.role,
                 "content": m.content,
                 **({"tool_calls": m.tool_calls} if m.tool_calls else {}),
+                **({"tool_call_id": m.tool_call_id} if m.tool_call_id else {}),
             }
             for m in req.messages
         ]
@@ -99,16 +100,21 @@ class OpenAIProvider(LLMProvider):
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index
-                    frag = tool_call_fragments.setdefault(
-                        idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                    tool_call_fragments.setdefault(
+                        idx, {"index": idx, "id": "", "type": "function", "function": {"name": "", "arguments": ""}}
                     )
-                    if tc.id:
-                        frag["id"] = tc.id
-                    if tc.function and tc.function.name:
-                        frag["function"]["name"] += tc.function.name
-                    if tc.function and tc.function.arguments:
-                        frag["function"]["arguments"] += tc.function.arguments
-                    calls.append(frag.copy())
+                    # 契约（StreamChunk 文档）：yield 原始 delta 片段（非累计），
+                    # 由 harness 侧按 index 累计合并。曾误 yield 累计副本 → harness
+                    # 再合并 → 工具名双写（"next_speakernext_speaker"，真实模型 e2e 实证）
+                    calls.append({
+                        "index": idx,
+                        "id": tc.id or "",
+                        "type": "function",
+                        "function": {
+                            "name": (tc.function.name if tc.function else "") or "",
+                            "arguments": (tc.function.arguments if tc.function else "") or "",
+                        },
+                    })
             if text or calls or usage:
                 yield StreamChunk(delta=text or None, tool_calls=calls, usage=usage)
 

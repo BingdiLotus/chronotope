@@ -92,7 +92,17 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
                 yield _sse(p.delta(chunk.delta, seq))
                 seq += 1
             for tc in chunk.tool_calls:
-                tool_calls.setdefault(tc["index"], tc)
+                # 流式片段按 index 累计合并（首个片段参数常为空——setdefault 首片段
+                # 会丢后续参数，真实模型 e2e 实证 arguments={}）
+                idx = tc.get("index", 0)
+                cur = tool_calls.setdefault(idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                if tc.get("id"):
+                    cur["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    cur["function"]["name"] += fn["name"]
+                if fn.get("arguments"):
+                    cur["function"]["arguments"] += fn["arguments"]
             if chunk.usage:
                 usage.tokens_in += chunk.usage.get("tokens_in", 0)
                 usage.tokens_out += chunk.usage.get("tokens_out", 0)
