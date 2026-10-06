@@ -98,6 +98,25 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
+	// 准入 ①：session 级限流（边界语义设计 §6：429 + Retry-After）
+	if h.Limiter != nil {
+		if ok, retry := h.Limiter.Take("session", sessionID); !ok {
+			w.Header().Set("Retry-After", retry.String())
+			writeError(w, http.StatusTooManyRequests, 429, "too many runs for this session, retry later")
+			return
+		}
+	}
+	// 准入 ②：同 session 双开 → 409 + active_run_id（边界语义设计 §6）
+	if active, err := h.Store.GetActiveRun(r.Context(), sessionID); err == nil && active != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"code": 409, "error": "session already has an active run",
+			"active_run_id": active.ID,
+		})
+		return
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
 	agent, err := h.Store.GetAgent(r.Context(), sess.AgentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())

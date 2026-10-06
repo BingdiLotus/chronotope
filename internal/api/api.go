@@ -33,6 +33,7 @@ type Store interface {
 	SoftDeleteSession(ctx context.Context, id string) error
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	GetRun(ctx context.Context, id string) (*store.Run, error)
+	GetActiveRun(ctx context.Context, sessionID string) (*store.Run, error)
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error
 	CreateSchedule(ctx context.Context, id, orgID, sessionID string, delay time.Duration, payload json.RawMessage) error
 	ListEvents(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error)
@@ -56,6 +57,7 @@ type Handler struct {
 	Ingress      RestateIngress
 	PollInterval time.Duration // 事件轮询间隔（默认 500ms）
 	Logger       *slog.Logger
+	Limiter      *Limiter // 三级限流（nil = 禁用；默认在 New 中启用 session 桶）
 }
 
 // New 构造默认配置的 Handler。
@@ -66,6 +68,8 @@ func New(st Store, hub *events.Hub, ingress RestateIngress) *Handler {
 		Ingress:      ingress,
 		PollInterval: 500 * time.Millisecond,
 		Logger:       slog.Default(),
+		// session 桶默认：1 run/5s、突发 3（三级限流的 session 级；org/user 待身份体系）
+		Limiter: NewLimiter(0.2, 3),
 	}
 }
 

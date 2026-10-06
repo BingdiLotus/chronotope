@@ -267,3 +267,23 @@ func nullableRaw(b json.RawMessage) any {
 	}
 	return b
 }
+
+// GetActiveRun 取会话的活跃 run（双开 409 依据；边界语义设计 §6）。
+// 活跃集 = queued/running/paused/awaiting_approval/frozen。
+func (s *Store) GetActiveRun(ctx context.Context, sessionID string) (*Run, error) {
+	const q = `
+SELECT id, session_id, status, bound FROM runs
+WHERE session_id = $1 AND status IN ('queued','running','paused','awaiting_approval','frozen')
+ORDER BY created_at DESC LIMIT 1`
+	var r Run
+	var boundJSON json.RawMessage
+	err := s.Pool.QueryRow(ctx, q, sessionID).Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get active run: %w", err)
+	}
+	_ = json.Unmarshal(boundJSON, &r.Bound)
+	return &r, nil
+}

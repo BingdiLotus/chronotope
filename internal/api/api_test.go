@@ -136,6 +136,20 @@ func (f *fakeStore) CreateSchedule(_ context.Context, id, orgID, sessionID strin
 	return nil
 }
 
+func (f *fakeStore) GetActiveRun(_ context.Context, sessionID string) (*store.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.runs {
+		if r.SessionID == sessionID &&
+			(r.Status == sessionapi.RunQueued || r.Status == sessionapi.RunRunning ||
+				r.Status == sessionapi.RunPaused || r.Status == sessionapi.RunAwaitingApproval ||
+				r.Status == sessionapi.RunFrozen) {
+			return r, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 func (f *fakeStore) ListEventsAfterID(_ context.Context, afterID int64, limit int) ([]store.EventRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

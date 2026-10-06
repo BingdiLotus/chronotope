@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -313,5 +314,47 @@ func TestUsageUpsertAccumulates(t *testing.T) {
 	}
 	if rows, _ := s.ListUsage(ctx, key); len(rows) != 0 {
 		t.Fatalf("reset 后应为空: %+v", rows)
+	}
+}
+
+func TestGetActiveRun(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_active_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agentID := "a_" + key
+	if err := s.CreateAgent(ctx, agentID, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, agentID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// 无活跃 run → ErrNotFound
+	if _, err := s.GetActiveRun(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("无活跃 run 应 ErrNotFound，得 %v", err)
+	}
+	// 一条 completed 的 run 不算活跃
+	if _, err := s.CreateRun(ctx, "r_done_"+key, key, nil, nil); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := s.UpdateRunStatus(ctx, "r_done_"+key, sessionapi.RunCompleted); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+	if _, err := s.GetActiveRun(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("completed 不算活跃，得 %v", err)
+	}
+	// 一条 running 的 run → 命中
+	if _, err := s.CreateRun(ctx, "r_active_"+key, key, nil, nil); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := s.UpdateRunStatus(ctx, "r_active_"+key, sessionapi.RunRunning); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+	active, err := s.GetActiveRun(ctx, key)
+	if err != nil || active.ID != "r_active_"+key {
+		t.Fatalf("应命中 r_active，得 %+v err=%v", active, err)
 	}
 }
