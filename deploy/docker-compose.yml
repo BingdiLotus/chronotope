@@ -54,8 +54,9 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
 
   minio:
-    # 固定 RELEASE 标签（minio 官方建议；部分镜像代理拒绝 latest）
-    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    # 固定 RELEASE 标签（minio 官方建议；Docker Hub 的 minio/minio 已撤下——
+    # 官方迁移至 quay.io，GitHub CI 首跑实证 pull access denied）
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z}
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-chronotope}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-chronotope_dev}
