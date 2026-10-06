@@ -358,3 +358,60 @@ func TestGetActiveRun(t *testing.T) {
 		t.Fatalf("应命中 r_active，得 %+v err=%v", active, err)
 	}
 }
+
+func TestMemorySummaryAndItems(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_mem_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agentID := "a_" + key
+	if err := s.CreateAgent(ctx, agentID, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, agentID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// 无摘要 → ErrNotFound
+	if _, err := s.LatestSummary(ctx, key, "default"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("无摘要应 ErrNotFound，得 %v", err)
+	}
+	// 写摘要 v1；同版本重复写 → 幂等 false
+	ok, err := s.CreateSummary(ctx, store.Summary{SessionID: key, Topic: "default", Version: 1, Summary: "S1", Diff: "full", CreatedByRun: "r_1"})
+	if err != nil || !ok {
+		t.Fatalf("create summary: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.CreateSummary(ctx, store.Summary{SessionID: key, Topic: "default", Version: 1, Summary: "S1b", Diff: "full", CreatedByRun: "r_1"})
+	if err != nil || ok {
+		t.Fatalf("同版本应幂等返回 false: ok=%v err=%v", ok, err)
+	}
+	// 最新版 = v2
+	if _, err := s.CreateSummary(ctx, store.Summary{SessionID: key, Topic: "default", Version: 2, Summary: "S2", Diff: "v2", CreatedByRun: "r_2"}); err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+	latest, err := s.LatestSummary(ctx, key, "default")
+	if err != nil || latest.Version != 2 || latest.Summary != "S2" {
+		t.Fatalf("latest 应为 v2: %+v err=%v", latest, err)
+	}
+
+	// 条目：内容哈希去重；topic 作用域检索
+	if ok, err := s.CreateMemoryItem(ctx, store.MemoryItem{SessionID: key, Topic: "default", Kind: "long_term", Content: "用户偏好：简洁回答", SourceRunID: "r_2", SourceStep: 3, Version: 1}); err != nil || !ok {
+		t.Fatalf("create item: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.CreateMemoryItem(ctx, store.MemoryItem{SessionID: key, Topic: "default", Kind: "long_term", Content: "用户偏好：简洁回答", Version: 1}); err != nil || ok {
+		t.Fatalf("重复内容应去重 false: ok=%v err=%v", ok, err)
+	}
+	if _, err := s.CreateMemoryItem(ctx, store.MemoryItem{SessionID: key, Topic: "other", Content: "其他主题", Version: 1}); err != nil {
+		t.Fatalf("create other topic: %v", err)
+	}
+	items, err := s.ListMemoryItems(ctx, key, "default", 10)
+	if err != nil || len(items) != 1 || items[0].Topic != "default" {
+		t.Fatalf("topic 作用域检索应 1 条: %+v err=%v", items, err)
+	}
+	all, err := s.ListMemoryItems(ctx, key, "", 10)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("空 topic 应全量 2 条: %+v err=%v", all, err)
+	}
+}
