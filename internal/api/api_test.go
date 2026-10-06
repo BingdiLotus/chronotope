@@ -34,6 +34,7 @@ type fakeStore struct {
 	sessions    map[string]*store.Session
 	runs        map[string]*store.Run
 	msgs        []store.Message
+	apiKeys     []*store.APIKeyRow
 	events      []store.EventRow
 	usage       []store.UsageRow
 	summaries   []store.Summary
@@ -236,6 +237,24 @@ func (f *fakeStore) UpsertUsage(_ context.Context, u store.UsageRow) error {
 		}
 	}
 	f.usage = append(f.usage, u)
+	return nil
+}
+
+func (f *fakeStore) GetAPIKeyByHash(_ context.Context, keyHash string) (*store.APIKeyRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, k := range f.apiKeys {
+		if k.KeyHash == keyHash {
+			return k, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, scopes []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apiKeys = append(f.apiKeys, &store.APIKeyRow{ID: id, OrgID: orgID, KeyHash: keyHash, Scopes: scopes})
 	return nil
 }
 
@@ -812,4 +831,106 @@ func keysOf[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestAuthMiddlewareMode 认证矩阵：off 匿名放行 / on 强制 + org 归属 403。
+func TestAuthMiddlewareMode(t *testing.T) {
+	h, fs, _ := setup(t)
+	keyPlain := "ck_test_abc"
+	fs.apiKeys = append(fs.apiKeys, &store.APIKeyRow{ID: "k_1", OrgID: "org_seed", KeyHash: sha256Hex(keyPlain)})
+
+	on := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+	routerOn := chi.NewRouter()
+	routerOn.Use(h.AuthMiddleware("on", ""))
+	routerOn.Get("/orgs/{orgID}/x", on)
+	routerOn.Get("/healthz", on)
+
+	// 无 key → 401
+	rec := httptest.NewRecorder()
+	routerOn.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orgs/org_seed/x", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("on 模式无 key 应 401，得 %d", rec.Code)
+	}
+	// 错 key → 401
+	req := httptest.NewRequest(http.MethodGet, "/orgs/org_seed/x", nil)
+	req.Header.Set("Authorization", "Bearer ck_wrong")
+	rec = httptest.NewRecorder()
+	routerOn.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("错 key 应 401，得 %d", rec.Code)
+	}
+	// 正确 key 但 org 不匹配 → 403
+	req = httptest.NewRequest(http.MethodGet, "/orgs/other/x", nil)
+	req.Header.Set("Authorization", "Bearer "+keyPlain)
+	rec = httptest.NewRecorder()
+	routerOn.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("org 归属不符应 403，得 %d", rec.Code)
+	}
+	// 正确 key + org 匹配 → 200
+	req = httptest.NewRequest(http.MethodGet, "/orgs/org_seed/x", nil)
+	req.Header.Set("Authorization", "Bearer "+keyPlain)
+	rec = httptest.NewRecorder()
+	routerOn.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("正确 key 应 200，得 %d", rec.Code)
+	}
+	// 匿名路径（healthz）不受 on 限制
+	rec = httptest.NewRecorder()
+	routerOn.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthz 应放行，得 %d", rec.Code)
+	}
+	// off 模式：无 key 匿名放行
+	routerOff := chi.NewRouter()
+	routerOff.Use(h.AuthMiddleware("off", ""))
+	routerOff.Get("/orgs/{orgID}/x", on)
+	rec = httptest.NewRecorder()
+	routerOff.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orgs/org_seed/x", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("off 模式应匿名放行，得 %d", rec.Code)
+	}
+}
+
+// TestCreateAPIKey 生成 key：明文一次 + 库存哈希。
+func TestCreateAPIKey(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	fs.orgRows = map[string]*store.Org{"org_seed": {ID: "org_seed", Name: "org"}}
+	rec := doJSON(t, h.Router(), http.MethodPost, "/orgs/org_seed/keys", "", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if !strings.HasPrefix(out.Key, "ck_") || len(out.Key) < 32 {
+		t.Fatalf("key 格式不符: %q", out.Key)
+	}
+	var stored *store.APIKeyRow
+	for _, k := range fs.apiKeys {
+		if k.KeyHash == sha256Hex(out.Key) {
+			stored = k
+		}
+	}
+	if stored == nil || stored.KeyHash == out.Key {
+		t.Fatalf("库存应为哈希（非明文）: %+v", stored)
+	}
+}
+
+// TestAuthMiddlewareAdminKey 管理面引导 key 全放行（on 模式）。
+func TestAuthMiddlewareAdminKey(t *testing.T) {
+	h, _, _ := setup(t)
+	on := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+	router := chi.NewRouter()
+	router.Use(h.AuthMiddleware("on", "ck_admin"))
+	router.Get("/orgs/{orgID}/x", on)
+	req := httptest.NewRequest(http.MethodGet, "/orgs/any-org/x", nil)
+	req.Header.Set("Authorization", "Bearer ck_admin")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin key 应全放行，得 %d", rec.Code)
+	}
 }

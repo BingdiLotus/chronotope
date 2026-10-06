@@ -454,3 +454,30 @@ func (h *Handler) updateOrgBudget(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "quotas": quotas})
 }
+
+// POST /orgs/{orgID}/keys —— 生成 API key（明文仅响应一次；库存 sha256 哈希）。
+func (h *Handler) createAPIKey(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	if _, err := h.Store.GetOrg(r.Context(), orgID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, 404, "org not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	plain, err := newAPIKey()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	if err := h.Store.CreateAPIKey(r.Context(), genID("k_"), orgID, sha256Hex(plain), []string{}); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"org_id": orgID,
+		"key":    plain, // 只显示一次：服务端仅存 sha256 哈希
+		"note":   "请立即保存；再次请求将生成新 key。",
+	})
+}

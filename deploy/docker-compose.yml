@@ -80,6 +80,8 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       RESTATE_URL: http://restate:8080
       API_AGGREGATE_INTERVAL: ${API_AGGREGATE_INTERVAL:-1m}
+      API_AUTH_MODE: ${API_AUTH_MODE:-off}
+      API_ADMIN_KEY: ${API_ADMIN_KEY:-}
     ports:
       - "8080:8080"
     depends_on:
@@ -97,6 +99,8 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       RESTATE_URL: http://restate:8080
       API_AGGREGATE_INTERVAL: ${API_AGGREGATE_INTERVAL:-1m}
+      API_AUTH_MODE: ${API_AUTH_MODE:-off}
+      API_ADMIN_KEY: ${API_ADMIN_KEY:-}
       HARNESS_URL: http://harness:8000
       EXECUTOR_URL: http://executor:9082
       CONSOLIDATE_THRESHOLD: ${CONSOLIDATE_THRESHOLD:-40}

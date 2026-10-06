@@ -171,6 +171,15 @@ jobs:
             sleep 1
           done
           bash test/e2e/w7-group.sh http://localhost:8080
+      - name: 多租户身份 e2e（API_AUTH_MODE=on：401/403/隔离/key 一次性）
+        run: |
+          API_AUTH_MODE=on API_ADMIN_KEY=ck_admin_bootstrap docker compose -f deploy/docker-compose.yml up -d --force-recreate api
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/auth.sh http://localhost:8080
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate api
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

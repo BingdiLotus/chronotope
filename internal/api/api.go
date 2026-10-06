@@ -43,6 +43,9 @@ type Store interface {
 	UpsertUsage(ctx context.Context, u store.UsageRow) error
 	ListUsage(ctx context.Context, sessionID string) ([]store.UsageRow, error)
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
+	// 多租户认证（api_keys）
+	GetAPIKeyByHash(ctx context.Context, keyHash string) (*store.APIKeyRow, error)
+	CreateAPIKey(ctx context.Context, id, orgID, keyHash string, scopes []string) error
 	ListSummaries(ctx context.Context, sessionID string) ([]store.Summary, error)
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 	GetOrg(ctx context.Context, orgID string) (*store.Org, error)
@@ -90,6 +93,7 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/agents", h.createAgent)    // 创建/升级 agent（config 全量，version+1）
 		r.Get("/sessions", h.listSessions)  // 会话列表（控制台最小页）
 		r.Put("/budget", h.updateOrgBudget) // org 预算（三级熔断 ②：充值入口）
+		r.Post("/keys", h.createAPIKey)     // 多租户认证：生成 key（明文仅此一次）
 	})
 	r.Route("/agents/{agentID}", func(r chi.Router) {
 		r.Post("/sessions", h.createSession) // 创建 session → ready（沙箱懒创建）
