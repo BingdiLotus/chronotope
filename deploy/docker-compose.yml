@@ -54,20 +54,22 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
 
   minio:
-    # 固定 RELEASE 标签（minio 官方建议；Docker Hub 的 minio/minio 已撤下——
-    # 官方迁移至 quay.io，GitHub CI 首跑实证 pull access denied）
-    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    # MinIO 全面下线（Docker Hub 撤库、quay 标签不可拉，GitHub CI 实证）——
+    # 替换为 RustFS（Rust 实现、S3 兼容、MinIO 迁移/共存，https://github.com/rustfs/rustfs）
+    image: ${MINIO_IMAGE:-rustfs/rustfs:1.0.1}
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-chronotope}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-chronotope_dev}
+      # RustFS 默认凭证 rustfsadmin/rustfsadmin（admin 级）；接入 S3 客户端时
+      # 显式配置凭证（RUSTFS 运行时文件或环境）
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rustfsadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rustfsadmin}
     ports:
       - "9000:9000" # S3 API
       - "9001:9001" # console
-    command: server /data --console-address ":9001"
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      # RustFS 无 /minio/health/live 兼容路径——S3 根任意 HTTP 响应即存活
+      test: ["CMD", "curl", "-sS", "-o", "/dev/null", "http://localhost:9000/"]
       interval: 5s
       timeout: 3s
       retries: 10
