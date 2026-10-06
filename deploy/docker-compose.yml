@@ -142,8 +142,10 @@ services:
       # docker driver（dev）：executor 需要宿主机 docker 守护进程（受限容器）
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - postgres
-      - minio
+      postgres:
+        condition: service_healthy # executor 启动即连库——未就绪会 fatal 退出（GitHub CI 实证 180s 超时）
+      minio:
+        condition: service_healthy
 
   harness:
     build:
