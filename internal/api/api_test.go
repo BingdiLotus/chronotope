@@ -27,19 +27,20 @@ import (
 // --- fakes ---
 
 type fakeStore struct {
-	mu          sync.Mutex
-	orgs        map[string]bool
-	orgRows     map[string]*store.Org
-	agents      map[string]*store.Agent
-	sessions    map[string]*store.Session
-	runs        map[string]*store.Run
-	msgs        []store.Message
-	apiKeys     []*store.APIKeyRow
-	events      []store.EventRow
-	usage       []store.UsageRow
-	summaries   []store.Summary
-	memoryItems []store.MemoryItem
-	seq         int64
+	mu           sync.Mutex
+	orgs         map[string]bool
+	orgRows      map[string]*store.Org
+	agents       map[string]*store.Agent
+	sessions     map[string]*store.Session
+	runs         map[string]*store.Run
+	msgs         []store.Message
+	apiKeys      []*store.APIKeyRow
+	deliverables []*store.DeliverableRow
+	events       []store.EventRow
+	usage        []store.UsageRow
+	summaries    []store.Summary
+	memoryItems  []store.MemoryItem
+	seq          int64
 }
 
 func newFakeStore() *fakeStore {
@@ -255,6 +256,24 @@ func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.apiKeys = append(f.apiKeys, &store.APIKeyRow{ID: id, OrgID: orgID, KeyHash: keyHash, Scopes: scopes})
+	return nil
+}
+
+func (f *fakeStore) ListDeliverables(_ context.Context, _ string, _ int) ([]*store.DeliverableRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deliverables, nil
+}
+
+func (f *fakeStore) MarkDeliverableDelivered(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.deliverables {
+		if row.ID == id {
+			now := time.Now()
+			row.DeliveredAt = &now
+		}
+	}
 	return nil
 }
 
@@ -1000,5 +1019,23 @@ func TestConnectMCP(t *testing.T) {
 		`{"server":"bad","url":"file:///etc"}`, nil)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("非 http(s) URL 应 422，得 %d", rec.Code)
+	}
+}
+
+// TestListDeliveriesAndAck 交付清单查询 + 投递回执。
+func TestListDeliveriesAndAck(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	fs.deliverables = []*store.DeliverableRow{{ID: 1, RunID: "r_1", SessionID: "s_seed", Kind: "run_completed", Payload: json.RawMessage(`{"final":"完成"}`)}}
+	rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/s_seed/deliveries", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "run_completed") {
+		t.Fatalf("清单应含交付行: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/deliveries/1/ack", "", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("ack 应 204，得 %d", rec.Code)
+	}
+	if fs.deliverables[0].DeliveredAt == nil {
+		t.Fatal("ack 后应标记投递")
 	}
 }

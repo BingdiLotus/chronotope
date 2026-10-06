@@ -20,6 +20,8 @@ type Store interface {
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
 	// GetRun 供 webhook 解析 run → session（HITL 审批回调按 run_id 定位 awakeable）。
 	GetRun(ctx context.Context, runID string) (*store.Run, error)
+	// 交付清单（outbox，W8 后置）
+	CreateDeliverable(ctx context.Context, runID, sessionID, kind string, payload json.RawMessage) error
 	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——

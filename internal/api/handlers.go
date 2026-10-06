@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -572,4 +573,31 @@ func (h *Handler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		"key":    plain, // 只显示一次：服务端仅存 sha256 哈希
 		"note":   "请立即保存；再次请求将生成新 key。",
 	})
+}
+
+// GET /sessions/{sessionID}/deliveries —— 交付清单（run 完成产物：final/steps/
+// tokens/计算秒；投递状态可见——未投递行由投递方轮询消费）。
+func (h *Handler) listDeliveries(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	rows, err := h.Store.ListDeliverables(r.Context(), sessionID, 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deliveries": rows})
+}
+
+// POST /sessions/{sessionID}/deliveries/{deliveryID}/ack —— 投递回执（stub：
+// 真实投递方确认后调用）。
+func (h *Handler) ackDelivery(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "deliveryID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, 400, "invalid delivery id")
+		return
+	}
+	if err := h.Store.MarkDeliverableDelivered(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

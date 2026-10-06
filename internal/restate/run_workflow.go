@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -291,6 +292,14 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCompleted)
+			// 交付清单（W8 后置 outbox：投递方轮询消费；run_id 唯一幂等）
+			payload, _ := json.Marshal(map[string]any{
+				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
+				"tokens_in": accTokens, "compute_seconds": accCompute,
+			})
+			if err := deps.Store.CreateDeliverable(ctx, runID, in.SessionID, "run_completed", payload); err != nil {
+				slog.Default().Warn("outbox 写入失败（不阻断 run）", "run_id", runID, "err", err)
+			}
 			// 记忆消化（run 结束后；失败不影响主流程——内部已吞错）
 			_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
 			return RunOutput{Final: res.Final, Steps: step + 1}, nil

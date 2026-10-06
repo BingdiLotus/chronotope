@@ -193,6 +193,10 @@ jobs:
           done
           bash test/e2e/w6-mcp.sh http://localhost:8080
           pkill -f 'mcp-server.py' || true
+      - name: W8 后置 e2e（交付清单 outbox + PITR 恢复演练）
+        run: |
+          bash test/e2e/w8-delivery.sh http://localhost:8080
+          bash test/chaos/pitr.sh
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

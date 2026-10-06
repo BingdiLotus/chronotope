@@ -40,6 +40,7 @@ type fakeStore struct {
 	runs            map[string]*store.Run
 	createdSessions []string
 	orgQuotas       map[string]any
+	deliverables    []map[string]any
 	orgTokens       int64
 	orgCompute      float64
 	// 分层记忆（W5）：预置摘要/条目供注入测试；创建动作落记录供消化断言
@@ -52,6 +53,11 @@ type fakeStore struct {
 func (f *fakeStore) AppendEvent(_ context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error) {
 	f.events = append(f.events, storedEvent{sessionID, runID, typ, payload, dedupeKey})
 	return int64(len(f.events)), nil
+}
+
+func (f *fakeStore) CreateDeliverable(_ context.Context, runID, sessionID, kind string, payload json.RawMessage) error {
+	f.deliverables = append(f.deliverables, map[string]any{"run_id": runID, "session_id": sessionID, "kind": kind, "payload": string(payload)})
+	return nil
 }
 
 func (f *fakeStore) AppendMessage(_ context.Context, sessionID, runID string, step int, role string, content json.RawMessage) error {
@@ -513,5 +519,35 @@ func TestRunLoopMaxSteps(t *testing.T) {
 	_ = json.Unmarshal(failed[0].payload, &fp)
 	if fp.Reason != "max_steps" {
 		t.Fatalf("失败原因应为 max_steps: %+v", fp)
+	}
+}
+
+// TestRunLoopWritesOutbox run 完成 → 交付清单一行（run_id 幂等）。
+func TestRunLoopWritesOutbox(t *testing.T) {
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha := &fakeHarness{script: []*Result{{Done: true, Final: "交付完成。"}}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{}, Version: 1,
+		},
+	}}
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx := restate.WithMockContext(mockCtx)
+	out, err := runLoop(ctx, deps(st, ha, se, &fakeExecutor{}), RunInput{SessionID: "s_1", Input: "完成交付"}, "r_1")
+	if err != nil || out.Final != "交付完成。" {
+		t.Fatalf("run: %+v err=%v", out, err)
+	}
+	if len(st.deliverables) != 1 || st.deliverables[0]["kind"] != "run_completed" || !strings.Contains(st.deliverables[0]["payload"].(string), "交付完成") {
+		t.Fatalf("交付清单应一行: %+v", st.deliverables)
 	}
 }

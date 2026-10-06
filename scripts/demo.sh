@@ -95,6 +95,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13. W8 后置：交付清单 outbox（run 完成 → 交付行 → 投递回执）
+bash test/e2e/w8-delivery.sh "$API" > /tmp/demo-w8d.log 2>&1 && pass "W8 后置 交付清单（3 项断言）" || { fail "W8 后置 交付清单"; tail -5 /tmp/demo-w8d.log; }
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]
