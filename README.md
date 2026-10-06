@@ -27,10 +27,17 @@ harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）、Next.js 控
 W7 群聊多 Agent → W8 会话导出 tar + 孤儿沙箱 GC。demo 一条命令复现 11 阶段
 （50 项断言）；本地 CI 全绿。
 
+**正确性闭合（评审驱动修复，2026-10）**：结果重放协议（缓存命中 SSE 化 +
+终止帧强制）、执行后写窗口（prepared/done 状态机 + 输入摘要 + in-flight
+停派发）、审批动作摘要精确绑定 + 审批者审计、快照含卷恢复（named volume
+显式打包）+ effect 账本与沙箱生命周期解耦、接纳屏障重投扫描 + 非抢占式
+取消。全部经单测 + e2e + 本地 CI 回归（demo 15 阶段 67 项断言）。
+
 **后置迭代**：PG 分区 parquet 冷层归档与 usage 增量 rollup（MVP 事件量下
-收益低——单会话 <1 万行时全量导出/重建已足够；量大才痛）、outbox 事件投递
-（邮件/IM 集成）、E2B driver、GitHub CI 实跑。真实模型调用待配
-`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
+收益低——单会话 <1 万行时全量导出/重建已足够；量大才痛）、ComputeLease
+释放合同（沙箱资源按依赖安全释放，替代 sleep-infinity + TTL GC）、
+E2B 真实实例 smoke（凭证就绪即跑 e2b-smoke.sh）、GitHub CI 实跑。真实模型
+调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
 
 ## 快速开始（W1 闭环）
 
