@@ -223,24 +223,29 @@ type Message struct {
 func (s *Store) AppendMessage(ctx context.Context, sessionID, runID string, step int, role string, content json.RawMessage) error {
 	const q = `
 INSERT INTO messages (session_id, run_id, step, role, content)
-VALUES ($1, $2, $3, $4, $5)`
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT DO NOTHING`
 	if _, err := s.Pool.Exec(ctx, q, sessionID, nullable(runID), step, role, content); err != nil {
 		return fmt.Errorf("store: append message: %w", err)
 	}
 	return nil
 }
 
-// ListMessages 按序读最近 limit 条消息（buildMessages 的真相来源）。
+// ListMessages 按时间升序读最近 limit 条消息（buildMessages 的真相来源；
+// 曾 DESC——请求消息时序颠倒，tool 先于 assistant 出现，真实模型 e2e 实证 400）。
 func (s *Store) ListMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
 	const q = `
 SELECT id, session_id, COALESCE(run_id, ''), COALESCE(step, -1), role, content
-FROM messages
-WHERE session_id = $1
-ORDER BY id DESC
-LIMIT $2`
+FROM (
+	SELECT * FROM messages
+	WHERE session_id = $1
+	ORDER BY id DESC
+	LIMIT $2
+) recent
+ORDER BY id ASC`
 	rows, err := s.Pool.Query(ctx, q, sessionID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list messages: %w", err)

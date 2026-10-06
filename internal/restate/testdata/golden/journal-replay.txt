@@ -14,8 +14,11 @@ event step.journaled r_g:2:step
 event llm.call r_g:3:llm
 event run.completed r_g:3:run.completed
 message user
+message assistant
 message tool
+message assistant
 message tool
+message assistant
 message tool
 message assistant
 status completed

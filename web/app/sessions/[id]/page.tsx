@@ -73,6 +73,20 @@ export default function SessionPage() {
     }
     return states;
   }, [events]);
+
+  // 群聊成员（派生自 group.turn 事件：agent_id + role + 发言次数）
+  const participants = useMemo(() => {
+    const map = new Map<string, { role: string; turns: number }>();
+    for (const ev of events) {
+      if (ev.type !== "group.turn") continue;
+      const p = ev.payload as { agent_id?: string; role?: string };
+      if (!p.agent_id) continue;
+      const cur = map.get(p.agent_id) || { role: p.role || "", turns: 0 };
+      cur.turns += 1;
+      map.set(p.agent_id, cur);
+    }
+    return [...map.entries()];
+  }, [events]);
   const pendingApproval = Object.entries(runStates).find(([, t]) => t === "run.awaiting_approval");
   const frozenRun = Object.entries(runStates).find(([, t]) => t === "run.frozen");
 
@@ -164,6 +178,19 @@ export default function SessionPage() {
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {participants.length > 0 && (
+        <div data-testid="group-panel" style={{ border: "1px solid #7c3aed", background: "#f5f3ff", borderRadius: 8, padding: 12, margin: "12px 0" }}>
+          <strong>群聊成员</strong>（moderator 主持循环 · group.turn 实时归属）
+          <ul style={{ margin: "8px 0 0" }}>
+            {participants.map(([agentID, info]) => (
+              <li key={agentID} style={{ fontFamily: "monospace", fontSize: 13 }}>
+                {info.role || "成员"} <span style={{ color: "#888" }}>({agentID.slice(0, 12)}…)</span> —— 发言 {info.turns} 次
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

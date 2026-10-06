@@ -11,10 +11,19 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 )
 
+// maxGroupTurns 是群聊发言轮次上限（决策护栏：真实 moderator 收敛纪律差，
+// real-group e2e 实证 20 轮仍不终答）——达到上限后移除主持工具，强制终答。
+const maxGroupTurns = 6
+
 // groupTools 群聊主持工具（moderator 决策「下一位谁发言」，发言决策 journaled）。
+// 必须携带参数 schema：真实模型据此填充 arguments（无 schema 时模型返回 {}，
+// real-group e2e 实证 participant 越界）。
 func groupTools() []runs.Tool {
 	return []runs.Tool{
-		{Type: "function", Name: runs.ToolNextSpeaker, RiskClass: 1},
+		{
+			Type: "function", Name: runs.ToolNextSpeaker, RiskClass: 1,
+			Schema: json.RawMessage(`{"type":"object","properties":{"participant":{"type":"integer","description":"成员下标（从 0 开始）"},"instruction":{"type":"string","description":"给该成员的发言指令"}},"required":["participant","instruction"]}`),
+		},
 	}
 }
 

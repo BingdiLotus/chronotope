@@ -101,12 +101,13 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		}
 	}
 
-	msgs, err := buildMessages(ctx, deps.Store, in, cfg)
-	if err != nil {
+	// 用户输入写回消息全量（对话真相，每 run 一次；buildMessages 之后读回——
+	// 循环内重复写回会随轮次复读输入，真实模型 e2e 实证 400）
+	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
-	// 用户输入写回消息全量（对话真相；buildMessages 之后写，避免本轮历史重复注入）
-	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
+	msgs, err := buildMessages(ctx, deps.Store, in, cfg)
+	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
 
@@ -115,6 +116,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	var accCompute float64
 	lastFingerprint := ""
 	streak := 0
+	groupTurns := 0
 
 	failBudget := func(step int, key string) (RunOutput, error) {
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.BudgetExceeded, "budget", "", map[string]any{
@@ -135,6 +137,11 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	}
 
 	for step := 0; step < maxSteps; step++ {
+		// 群聊决策护栏：轮次用尽后移除 next_speaker，强制 moderator 终答
+		stepTools := groupAwareTools(cfg, state)
+		if groupTurns >= maxGroupTurns {
+			stepTools = toolsFromConfig(cfg)
+		}
 		req := &runs.Request{
 			Protocol:       runs.ProtocolVersion,
 			RunID:          runID,
@@ -142,7 +149,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			Step:           step,
 			Model:          cfg.Model,
 			Messages:       msgs,
-			Tools:          groupAwareTools(cfg, state),
+			Tools:          stepTools,
 			MaxTurns:       8,
 			MaxOutputBytes: 524288,
 		}
@@ -190,9 +197,30 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		}
 
 		if len(res.ToolCalls) > 0 {
+			// assistant 工具调用消息先入历史：tool 消息必须成对引用
+			//（Anthropic 兼容 API 硬校验 'tool_call_id'——真实模型 e2e 实证缺失即 400）
+			// 协议形状（id/type/function——与 /runs 协议一致；大写 Go 字段名会被
+			// OpenAI 兼容 API 拒识，真实模型 e2e 实证 'tool_call_id' 400）
+			rawCalls := make([]json.RawMessage, 0, len(res.ToolCalls))
+			protoList := make([]any, 0, len(res.ToolCalls))
+			for _, tc := range res.ToolCalls {
+				ptc := protocolToolCall(tc)
+				b, _ := json.Marshal(ptc)
+				rawCalls = append(rawCalls, b)
+				protoList = append(protoList, ptc)
+			}
+			msgs = append(msgs, runs.Message{Role: "assistant", Content: "", ToolCalls: rawCalls, Source: "trusted"})
+			// 表写回必须同用协议形状（大写 Go 字段名会被 OpenAI 兼容 API 拒识）
+			assistantJSON, _ := json.Marshal(map[string]any{"tool_calls": protoList})
+			if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "assistant", assistantJSON); err != nil {
+				return RunOutput{}, restate.ToTerminalError(err)
+			}
 			// 工具分流（worker-架构设计 §1 dispatcher）：代码/命令类 → executor（W2）；
 			// 控制类（request_approval）→ W3 awakeable；API 类已在 harness 内联。
 			for _, tc := range res.ToolCalls {
+				if tc.Name == runs.ToolNextSpeaker {
+					groupTurns++
+				}
 				_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
 					"step": step, "id": tc.ID, "name": tc.Name, "arguments": json.RawMessage(tc.Arguments),
 				})
@@ -238,7 +266,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); err != nil {
 					return RunOutput{}, restate.ToTerminalError(err)
 				}
-				msgs = append(msgs, runs.Message{Role: "tool", Content: result, Source: "sandbox"})
+				msgs = append(msgs, runs.Message{Role: "tool", Content: result, Source: "sandbox", ToolCallID: tc.ID})
 			}
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.StepJournaled, "step", "", nil)
 			continue
@@ -288,14 +316,43 @@ func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.Ag
 	}
 	for _, m := range history {
 		var text string
-		if err := json.Unmarshal(m.Content, &text); err != nil {
-			// 非纯文本历史（如结构化 tool_result 字符串）：跳过组装，避免破坏消息形状
+		if err := json.Unmarshal(m.Content, &text); err == nil {
+			msgs = append(msgs, runs.Message{Role: m.Role, Content: text, Source: "trusted"})
 			continue
 		}
-		msgs = append(msgs, runs.Message{Role: m.Role, Content: text, Source: "trusted"})
+		// assistant 工具调用消息：还原 tool_calls（tool 消息必须成对引用——
+		// Anthropic 兼容 API 硬校验；跳过会破坏消息形状）
+		var tc struct {
+			ToolCalls []json.RawMessage `json:"tool_calls"`
+		}
+		if err := json.Unmarshal(m.Content, &tc); err == nil && len(tc.ToolCalls) > 0 {
+			msgs = append(msgs, runs.Message{Role: m.Role, Content: "", ToolCalls: tc.ToolCalls, Source: "trusted"})
+		}
 	}
-	msgs = append(msgs, runs.Message{Role: "user", Content: in.Input})
+	// 用户输入已写回历史（每 run 一次），此处不再注入——重复注入会随轮次复读
 	return msgs, nil
+}
+
+// protocolToolCall 把工具调用转成 /runs 协议形状（id/type/function）。
+func protocolToolCall(tc ToolCall) struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+} {
+	ptc := struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}{ID: tc.ID, Type: "function"}
+	ptc.Function.Name = tc.Name
+	ptc.Function.Arguments = string(tc.Arguments)
+	return ptc
 }
 
 // groupAwareTools 组装工具清单：群聊会话（participants 非空）附加主持工具

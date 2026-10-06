@@ -32,6 +32,9 @@ type Message struct {
 	Content   string            `json:"content"`
 	ToolCalls []json.RawMessage `json:"tool_calls,omitempty"`
 	Source    string            `json:"source,omitempty"` // trusted|sandbox|network
+	// ToolCallID 关联上一条 assistant 工具调用（tool 消息回喂必需——
+	// Anthropic 兼容 API 硬校验 'tool_call_id'，真实模型 e2e 实证缺失即 400）
+	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 // Tool 是模型可见工具；risk_class 见边界语义 §2（0 安全 / 1 敏感 / 2 强制审批）。

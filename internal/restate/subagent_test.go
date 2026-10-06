@@ -84,12 +84,15 @@ func TestRunLoopSpawnSubagent(t *testing.T) {
 	if sp.ChildRunID == "" || sp.Input != "计算 2+2" {
 		t.Fatalf("spawned 载荷不符: %s", spawned[0].payload)
 	}
-	// 结果回喂：tool 消息含子任务 final
-	if len(st.messages) != 3 { // user + tool + assistant
-		t.Fatalf("消息应为 3 条（user/tool/assistant），得 %d", len(st.messages))
+	// 结果回喂：assistant（tool_calls）→ tool（子任务 final）→ assistant 终答
+	if len(st.messages) != 4 { // user + assistant(tool_calls) + tool + assistant
+		t.Fatalf("消息应为 4 条（user/assistant.tool_calls/tool/assistant），得 %d", len(st.messages))
 	}
-	if !strings.Contains(st.messages[1].content, "子任务完成：42。") {
-		t.Fatalf("tool 结果应含子任务 final: %s", st.messages[1].content)
+	if st.messages[1].role != "assistant" || !strings.Contains(st.messages[1].content, "tool_calls") {
+		t.Fatalf("第 2 条应为 assistant 工具调用消息（Anthropic 成对校验）: %+v", st.messages[1])
+	}
+	if !strings.Contains(st.messages[2].content, "子任务完成：42。") {
+		t.Fatalf("tool 结果应含子任务 final: %s", st.messages[2].content)
 	}
 }
 
@@ -110,8 +113,8 @@ func TestRunLoopSpawnSubagentChildFailure(t *testing.T) {
 	if len(completed) != 1 || !strings.Contains(string(completed[0].payload), "子任务预算超限") {
 		t.Fatalf("completed 事件应携带错误: %+v", completed)
 	}
-	if !strings.Contains(st.messages[1].content, "子任务预算超限") {
-		t.Fatalf("tool 结果应携带错误: %s", st.messages[1].content)
+	if !strings.Contains(st.messages[2].content, "子任务预算超限") {
+		t.Fatalf("tool 结果应携带错误: %s", st.messages[2].content)
 	}
 }
 
