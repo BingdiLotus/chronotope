@@ -171,3 +171,16 @@ async def test_fake_provider_consolidation_summary():
     assert final == "摘要：本轮对话已消化——记录用户目标、关键事实与未完成事项。"
     usage = [c.usage for c in chunks if c.usage]
     assert usage and usage[-1]["tokens_out"] == 8
+
+
+async def test_fake_provider_subagent_model():
+    """model=chronotope-subagent → 确定性子任务终答（子 Agent e2e 防递归）。"""
+    from app.llm import FakeProvider
+
+    provider = FakeProvider()
+    req = p.RunRequest(
+        protocol="1.0", run_id="r_child", session_id="s_child", step=0, model="chronotope-subagent",
+        messages=[p.Message(role="user", content="计算 2+2")],
+    )
+    chunks = [c async for c in provider.stream(req)]
+    assert "".join(c.delta for c in chunks if c.delta) == "子任务完成：答案是 42。"

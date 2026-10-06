@@ -36,7 +36,8 @@ type fakeStore struct {
 		sessionID, runID, role, content string
 		step                            int
 	}
-	runs map[string]*store.Run
+	runs            map[string]*store.Run
+	createdSessions []string
 	// 分层记忆（W5）：预置摘要/条目供注入测试；创建动作落记录供消化断言
 	summaries        []store.Summary
 	memoryItems      []store.MemoryItem
@@ -54,6 +55,19 @@ func (f *fakeStore) AppendMessage(_ context.Context, sessionID, runID string, st
 		sessionID, runID, role, content string
 		step                            int
 	}{sessionID, runID, role, string(content), step})
+	return nil
+}
+
+func (f *fakeStore) GetSession(_ context.Context, sessionID string) (*store.Session, error) {
+	return &store.Session{ID: sessionID, OrgID: "org_test", AgentID: "a_1"}, nil
+}
+
+func (f *fakeStore) GetAgent(_ context.Context, agentID string) (*store.Agent, error) {
+	return &store.Agent{ID: agentID, OrgID: "org_test", Config: sessionapi.AgentConfig{Model: "chronotope-subagent", Instructions: "子任务助手。", Version: 1}}, nil
+}
+
+func (f *fakeStore) CreateSession(_ context.Context, id, orgID, agentID string) error {
+	f.createdSessions = append(f.createdSessions, id)
 	return nil
 }
 
@@ -167,6 +181,7 @@ type fakeSessions struct {
 	state    SessionState
 	attached []string
 	pending  string
+	created  []string
 }
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
@@ -180,6 +195,11 @@ func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) err
 
 func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID string) error {
 	f.pending = awakeableID
+	return nil
+}
+
+func (f *fakeSessions) Create(_ restate.Context, sessionID string, cfg sessionapi.AgentConfig) error {
+	f.created = append(f.created, sessionID)
 	return nil
 }
 

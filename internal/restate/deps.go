@@ -24,6 +24,10 @@ type Store interface {
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
 	// 事件才是真相，状态行是投影；chaos 套件 kill9-api 实证）。
 	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
+	// 子 Agent（W6）：父会话/agent 元数据 + 子会话建行（确定性 id，journaled）。
+	GetSession(ctx context.Context, sessionID string) (*store.Session, error)
+	GetAgent(ctx context.Context, agentID string) (*store.Agent, error)
+	CreateSession(ctx context.Context, id, orgID, agentID string) error
 	// 分层记忆（边界语义 §7）：主题摘要与长期记忆条目（派生数据，worker 唯一写入）。
 	LatestSummary(ctx context.Context, sessionID, topic string) (*store.Summary, error)
 	CreateSummary(ctx context.Context, sum store.Summary) (bool, error)
@@ -39,6 +43,8 @@ type SessionSource interface {
 	AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error
 	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
 	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error
+	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
+	Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error
 }
 
 // Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
@@ -72,5 +78,12 @@ func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandbo
 func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "SetPendingAwakeable").
 		Request(awakeableID)
+	return err
+}
+
+// Create 初始化子会话对象状态（子 Agent 派发；对象调用幂等）。
+func (RestateSessionSource) Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "Create").
+		Request(cfg)
 	return err
 }

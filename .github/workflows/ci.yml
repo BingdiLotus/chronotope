@@ -137,6 +137,19 @@ jobs:
             sleep 1
           done
           bash test/e2e/w5-risk.sh http://localhost:8080
+      - name: W6 子 Agent e2e（父派发 → 子会话独立执行 → 结果回喂）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+        run: |
+          CHILD_ID=$(curl -fsS -X POST http://localhost:8080/orgs/org-ci-child/agents -H 'content-type: application/json' \
+            -d '{"name":"ci-child","config":{"model":"chronotope-subagent","instructions":"子任务助手。","tools":[],"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+          HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"spawn_subagent","arguments":{"agent":"'"$CHILD_ID"'","input":"计算 2+2"}}},{"final":"子任务已完成，父任务收尾。"}]' \
+            docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          CHILD_AGENT_ID="$CHILD_ID" bash test/e2e/w6-subagent.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

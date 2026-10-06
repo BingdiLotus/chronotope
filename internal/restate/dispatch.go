@@ -96,6 +96,10 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), 0, nil
 
+	case runs.ToolSpawnSubagent:
+		// 子 Agent：建子会话 + child run_workflow（durable 等待）+ 结果回喂（W6）
+		return dispatchSubagent(ctx, deps, in, runID, step, cfg, tc, emit)
+
 	case runs.ToolRequestApproval:
 		// 控制类工具：awakeable 挂起（零进程占用），webhook resolve 后继续（W3 HITL）
 		decision, err := awaitApproval(ctx, deps, in, runID, step, tc, emit, 0)

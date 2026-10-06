@@ -63,6 +63,15 @@ for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&
 bash test/e2e/w5-risk.sh "$API" > /tmp/demo-w5r.log 2>&1 && pass "W5 工具风险分级（4 项断言）" || { fail "W5 工具风险分级"; tail -5 /tmp/demo-w5r.log; }
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 9. W6 子 Agent（父派发 → 子会话独立执行 → 结果回喂）
+CHILD_ID=$(curl -fsS -X POST "$API/orgs/org-demo-child/agents" -H 'content-type: application/json' \
+  -d '{"name":"demo-child","config":{"model":"chronotope-subagent","instructions":"子任务助手。","tools":[],"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"spawn_subagent","arguments":{"agent":"'"$CHILD_ID"'","input":"计算 2+2"}}},{"final":"子任务已完成，父任务收尾。"}]' \
+  $DC up -d --force-recreate harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+CHILD_AGENT_ID="$CHILD_ID" bash test/e2e/w6-subagent.sh "$API" > /tmp/demo-w6.log 2>&1 && pass "W6 子 Agent（5 项断言）" || { fail "W6 子 Agent"; tail -5 /tmp/demo-w6.log; }
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]
