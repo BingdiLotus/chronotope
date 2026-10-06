@@ -22,9 +22,14 @@ harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）、Next.js 控
 ⑥ 边界语义契约测试（终止帧/截断、tombstone、限流 429 + Retry-After、双开 409、
 无进展检测、run 级预算熔断）。本地 CI 门禁 `bash scripts/ci.sh [--e2e]` 全绿。
 
-**后置迭代（落地方案 §4 W5–W8）**：分层记忆 + consolidation、工具风险分级
-class 2 强制审批、org/user 级预算与冻结、skill/MCP + 子 Agent、群聊多 Agent、
-存储分层与运营。真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
+**已交付能力全景**：W1 对话闭环 → W2 沙箱 → W3 持久三件套（HITL/定时唤醒/
+崩溃恢复）→ W4 计量/控制台 → W5 分层记忆/风险分级/预算冻结 → W6 子 Agent →
+W7 群聊多 Agent → W8 会话导出 tar + 孤儿沙箱 GC。demo 一条命令复现 11 阶段
+（50 项断言）；本地 CI 全绿。
+
+**后置迭代**：PG 分区 parquet 冷层归档、usage 增量 rollup、outbox 投递
+（邮件/IM）、PITR 恢复演练、skill/MCP 连接、E2B driver、GitHub CI 实跑。
+真实模型调用待配 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
 
 ## 快速开始（W1 闭环）
 
