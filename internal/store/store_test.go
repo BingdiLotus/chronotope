@@ -580,3 +580,71 @@ func TestEventDeliveryEnqueue(t *testing.T) {
 		t.Fatalf("退避后立即拉取应为空（next_at 后移）: %+v", mine(pending))
 	}
 }
+
+// TestSandboxLease 租约账本：acquire/renew generation 递增、释放代次校验、GC 依赖安全。
+func TestSandboxLease(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_lease_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, "a_"+key); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	ttl := 200 * time.Millisecond
+	if err := s.UpsertSandbox(ctx, &store.SandboxRow{
+		SandboxID: "sb_" + key, OrgID: "o_" + key, SessionID: key,
+		Driver: "docker", Image: "python:3.11-slim", Status: "ready", TTL: &ttl,
+	}); err != nil {
+		t.Fatalf("upsert sandbox: %v", err)
+	}
+	// acquire → renew：generation 递增
+	l1, err := s.AcquireLease(ctx, "sb_"+key, "r_1", time.Minute)
+	if err != nil || l1.Generation != 1 {
+		t.Fatalf("acquire: %+v err=%v", l1, err)
+	}
+	l2, err := s.AcquireLease(ctx, "sb_"+key, "r_1", time.Minute)
+	if err != nil || l2.Generation != 2 {
+		t.Fatalf("renew 应 generation+1: %+v err=%v", l2, err)
+	}
+	// 旧代次释放 → 拒绝（fencing 最小闭环）
+	if ok, _ := s.ReleaseLease(ctx, "sb_"+key, 1); ok {
+		t.Fatal("旧代次释放应失败（fencing）")
+	}
+	if ok, _ := s.ReleaseLease(ctx, "sb_"+key, 2); !ok {
+		t.Fatal("当代次释放应成功")
+	}
+	// GC 依赖安全：过期 + 有效租约 → 不回收
+	l3, err := s.AcquireLease(ctx, "sb_"+key, "r_2", time.Minute)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond) // TTL 过期
+	expired, err := s.ListExpiredSandboxes(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, sb := range expired {
+		if sb.SandboxID == "sb_"+key {
+			t.Fatalf("有有效租约的过期沙箱不得回收（依赖安全）: %+v", sb)
+		}
+	}
+	// 释放后（用 r_2 租约的实际代次）→ 可回收
+	if _, err := s.ReleaseLease(ctx, "sb_"+key, l3.Generation); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	expired, _ = s.ListExpiredSandboxes(ctx, time.Now())
+	found := false
+	for _, sb := range expired {
+		if sb.SandboxID == "sb_"+key {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("租约释放后的过期沙箱应可回收")
+	}
+}

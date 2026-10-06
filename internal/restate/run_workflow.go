@@ -133,8 +133,19 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	lastFingerprint := ""
 	streak := 0
 	groupTurns := 0
+	var leaseSandboxID string // 沙箱租约绑定（首次 ensureSandbox 后设置）
+	var leaseGen int64
+	// 终态释放（journaled 幂等：代次不符/已释放忽略；重放回放同释放）
+	releaseLease := func() {
+		if leaseSandboxID != "" && leaseGen > 0 {
+			_, _ = restate.Run(ctx, func(rc restate.RunContext) (struct{}, error) {
+				return struct{}{}, deps.Executor.ReleaseLease(rc, leaseSandboxID, leaseGen)
+			}, restate.WithName("lease-release"))
+		}
+	}
 
 	failBudget := func(step int, key string) (RunOutput, error) {
+		releaseLease()
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.BudgetExceeded, "budget", "", map[string]any{
 			"run_id": runID, "key": key,
 		})
@@ -145,6 +156,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("budget exceeded: %s", key))
 	}
 	failNoProgress := func(step int) (RunOutput, error) {
+		releaseLease()
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
 			"reason": "no_progress", "streak": noProgressStreak,
 		})
@@ -156,11 +168,32 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		// 取消检查点（评审 #6 非抢占式：每步 harness 调用前检查会话取消标志）
 		stepState, err := deps.Sessions.GetState(ctx, in.SessionID)
 		if err == nil && stepState.CancelRequested {
+			// 取消终态：绑定租约（若有）后释放——旧持有者代次随释放失活
+			if stepState.SandboxID != "" && leaseSandboxID == "" {
+				leaseSandboxID = stepState.SandboxID
+			}
+			releaseLease()
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCanceled, "", "", map[string]any{
 				"step": step,
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
 			return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
+		}
+		// 沙箱租约绑定（会话沙箱懒创建后生效；重放时 stepState 同值）
+		if stepState.SandboxID != "" && stepState.SandboxID != leaseSandboxID {
+			leaseSandboxID = stepState.SandboxID
+			leaseGen = 0 // 新绑定重置代次（首次续约取得）
+		}
+		// ComputeLease 续约（正确性二期 ⑨）：每步 harness 调用前 journaled 续约——
+		// run 活着即持有；挂起（审批/冻结）期间进程挂起不续约 → 租约过期 →
+		// GC 可回收沙箱（依赖安全：挂起零成本），解冻后走 lease-expired 重建
+		//（快照恢复路径，评审 #7 衔接）。重放回放同一次续约（journaled）。
+		if leaseSandboxID != "" {
+			if gen, lErr := restate.Run(ctx, func(rc restate.RunContext) (int64, error) {
+				return deps.Executor.AcquireLease(rc, leaseSandboxID, runID, "10m")
+			}, restate.WithName("lease-renew")); lErr == nil {
+				leaseGen = gen
+			}
 		}
 
 		// 群聊决策护栏：轮次用尽后移除 next_speaker，强制 moderator 终答
@@ -229,6 +262,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		}
 
 		if res.ErrCode != "" { // harness 失败终态（error 帧）
+			releaseLease()
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
 				"code": res.ErrCode, "message": res.ErrMsg,
 			})
@@ -321,6 +355,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCompleted)
+			releaseLease()
 			// 交付清单（W8 后置 outbox：投递方轮询消费；run_id 唯一幂等）
 			payload, _ := json.Marshal(map[string]any{
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,

@@ -34,6 +34,10 @@ type SandboxStore interface {
 	// 执行状态机（评审 #1：prepared claim → done 落账）
 	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error
 	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
+	// ComputeLease（正确性二期 ⑨）
+	AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*store.LeaseRow, error)
+	ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error)
+	HasActiveLease(ctx context.Context, sandboxID string) (bool, error)
 	SessionOrg(ctx context.Context, sessionID string) (string, error)
 	// 孤儿 GC（W8）：过期沙箱扫描 + 行删除。
 	ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*store.SandboxRow, error)
@@ -78,6 +82,8 @@ func (s *Server) GC(ctx context.Context) (int, error) {
 func (s *Server) Router() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/sandboxes", s.createSandbox)
+	r.Post("/sandboxes/{sandboxID}/lease", s.acquireLease)
+	r.Delete("/sandboxes/{sandboxID}/lease", s.releaseLease)
 	r.Post("/execute", s.execute)
 	r.Get("/files/{sandboxID}/*", s.readFile)
 	r.Put("/files/{sandboxID}/*", s.writeFile)
@@ -187,9 +193,13 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, 409, "sandbox destroyed")
 		return
 	}
+	// ComputeLease（正确性二期 ⑨）：TTL 过期且无有效租约 → 409 lease expired
+	//（worker 走重建路径）；有租约（挂起/等待的 run 持有）→ 放行——依赖安全
 	if sb.TTL != nil && time.Since(sb.CreatedAt) > *sb.TTL {
-		writeError(w, http.StatusConflict, 409, "sandbox expired（TTL 空闲回收）")
-		return
+		if active, err := s.Store.HasActiveLease(r.Context(), req.SandboxID); err != nil || !active {
+			writeError(w, http.StatusConflict, 409, "sandbox lease expired")
+			return
+		}
 	}
 
 	// 执行前 claim（prepared；并发同键第二个请求在 GetExec 分支被 409）
@@ -245,6 +255,48 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeSSE(w, fl, map[string]any{"type": "exit", "payload": cached})
+}
+
+// POST /sandboxes/{sandboxID}/lease —— 获取/续约（body {run_id, ttl}；UPSERT
+// generation+1）。DELETE 释放（body {run_id, generation}；代次校验）。
+func (s *Server) acquireLease(w http.ResponseWriter, r *http.Request) {
+	sandboxID := chi.URLParam(r, "sandboxID")
+	var req struct {
+		RunID string `json:"run_id"`
+		TTL   string `json:"ttl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunID == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "run_id 必填")
+		return
+	}
+	ttl, err := time.ParseDuration(req.TTL)
+	if err != nil || ttl <= 0 {
+		ttl = 10 * time.Minute // 默认租约期
+	}
+	lease, err := s.Store.AcquireLease(r.Context(), sandboxID, req.RunID, ttl)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, lease)
+}
+
+func (s *Server) releaseLease(w http.ResponseWriter, r *http.Request) {
+	sandboxID := chi.URLParam(r, "sandboxID")
+	var req struct {
+		Generation int64 `json:"generation"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	ok, err := s.Store.ReleaseLease(r.Context(), sandboxID, req.Generation)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusConflict, 409, "lease generation 不符（旧持有者）")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeCacheHit 缓存命中回放：同形 SSE 流（beat → exit 帧）。

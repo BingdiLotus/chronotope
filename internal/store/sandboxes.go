@@ -199,11 +199,14 @@ ON CONFLICT (idempotency_key) DO UPDATE SET result = $3, state = 'done',
 // ListExpiredSandboxes 孤儿 GC 扫描（W8）：ttl 过期且未删除的沙箱。
 func (s *Store) ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*SandboxRow, error) {
 	const q = `
-SELECT sandbox_id, org_id, session_id, driver, container_ref, image, limits, tier,
-       snapshot_ref, file_sync_state, ttl, status, created_at
-FROM sandboxes
-WHERE ttl IS NOT NULL AND created_at + ttl < $1 AND status <> 'deleted'
-ORDER BY created_at`
+SELECT s.sandbox_id, s.org_id, s.session_id, s.driver, s.container_ref, s.image, s.limits, s.tier,
+       s.snapshot_ref, s.file_sync_state, s.ttl, s.status, s.created_at
+FROM sandboxes s
+LEFT JOIN sandbox_leases l ON l.sandbox_id = s.sandbox_id AND l.expires_at > now()
+WHERE s.ttl IS NOT NULL AND s.created_at + s.ttl < $1
+  AND s.status <> 'deleted'
+  AND l.sandbox_id IS NULL
+ORDER BY s.created_at`
 	rows, err := s.Pool.Query(ctx, q, now)
 	if err != nil {
 		return nil, fmt.Errorf("store: list expired sandboxes: %w", err)
@@ -241,4 +244,49 @@ func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// LeaseRow 是沙箱租约行。
+type LeaseRow struct {
+	SandboxID  string    `json:"sandbox_id"`
+	RunID      string    `json:"run_id"`
+	Generation int64     `json:"generation"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// AcquireLease 获取/续约（UPSERT：存在则 generation+1 并重置过期）。
+func (s *Store) AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*LeaseRow, error) {
+	const q = `
+INSERT INTO sandbox_leases (sandbox_id, run_id, generation, expires_at)
+VALUES ($1, $2, 1, now() + $3)
+ON CONFLICT (sandbox_id) DO UPDATE
+SET run_id = EXCLUDED.run_id, generation = sandbox_leases.generation + 1,
+    expires_at = now() + $3
+RETURNING sandbox_id, run_id, generation, expires_at`
+	var row LeaseRow
+	if err := s.Pool.QueryRow(ctx, q, sandboxID, runID, ttl).Scan(
+		&row.SandboxID, &row.RunID, &row.Generation, &row.ExpiresAt); err != nil {
+		return nil, fmt.Errorf("store: acquire lease: %w", err)
+	}
+	return &row, nil
+}
+
+// ReleaseLease 释放（generation 校验：旧持有者携带过期代次不得误释放新租约）。
+func (s *Store) ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error) {
+	const q = `DELETE FROM sandbox_leases WHERE sandbox_id = $1 AND generation = $2`
+	tag, err := s.Pool.Exec(ctx, q, sandboxID, generation)
+	if err != nil {
+		return false, fmt.Errorf("store: release lease: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// HasActiveLease 租约是否有效（GC 依赖安全回收的依据）。
+func (s *Store) HasActiveLease(ctx context.Context, sandboxID string) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM sandbox_leases WHERE sandbox_id = $1 AND expires_at > now())`
+	var ok bool
+	if err := s.Pool.QueryRow(ctx, q, sandboxID).Scan(&ok); err != nil {
+		return false, fmt.Errorf("store: has active lease: %w", err)
+	}
+	return ok, nil
 }

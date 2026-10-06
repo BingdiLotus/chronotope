@@ -210,6 +210,7 @@ func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error
 
 type fakeSessions struct {
 	state         SessionState
+	onGetState    func(st *SessionState)
 	attached      []string
 	pending       string
 	pendingDigest string
@@ -218,6 +219,9 @@ type fakeSessions struct {
 }
 
 func (f *fakeSessions) GetState(_ restate.Context, _ string) (SessionState, error) {
+	if f.onGetState != nil {
+		f.onGetState(&f.state)
+	}
 	return f.state, nil
 }
 
@@ -259,10 +263,23 @@ func (f *fakeSessions) Unfreeze(_ restate.Context, _ string) error {
 
 // fakeExecutor 实现 Executor 接口（W2 工具分流的测试替身）。
 type fakeExecutor struct {
-	execs   []string // "name:input"
-	ops     []string // 全操作序（golden 轨迹）
-	files   map[string]string
-	created int
+	execs    []string // "name:input"
+	ops      []string // 全操作序（golden 轨迹）
+	files    map[string]string
+	created  int
+	leased   []string
+	leaseGen int64
+}
+
+func (f *fakeExecutor) AcquireLease(_ context.Context, sandboxID, _ string, _ string) (int64, error) {
+	f.leaseGen++
+	f.leased = append(f.leased, sandboxID)
+	return f.leaseGen, nil
+}
+
+func (f *fakeExecutor) ReleaseLease(_ context.Context, sandboxID string, _ int64) error {
+	f.leased = append(f.leased, "release:"+sandboxID)
+	return nil
 }
 
 func (f *fakeExecutor) CreateSandbox(context.Context, execproto.CreateSandboxRequest) (string, error) {
@@ -607,5 +624,137 @@ func TestRunLoopCancelCheckpoint(t *testing.T) {
 	}
 	if len(eventsOf(st, event.RunCanceled)) != 1 {
 		t.Fatalf("应有 run.canceled 事件: %+v", st.events)
+	}
+}
+
+// TestRunLoopComputeLease ⑨：沙箱绑定后每步续约（journaled）、终态释放。
+func TestRunLoopComputeLease(t *testing.T) {
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha := &fakeHarness{script: []*Result{
+		{Done: false, ToolCalls: []ToolCall{{ID: "t_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}}},
+		{Done: true, Final: "完成。"},
+	}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{"bash"}, Version: 1,
+		},
+		SandboxID: "sb_1",
+	}}
+	ex := &fakeExecutor{}
+
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+
+	ctx := restate.WithMockContext(mockCtx)
+	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || out.Final != "完成。" {
+		t.Fatalf("run: %+v err=%v", out, err)
+	}
+	// 每步续约（2 步 harness 调用 → 2 次续约）+ 终态释放
+	renews, releases := 0, 0
+	for _, op := range ex.leased {
+		if op == "sb_1" {
+			renews++
+		}
+		if op == "release:sb_1" {
+			releases++
+		}
+	}
+	if renews != 2 || releases != 1 {
+		t.Fatalf("应 2 次续约 + 1 次释放: renews=%d releases=%d ops=%v", renews, releases, ex.leased)
+	}
+}
+
+// TestRunLoopComputeLeaseCancelRelease ⑨：取消终态释放已持有租约；
+// 未持有（首步即取消）不误释放他人租约。
+func TestRunLoopComputeLeaseCancelRelease(t *testing.T) {
+	// 首步取消且本 run 从未续约 → 不释放（他人租约不受影响）
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha := &fakeHarness{script: []*Result{{Done: true, Final: "x"}}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{}, Version: 1,
+		},
+		SandboxID:       "sb_1",
+		CancelRequested: true,
+	}}
+	ex := &fakeExecutor{}
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx := restate.WithMockContext(mockCtx)
+	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || !out.Canceled {
+		t.Fatalf("应取消: %+v err=%v", out, err)
+	}
+	for _, op := range ex.leased {
+		if op == "release:sb_1" {
+			t.Fatalf("未持有租约不得释放他人租约: %v", ex.leased)
+		}
+	}
+
+	// 第二循环取消（首步已续约持有）→ 释放
+	st2 := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha2 := &fakeHarness{script: []*Result{
+		{Done: false, ToolCalls: []ToolCall{{ID: "t_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}}},
+		{Done: true, Final: "y"},
+	}}
+	se2 := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{"bash"}, Version: 1,
+		},
+		SandboxID: "sb_1",
+	}}
+	calls := 0
+	se2.onGetState = func(st *SessionState) {
+		calls++
+		// 入口读 cfg 1 次 + 循环 1 取消检查 1 次 → 第 3 次（循环 2）置位
+		if calls >= 3 {
+			st.CancelRequested = true // 第二循环取消
+		}
+	}
+	ex2 := &fakeExecutor{}
+	mockCtx2 := mocks.NewMockContext(t)
+	mockCtx2.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.AsTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx2 := restate.WithMockContext(mockCtx2)
+	out2, err := runLoop(ctx2, deps(st2, ha2, se2, ex2), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || !out2.Canceled {
+		t.Fatalf("应取消: %+v err=%v", out2, err)
+	}
+	released := false
+	for _, op := range ex2.leased {
+		if op == "release:sb_1" {
+			released = true
+		}
+	}
+
+	if !released {
+		t.Fatalf("已持有租约的取消应释放: %v", ex2.leased)
 	}
 }

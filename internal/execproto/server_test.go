@@ -79,6 +79,7 @@ type fakeSBStore struct {
 	execs         map[string]json.RawMessage
 	prepared      map[string]string
 	execsPrepared map[string]*store.ExecRow
+	leases        map[string]*store.LeaseRow
 	expiredRows   []*store.SandboxRow
 	deletedIDs    []string
 }
@@ -126,6 +127,40 @@ func (f *fakeSBStore) GetExec(_ context.Context, key string) (*store.ExecRow, er
 	}
 	return nil, store.ErrNotFound
 }
+func (f *fakeSBStore) AcquireLease(_ context.Context, sandboxID, runID string, _ time.Duration) (*store.LeaseRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.leases == nil {
+		f.leases = map[string]*store.LeaseRow{}
+	}
+	row := f.leases[sandboxID]
+	if row == nil {
+		row = &store.LeaseRow{SandboxID: sandboxID, RunID: runID, Generation: 1}
+	} else {
+		row.Generation++
+		row.RunID = runID
+	}
+	f.leases[sandboxID] = row
+	return row, nil
+}
+
+func (f *fakeSBStore) ReleaseLease(_ context.Context, sandboxID string, generation int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row := f.leases[sandboxID]
+	if row == nil || row.Generation != generation {
+		return false, nil
+	}
+	delete(f.leases, sandboxID)
+	return true, nil
+}
+
+func (f *fakeSBStore) HasActiveLease(_ context.Context, sandboxID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.leases != nil && f.leases[sandboxID] != nil, nil
+}
+
 func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -361,5 +396,42 @@ func TestExecuteInFlightConflict(t *testing.T) {
 	}
 	if len(drv.executed) != 0 {
 		t.Fatalf("in-flight 不得执行: %+v", drv.executed)
+	}
+}
+
+// TestLeaseEndpoints ⑨：acquire/renew generation 递增、释放代次校验、无租约执行拒绝。
+func TestLeaseEndpoints(t *testing.T) {
+	st := newFakeSBStore()
+	drv := &fakeDriver{execResult: &ExecuteResult{Exit: 0}}
+	srv := &Server{Driver: drv, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ttl := 200 * time.Millisecond
+	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{
+		SandboxID: "sb_1", SessionID: "s_1", Status: "ready", TTL: &ttl,
+	})
+	// acquire → renew
+	rec := doReq(t, srv.Router(), http.MethodPost, "/sandboxes/sb_1/lease", `{"run_id":"r_1","ttl":"10m"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"generation":1`) {
+		t.Fatalf("acquire 应 gen1: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doReq(t, srv.Router(), http.MethodPost, "/sandboxes/sb_1/lease", `{"run_id":"r_1","ttl":"10m"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"generation":2`) {
+		t.Fatalf("renew 应 gen2: %d %s", rec.Code, rec.Body.String())
+	}
+	// 旧代次释放 → 409
+	rec = doReq(t, srv.Router(), http.MethodDelete, "/sandboxes/sb_1/lease", `{"generation":1}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("旧代次应 409: %d %s", rec.Code, rec.Body.String())
+	}
+	// 当代次释放 → 204
+	rec = doReq(t, srv.Router(), http.MethodDelete, "/sandboxes/sb_1/lease", `{"generation":2}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("当代次应 204: %d", rec.Code)
+	}
+	// TTL 过期 + 无租约 → execute 409 lease expired
+	time.Sleep(300 * time.Millisecond)
+	rec = doReq(t, srv.Router(), http.MethodPost, "/execute",
+		`{"sandbox_id":"sb_1","name":"bash","input":"echo hi","idempotency_key":"k1"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "lease expired") {
+		t.Fatalf("无租约执行应 409 lease expired: %d %s", rec.Code, rec.Body.String())
 	}
 }
