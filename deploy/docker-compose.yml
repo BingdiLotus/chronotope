@@ -88,6 +88,10 @@ services:
       API_ADMIN_KEY: ${API_ADMIN_KEY:-}
       OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-5s}
       OUTBOX_ALLOW_PRIVATE: ${OUTBOX_ALLOW_PRIVATE:-false}
+    extra_hosts:
+      # Linux runner 无 host.docker.internal（macOS Docker Desktop 才有）——
+      # 事件投递 e2e 的接收器跑在 runner 主机（GitHub CI 实证断言失败）
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     depends_on:
