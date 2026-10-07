@@ -805,6 +805,19 @@ func (h *Handler) forkSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
+	// 分支会话的 SessionState 初始化（真实 e2e 实证：仅落库不初始化 →
+	// 首次 run 502「session_object 未初始化」——与 createSession 同款控制面）
+	if sess, sErr := h.Store.GetSession(r.Context(), forkID); sErr == nil {
+		if agent, aErr := h.Store.GetAgent(r.Context(), sess.AgentID); aErr == nil {
+			var state struct {
+				Phase string `json:"phase"`
+			}
+			if cErr := h.Ingress.Call(r.Context(), "/session_object/"+forkID+"/Create", http.MethodPost, agent.Config, &state); cErr != nil {
+				writeError(w, http.StatusServiceUnavailable, 503, "session_object unavailable: "+cErr.Error())
+				return
+			}
+		}
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"session_id": forkID, "forked_from": sessionID, "at_seq": cp.Seq})
 }
 

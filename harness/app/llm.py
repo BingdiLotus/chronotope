@@ -237,9 +237,14 @@ def embed(text: str) -> list[float]:
         norm = sum(x * x for x in vec) ** 0.5 or 1.0
         return [x / norm for x in vec]
     base = os.environ.get("OPENAI_BASE_URL", "http://litellm:4000/v1")
+    headers = {}
+    if key := os.environ.get("OPENAI_API_KEY", ""):
+        headers["Authorization"] = "Bearer " + key
+    # 无 key 时不设 Authorization（httpx 空 Bearer 是非法头——500 崩溃实证；
+    # 网关侧按需校验）
     r = httpx.post(
         f"{base}/embeddings",
-        headers={"Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", "")},
+        headers=headers,
         json={"model": os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"), "input": text},
         timeout=30,
     )
