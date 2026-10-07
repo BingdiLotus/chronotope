@@ -4,6 +4,22 @@
 #   --e2e：追加 compose 全链路 W1–W3 场景（scripts/demo.sh）
 # 用法: bash scripts/ci.sh [--e2e]
 set -euo pipefail
+
+# 生命周期闭环 D3：收尾清沙箱孤儿（executor 经 Docker API 创建的容器/卷
+# 在 compose 生命周期之外——测试结束后显式清理，生产由 boot sweep + GC 兜底）
+cleanup_sandboxes() {
+  local ids
+  ids=$(docker ps -aq --filter 'label=chronotope.sandbox' 2>/dev/null || true)
+  if [ -n "$ids" ]; then
+    docker rm -f $ids > /dev/null 2>&1 || true
+  fi
+  local vols
+  vols=$(docker volume ls -q --filter 'name=^sb_' 2>/dev/null || true)
+  if [ -n "$vols" ]; then
+    docker volume rm -f $vols > /dev/null 2>&1 || true
+  fi
+}
+trap cleanup_sandboxes EXIT
 cd "$(dirname "$0")/.."
 
 step() { echo -e "\n\033[1;36m== $* ==\033[0m"; }

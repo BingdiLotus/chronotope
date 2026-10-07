@@ -4,6 +4,22 @@
 # 用法: bash scripts/demo.sh
 set -euo pipefail
 
+# 生命周期闭环 D3：收尾清沙箱孤儿（executor 经 Docker API 创建的容器/卷
+# 在 compose 生命周期之外——测试结束后显式清理，生产由 boot sweep + GC 兜底）
+cleanup_sandboxes() {
+  local ids
+  ids=$(docker ps -aq --filter 'label=chronotope.sandbox' 2>/dev/null || true)
+  if [ -n "$ids" ]; then
+    docker rm -f $ids > /dev/null 2>&1 || true
+  fi
+  local vols
+  vols=$(docker volume ls -q --filter 'name=^sb_' 2>/dev/null || true)
+  if [ -n "$vols" ]; then
+    docker volume rm -f $vols > /dev/null 2>&1 || true
+  fi
+}
+trap cleanup_sandboxes EXIT
+
 cd "$(dirname "$0")/.."
 # .env 在仓库根目录；compose 默认只在 deploy/ 查找，须显式指定
 ENV_ARGS=()
