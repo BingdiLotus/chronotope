@@ -24,6 +24,14 @@ type Store interface {
 	CreateDeliverable(ctx context.Context, runID, sessionID, kind string, payload json.RawMessage) error
 	// 沙箱重建（快照恢复依据，评审 #7）
 	GetSandboxBySession(ctx context.Context, sessionID string) (*store.SandboxRow, error)
+	// 时间旅行（期 2）
+	LatestEventSeq(ctx context.Context, sessionID string) (int64, error)
+	CreateCheckpoint(ctx context.Context, cp store.Checkpoint) (bool, error)
+	GetCheckpoint(ctx context.Context, id string) (*store.Checkpoint, error)
+	ListCheckpoints(ctx context.Context, sessionID string, limit int) ([]store.Checkpoint, error)
+	ForkSession(ctx context.Context, newSessionID, parentSessionID string, atSeq int64, atCheckpoint string) error
+	RollbackSession(ctx context.Context, sessionID string, cp *store.Checkpoint) error
+	DiffSessions(ctx context.Context, a, b string, limit int) (*store.SessionDiff, error)
 	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——

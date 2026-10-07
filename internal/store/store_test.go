@@ -681,3 +681,74 @@ func TestSpecDigest(t *testing.T) {
 		t.Fatalf("spec_digest 应入库且一致: %q", got.SpecDigest)
 	}
 }
+
+// TestTimeTravelStore 时间旅行（期 2）：checkpoint 树 + fork 写时复制 + rollback 投影截断 + diff。
+func TestTimeTravelStore(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_tt_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, "a_"+key); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	// 事件 + 消息前缀
+	if _, err := s.CreateRun(ctx, "r_1", key, json.RawMessage(`{}`), map[string]any{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	ev1, _ := s.AppendEvent(ctx, key, "r_1", "run.started", json.RawMessage(`{"input":"x"}`), "tt1-"+key)
+	_, _ = s.AppendEvent(ctx, key, "r_1", "run.completed", json.RawMessage(`{"final":"y"}`), "tt2-"+key)
+	if err := s.AppendMessage(ctx, key, "r_1", 0, "user", json.RawMessage(`"x"`)); err != nil {
+		t.Fatalf("msg: %v", err)
+	}
+	// checkpoint（seq=ev1）
+	cp := store.Checkpoint{ID: "cp_" + key, SessionID: key, Seq: ev1, SnapshotRef: "img|tar"}
+	if ok, err := s.CreateCheckpoint(ctx, cp); err != nil || !ok {
+		t.Fatalf("create cp: %v", err)
+	}
+	got, err := s.GetCheckpoint(ctx, cp.ID)
+	if err != nil || got.Seq != ev1 || got.SnapshotRef != "img|tar" {
+		t.Fatalf("get cp: %+v err=%v", got, err)
+	}
+	// fork 于 ev1 之后（含 ev1 前缀 + 不含 ev2）
+	forkID := key + "_fork"
+	if err := s.ForkSession(ctx, forkID, key, ev1, cp.ID); err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	forkEvents, _ := s.ListEvents(ctx, forkID, 0, 100)
+	// 前缀（run.started + session.forked）——不含 run.completed
+	types := map[string]bool{}
+	for _, e := range forkEvents {
+		types[string(e.Type)] = true
+	}
+	if !types["run.started"] || types["run.completed"] || !types["session.forked"] {
+		t.Fatalf("fork 时间轴应为前缀+派生事件: %v", types)
+	}
+	// diff：父 vs fork → 公共前缀 1（run.started），父独有 run.completed，fork 独有 session.forked
+	diff, err := s.DiffSessions(ctx, key, forkID, 100)
+	if err != nil || diff.CommonPrefix != 1 || len(diff.OnlyA) != 1 || len(diff.OnlyB) != 1 {
+		t.Fatalf("diff: %+v err=%v", diff, err)
+	}
+	// rollback 到 checkpoint：消息投影截断（step>0 删除）+ 状态 ready + 事件追加
+	if err := s.RollbackSession(ctx, key, got); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	msgs, _ := s.ListMessages(ctx, key, 100)
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Fatalf("rollback 后消息应截断到前缀: %+v", msgs)
+	}
+	evs, _ := s.ListEvents(ctx, key, 0, 100)
+	found := false
+	for _, e := range evs {
+		if e.Type == "session.rolled_back" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("应有 rollback 事件（真相不可变审计）: %v", evs)
+	}
+}

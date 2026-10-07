@@ -9,5 +9,8 @@ WHERE a.id > b.id
   AND a.role = b.role
   AND a.content = b.content;
 
+-- 修正：去重键必须含 session_id（评审「dedupe 前缀会话维度」同款缺陷——
+-- 不含 session_id 时两个会话的相同 run 内容互相去重；store 集成测试实证）
+DROP INDEX IF EXISTS messages_dedupe_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS messages_dedupe_idx
-  ON messages (run_id, step, role, md5(content::text));
+  ON messages (session_id, run_id, step, role, md5(content::text));

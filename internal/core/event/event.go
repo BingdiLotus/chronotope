@@ -41,8 +41,12 @@ const (
 	SkillInstall  Type = "skill.install"
 	AuditApproval Type = "audit.approval"
 	RunCanceled   Type = "run.canceled"
-	MCPConnected  Type = "mcp.connected"
-	MCPUpdated    Type = "mcp.updated"
+	// 时间旅行（正式版架构 期 2）
+	SessionCheckpoint Type = "session.checkpoint"  // 时间坐标：seq + 沙箱快照引用
+	SessionRolledBack Type = "session.rolled_back" // 回退：投影截断 + 追加（事件轴不可变）
+	SessionForked     Type = "session.forked"      // 分支派生：父指针 + 新会话
+	MCPConnected      Type = "mcp.connected"
+	MCPUpdated        Type = "mcp.updated"
 
 	// 多 Agent
 	SubagentSpawned   Type = "subagent.spawned"
@@ -64,6 +68,7 @@ func (t Type) Valid() bool {
 		LLMCall, ToolCall, SandboxExec, MCPCall, StepJournaled, EventTruncated,
 		RunPaused, RunResumed, RunAwaitingApproval, RunFrozen, RunUnfrozen, SessionWoken,
 		SkillInstall, MCPConnected, MCPUpdated, AuditApproval, RunCanceled,
+		SessionCheckpoint, SessionRolledBack, SessionForked,
 		SubagentSpawned, SubagentCompleted, GroupTurn,
 		MemoryConsolidated,
 		AuditToolDenied, BudgetExceeded:

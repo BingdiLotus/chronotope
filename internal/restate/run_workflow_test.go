@@ -43,6 +43,7 @@ type fakeStore struct {
 	deliverables     []map[string]any
 	sandboxBySession *store.SandboxRow
 	orgTokens        int64
+	checkpoints      map[string]store.Checkpoint
 	orgCompute       float64
 	// 分层记忆（W5）：预置摘要/条目供注入测试；创建动作落记录供消化断言
 	summaries        []store.Summary
@@ -54,6 +55,41 @@ type fakeStore struct {
 func (f *fakeStore) AppendEvent(_ context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error) {
 	f.events = append(f.events, storedEvent{sessionID, runID, typ, payload, dedupeKey})
 	return int64(len(f.events)), nil
+}
+
+func (f *fakeStore) LatestEventSeq(_ context.Context, sessionID string) (int64, error) {
+	return int64(len(f.events)), nil // fake：事件数即水位（单测够用）
+}
+
+func (f *fakeStore) CreateCheckpoint(_ context.Context, cp store.Checkpoint) (bool, error) {
+	if f.checkpoints == nil {
+		f.checkpoints = map[string]store.Checkpoint{}
+	}
+	if _, ok := f.checkpoints[cp.ID]; ok {
+		return false, nil
+	}
+	f.checkpoints[cp.ID] = cp
+	return true, nil
+}
+
+func (f *fakeStore) GetCheckpoint(_ context.Context, id string) (*store.Checkpoint, error) {
+	cp, ok := f.checkpoints[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &cp, nil
+}
+
+func (f *fakeStore) ListCheckpoints(_ context.Context, _ string, _ int) ([]store.Checkpoint, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ForkSession(_ context.Context, _, _ string, _ int64, _ string) error { return nil }
+func (f *fakeStore) RollbackSession(_ context.Context, _ string, _ *store.Checkpoint) error {
+	return nil
+}
+func (f *fakeStore) DiffSessions(_ context.Context, _, _ string, _ int) (*store.SessionDiff, error) {
+	return &store.SessionDiff{}, nil
 }
 
 func (f *fakeStore) GetSandboxBySession(_ context.Context, _ string) (*store.SandboxRow, error) {
@@ -280,6 +316,11 @@ func (f *fakeExecutor) AcquireLease(_ context.Context, sandboxID, _ string, _ st
 func (f *fakeExecutor) ReleaseLease(_ context.Context, sandboxID string, _ int64) error {
 	f.leased = append(f.leased, "release:"+sandboxID)
 	return nil
+}
+
+func (f *fakeExecutor) Snapshot(_ context.Context, sandboxID string) (string, error) {
+	f.ops = append(f.ops, "snapshot:"+sandboxID)
+	return "img-" + sandboxID + "|tar-" + sandboxID, nil
 }
 
 func (f *fakeExecutor) CreateSandbox(context.Context, execproto.CreateSandboxRequest) (string, error) {

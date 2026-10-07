@@ -39,6 +39,9 @@ type fakeStore struct {
 	deliverables   []*store.DeliverableRow
 	subs           []map[string]string
 	staleQueued    []*store.Run
+	checkpoints    map[string]store.Checkpoint
+	forks          []map[string]any
+	rollbacks      []map[string]any
 	pendingOutbox  []*store.PendingOutboxRow
 	pendingType    string
 	pendingPayload []byte
@@ -265,6 +268,36 @@ func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, s
 	defer f.mu.Unlock()
 	f.apiKeys = append(f.apiKeys, &store.APIKeyRow{ID: id, OrgID: orgID, KeyHash: keyHash, Scopes: scopes})
 	return nil
+}
+
+func (f *fakeStore) LatestEventSeq(_ context.Context, _ string) (int64, error) { return 0, nil }
+func (f *fakeStore) CreateCheckpoint(_ context.Context, cp store.Checkpoint) (bool, error) {
+	if f.checkpoints == nil {
+		f.checkpoints = map[string]store.Checkpoint{}
+	}
+	f.checkpoints[cp.ID] = cp
+	return true, nil
+}
+func (f *fakeStore) GetCheckpoint(_ context.Context, id string) (*store.Checkpoint, error) {
+	cp, ok := f.checkpoints[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &cp, nil
+}
+func (f *fakeStore) ListCheckpoints(_ context.Context, _ string, _ int) ([]store.Checkpoint, error) {
+	return nil, nil
+}
+func (f *fakeStore) ForkSession(_ context.Context, newID, parent string, atSeq int64, atCP string) error {
+	f.forks = append(f.forks, map[string]any{"new": newID, "parent": parent, "at_seq": atSeq, "cp": atCP})
+	return nil
+}
+func (f *fakeStore) RollbackSession(_ context.Context, sessionID string, cp *store.Checkpoint) error {
+	f.rollbacks = append(f.rollbacks, map[string]any{"session": sessionID, "cp": cp.ID})
+	return nil
+}
+func (f *fakeStore) DiffSessions(_ context.Context, _, _ string, _ int) (*store.SessionDiff, error) {
+	return &store.SessionDiff{CommonPrefix: 1, OnlyA: []store.EventRow{{Seq: 2}}, OnlyB: []store.EventRow{{Seq: 2}}}, nil
 }
 
 func (f *fakeStore) ListAuditEventsByRun(_ context.Context, runID string, limit int) ([]store.AuditEventRow, error) {
@@ -1235,5 +1268,37 @@ func TestRunAuditEndpoint(t *testing.T) {
 	rec = doJSON(t, h.Router(), http.MethodGet, "/runs/r_none/audit", "", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("未知 run 应 404: %d", rec.Code)
+	}
+}
+
+// TestTimeTravelEndpoints 期 2：checkpoint/fork/rollback/diff 端点。
+func TestTimeTravelEndpoints(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	fs.checkpoints = map[string]store.Checkpoint{
+		"cp_1": {ID: "cp_1", SessionID: "s_seed", Seq: 5, SnapshotRef: "img|tar"},
+	}
+	// fork
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/fork", `{"checkpoint_id":"cp_1"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("fork 应 201: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(fs.forks) != 1 || fs.forks[0]["cp"] != "cp_1" {
+		t.Fatalf("fork 应带血缘: %v", fs.forks)
+	}
+	// 未知 checkpoint → 404
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/fork", `{"checkpoint_id":"cp_x"}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知 checkpoint 应 404: %d", rec.Code)
+	}
+	// rollback
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/rollback", `{"checkpoint_id":"cp_1"}`, nil)
+	if rec.Code != http.StatusOK || len(fs.rollbacks) != 1 {
+		t.Fatalf("rollback 应 200: %d %s %v", rec.Code, rec.Body.String(), fs.rollbacks)
+	}
+	// diff
+	rec = doJSON(t, h.Router(), http.MethodGet, "/sessions/s_seed/diff?against=s_other", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "common_prefix") {
+		t.Fatalf("diff 应 200: %d %s", rec.Code, rec.Body.String())
 	}
 }

@@ -62,6 +62,16 @@ type EventRow struct {
 	At        time.Time
 }
 
+// LatestEventSeq 会话事件水位（时间旅行 checkpoint 的 seq 指针）。
+func (s *Store) LatestEventSeq(ctx context.Context, sessionID string) (int64, error) {
+	const q = `SELECT COALESCE(max(seq), 0) FROM events WHERE session_id = $1`
+	var seq int64
+	if err := s.Pool.QueryRow(ctx, q, sessionID).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("store: latest event seq: %w", err)
+	}
+	return seq, nil
+}
+
 // ListEvents 按 seq 续读会话事件（契约规范 §2：GET /events?after=seq&limit；允许 gap）。
 func (s *Store) ListEvents(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]EventRow, error) {
 	if limit <= 0 || limit > 1000 {

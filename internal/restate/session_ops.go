@@ -6,6 +6,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 // session_ops 工作流：api 侧触发的会话运维动作（MCP 连接 / skill 安装）。
@@ -27,6 +28,9 @@ func sessionOpsDef(deps *Deps) restate.ServiceDefinition {
 		})).
 		Handler("InstallSkill", restate.NewServiceHandler[installSkillInput, restate.Void](func(ctx restate.Context, in installSkillInput) (restate.Void, error) {
 			return restate.Void{}, installSkillWorkflow(ctx, deps, in)
+		})).
+		Handler("CreateCheckpoint", restate.NewServiceHandler[createCheckpointInput, restate.Void](func(ctx restate.Context, in createCheckpointInput) (restate.Void, error) {
+			return restate.Void{}, createCheckpointWorkflow(ctx, deps, in)
 		}))
 }
 
@@ -39,6 +43,33 @@ type connectMCPInput struct {
 type installSkillInput struct {
 	SessionID string `json:"session_id"`
 	Name      string `json:"name"`
+}
+
+type createCheckpointInput struct {
+	SessionID    string `json:"session_id"`
+	CheckpointID string `json:"checkpoint_id"`
+}
+
+// createCheckpointWorkflow 时间旅行（期 2）：checkpoint = 事件水位 + 沙箱快照
+// （空间面）——checkpoint(session, seq) 钉住「时间 × 空间」坐标。事件先于
+// 行（订阅端所见序一致）。
+func createCheckpointWorkflow(ctx restate.Context, deps *Deps, in createCheckpointInput) error {
+	seq, err := deps.Store.LatestEventSeq(ctx, in.SessionID)
+	if err != nil {
+		return err
+	}
+	snapshotRef := ""
+	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {
+		snapshotRef, _ = deps.Executor.Snapshot(ctx, state.SandboxID) // 无快照能力/失败 → 仅时间坐标
+	}
+	payload, _ := json.Marshal(map[string]any{"checkpoint_id": in.CheckpointID, "seq": seq, "snapshot_ref": snapshotRef})
+	if _, err := deps.Store.AppendEvent(ctx, in.SessionID, "", event.SessionCheckpoint, payload, in.SessionID+":checkpoint:"+in.CheckpointID); err != nil {
+		return err
+	}
+	_, err = deps.Store.CreateCheckpoint(ctx, store.Checkpoint{
+		ID: in.CheckpointID, SessionID: in.SessionID, Seq: seq, SnapshotRef: snapshotRef,
+	})
+	return err
 }
 
 func connectMCPWorkflow(ctx restate.Context, deps *Deps, in connectMCPInput) error {

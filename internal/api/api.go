@@ -52,6 +52,14 @@ type Store interface {
 	ListStaleQueuedRuns(ctx context.Context, olderThan time.Time, limit int) ([]*store.Run, error)
 	// journal 审计导出（正式版架构 期 1）
 	ListAuditEventsByRun(ctx context.Context, runID string, limit int) ([]store.AuditEventRow, error)
+	// 时间旅行（期 2）
+	LatestEventSeq(ctx context.Context, sessionID string) (int64, error)
+	CreateCheckpoint(ctx context.Context, cp store.Checkpoint) (bool, error)
+	GetCheckpoint(ctx context.Context, id string) (*store.Checkpoint, error)
+	ListCheckpoints(ctx context.Context, sessionID string, limit int) ([]store.Checkpoint, error)
+	ForkSession(ctx context.Context, newSessionID, parentSessionID string, atSeq int64, atCheckpoint string) error
+	RollbackSession(ctx context.Context, sessionID string, cp *store.Checkpoint) error
+	DiffSessions(ctx context.Context, a, b string, limit int) (*store.SessionDiff, error)
 	ListPendingOutbox(ctx context.Context, limit int) ([]*store.PendingOutboxRow, error)
 	GetEvent(ctx context.Context, eventID int64) (string, []byte, time.Time, error)
 	OutboxDelivered(ctx context.Context, id int64) error
@@ -136,6 +144,13 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/deliveries", h.listDeliveries)                // 交付清单（outbox，W8 后置）
 		r.Post("/deliveries/{deliveryID}/ack", h.ackDelivery) // 投递回执
 		r.Post("/subscriptions", h.subscribe)                 // 事件投递订阅（webhook/email）
+		// 时间旅行（正式版架构 期 2）——须在 /sessions/{sessionID} 子树内
+		//（挂主 router 会被该子树 shadow——e2e 实证 404）
+		r.Post("/checkpoints", h.createCheckpoint)
+		r.Get("/checkpoints", h.listCheckpoints)
+		r.Post("/fork", h.forkSession)
+		r.Post("/rollback", h.rollbackSession)
+		r.Get("/diff", h.diffSessions)
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Get("/runs/{runID}/audit", h.runAudit) // journal 审计导出（期 1：重放轨迹 + dedupe 证据链）

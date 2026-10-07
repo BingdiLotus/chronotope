@@ -23,6 +23,8 @@ type Executor interface {
 	// ComputeLease（正确性二期 ⑨）：续约返回代次（终态释放用）；释放幂等。
 	AcquireLease(ctx context.Context, sandboxID, runID string, ttl string) (int64, error)
 	ReleaseLease(ctx context.Context, sandboxID string, generation int64) error
+	// Snapshot 沙箱快照（时间旅行 期 2：checkpoint 的空间面；无沙箱返回空）
+	Snapshot(ctx context.Context, sandboxID string) (string, error)
 }
 
 // ExecResult 是 execute 的聚合结果（输出回喂模型的载体）。
@@ -174,6 +176,30 @@ func (c *executorClient) AcquireLease(ctx context.Context, sandboxID, runID, ttl
 		return 0, fmt.Errorf("executor: decode lease: %w", err)
 	}
 	return out.Generation, nil
+}
+
+// Snapshot 调 executor 快照端点（返回 ref：镜像|卷tar）。
+func (c *executorClient) Snapshot(ctx context.Context, sandboxID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/sandboxes/%s/snapshot", c.baseURL, sandboxID), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("executor: snapshot: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("executor: snapshot status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var out struct {
+		Ref string `json:"snapshot_ref"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("executor: decode snapshot: %w", err)
+	}
+	return out.Ref, nil
 }
 
 // ReleaseLease 释放（幂等：generation 不符/已释放 → 忽略）。

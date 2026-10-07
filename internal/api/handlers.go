@@ -623,6 +623,105 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// 时间旅行（正式版架构 期 2）：POST /sessions/{id}/checkpoints —— 经 session_ops
+// 创建时间坐标（事件水位 + 沙箱快照；worker 唯一事件写者）。
+func (h *Handler) createCheckpoint(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if _, err := h.Store.GetSession(r.Context(), sessionID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	cpID := "cp_" + genID("")
+	var out restateVoid
+	if err := h.Ingress.Call(r.Context(), "/session_ops/CreateCheckpoint", http.MethodPost,
+		map[string]any{"session_id": sessionID, "checkpoint_id": cpID}, &out); err != nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "checkpoint failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"checkpoint_id": cpID, "session_id": sessionID})
+}
+
+// GET /sessions/{id}/checkpoints —— 会话时间坐标升序。
+func (h *Handler) listCheckpoints(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	cps, err := h.Store.ListCheckpoints(r.Context(), sessionID, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"checkpoints": cps})
+}
+
+// POST /sessions/{id}/fork {checkpoint_id} —— 从时间坐标派生新会话（写时复制）。
+func (h *Handler) forkSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req struct {
+		CheckpointID string `json:"checkpoint_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CheckpointID == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "checkpoint_id 必填")
+		return
+	}
+	cp, err := h.Store.GetCheckpoint(r.Context(), req.CheckpointID)
+	if errors.Is(err, store.ErrNotFound) || (cp != nil && cp.SessionID != sessionID) {
+		writeError(w, http.StatusNotFound, 404, "checkpoint not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	forkID := "s_" + genID("")
+	if err := h.Store.ForkSession(r.Context(), forkID, sessionID, cp.Seq, cp.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"session_id": forkID, "forked_from": sessionID, "at_seq": cp.Seq})
+}
+
+// POST /sessions/{id}/rollback {checkpoint_id} —— 回退：投影截断 + 追加
+// rollback 事件（事件轴真相不可变）。
+func (h *Handler) rollbackSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req struct {
+		CheckpointID string `json:"checkpoint_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CheckpointID == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "checkpoint_id 必填")
+		return
+	}
+	cp, err := h.Store.GetCheckpoint(r.Context(), req.CheckpointID)
+	if errors.Is(err, store.ErrNotFound) || (cp != nil && cp.SessionID != sessionID) {
+		writeError(w, http.StatusNotFound, 404, "checkpoint not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	if err := h.Store.RollbackSession(r.Context(), sessionID, cp); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "rollback_to": cp.ID, "at_seq": cp.Seq})
+}
+
+// GET /sessions/{id}/diff?against=<session_id> —— 分支事件差集。
+func (h *Handler) diffSessions(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	against := r.URL.Query().Get("against")
+	if against == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "against 必填")
+		return
+	}
+	diff, err := h.Store.DiffSessions(r.Context(), sessionID, against, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, diff)
+}
+
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
 func (h *Handler) runAudit(w http.ResponseWriter, r *http.Request) {
