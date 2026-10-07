@@ -32,8 +32,14 @@ assert "写文件 run 完成" \
   python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["status"]=="completed", d' < /tmp/blob-1.out
 
 # ② 索引行 + 内容寻址（workspace_files 行存在且 hash 非空）
-assert "workspace_files 索引行（path→sha256 内容寻址）" \
-  bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT hash FROM workspace_files WHERE session_id='$SID' AND path='/workspace/b.txt'\" | grep -qE '^[0-9a-f]{64}$'"
+if docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELECT hash FROM workspace_files WHERE session_id='$SID' AND path='/workspace/b.txt'" | grep -qE '^[0-9a-f]{64}$'; then
+  pass "workspace_files 索引行（path→sha256 内容寻址）"
+else
+  fail "workspace_files 索引行（path→sha256 内容寻址）"
+  echo "  [诊断] executor 日志（blob 相关）:" >&2
+  docker compose -f deploy/docker-compose.yml logs executor 2>/dev/null | grep -iE 'blob|RUSTFS' | tail -5 >&2 || true
+  docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELECT * FROM workspace_files" >&2 || true
+fi
 
 # ③ 销毁沙箱（无快照——blob 合同是唯一恢复来源）
 SB_ID=$(PSQL "SELECT sandbox_id FROM sandboxes WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1")
