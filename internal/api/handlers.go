@@ -40,7 +40,7 @@ func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, 422, "invalid agent config")
 		return
 	}
-	// MVP 单 org：org 幂等建立（多租户 quota 字段先预留，mvp-落地方案 §5）
+	// org 幂等建立（多租户已落地——quota 键 daily_token/compute_seconds）
 	if err := h.Store.CreateOrg(r.Context(), orgID, orgID); err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return

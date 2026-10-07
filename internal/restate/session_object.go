@@ -18,7 +18,7 @@ const (
 )
 
 // SessionState 是 session_object 的持久状态（分层原则：Restate 只放协调态——
-// 游标/引用/版本/小配置；大载荷在 PG/MinIO，worker-架构设计 §4）。
+// 游标/引用/版本/小配置；大载荷在 PG/RustFS，worker-架构设计 §4）。
 type SessionState struct {
 	Phase               sessionapi.SessionPhase `json:"phase"`
 	AgentConfig         sessionapi.AgentConfig  `json:"agent_config"`

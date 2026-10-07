@@ -6,7 +6,7 @@ import (
 )
 
 // Outbox 投递（落地方案 §5）：events 与 outbox 同事务写入；投递 worker 定时拉取 +
-// 指数退避重试。W1 骨架只定义接口与重试策略，实现随 W2–W3（通知与交付，W8）。
+// 指数退避重试。只定义接口与重试策略，实现随 W2–W3（通知与交付，W8）。
 type Delivery struct {
 	ID        int64
 	SessionID string

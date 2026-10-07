@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   created_at      timestamptz NOT NULL DEFAULT now()
 );
 
--- executor 幂等缓存（防重试双执行，契约规范 §4；TTL 24h；结果 >256KB 外置 MinIO）
+-- executor 幂等缓存（防重试双执行，契约规范 §4；TTL 24h；结果 >256KB 外置 RustFS）
 CREATE TABLE IF NOT EXISTS sandbox_execs (
   idempotency_key text PRIMARY KEY,        -- (run_id, step, tool_id)
   sandbox_id      text NOT NULL REFERENCES sandboxes (sandbox_id),

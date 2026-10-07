@@ -53,7 +53,7 @@ type ExecuteRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-// ExecuteResult 是 execute 的结果（大输出外置 MinIO，此处只回引用）。
+// ExecuteResult 是 execute 的结果（大输出外置 RustFS，此处只回引用）。
 type ExecuteResult struct {
 	Exit      int    `json:"exit"`
 	OutputRef string `json:"output_ref"`

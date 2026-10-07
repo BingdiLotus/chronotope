@@ -1,6 +1,6 @@
 // Package store 是 Postgres 访问层（落地方案 §1：events/sessions/usage/outbox）。
 //
-// W1 骨架只提供：连接池 + 迁移执行。具体 repository 随 W1–W2 实现；
+// 提供：连接池 + 迁移执行。具体 repository 随 W1–W2 实现；
 // events 与 outbox 必须同事务写入（落地方案 §5）。
 package store
 

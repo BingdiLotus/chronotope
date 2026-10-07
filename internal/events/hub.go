@@ -20,7 +20,7 @@ type Subscription struct {
 }
 
 // C 是提示通道：收到 seq 提示后按 (session_id, seq) 回查 store 取完整事件再推送。
-// 骨架阶段为内存实现；生产接 LISTEN/NOTIFY（见包注释）。
+// 为内存实现；生产接 LISTEN/NOTIFY（见包注释）。
 func (s *Subscription) C() <-chan int64 { return s.ch }
 
 // SessionID 返回订阅所属会话。

@@ -40,7 +40,7 @@ func (b *tokenBucket) take(now time.Time) (ok bool, retryAfter time.Duration) {
 }
 
 // Limiter 三级限流（org/user/session 令牌桶；MVP：api 层 session 桶先行接线，
-// org/user 桶待身份体系落地后启用——组件已支持任意 scope 键）。
+// org/user 桶已接线（期 3 §A principal 限流）——组件已支持任意 scope 键）。
 type Limiter struct {
 	mu      sync.Mutex
 	buckets map[string]*tokenBucket

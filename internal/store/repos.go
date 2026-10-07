@@ -16,7 +16,7 @@ import (
 // ErrNotFound 是资源不存在的哨兵错误（api 层映射为 404）。
 var ErrNotFound = errors.New("not found")
 
-// CreateOrg 幂等创建 org（MVP 单 org 跑通，quota 字段先预留）。
+// CreateOrg 幂等创建 org（多租户已落地（quota 键 daily_token/compute_seconds））。
 func (s *Store) CreateOrg(ctx context.Context, id, name string) error {
 	const q = `INSERT INTO orgs (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`
 	if _, err := s.Pool.Exec(ctx, q, id, name); err != nil {

@@ -163,7 +163,6 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		req.RestoreFrom = ""
 	}
 	s.Logger.Info("createSandbox: 请求", "session", req.SessionID, "blob_restore", blobRestore, "restore", req.RestoreFrom)
-	s.Logger.Info("createSandbox: 请求", "session", req.SessionID, "blob_restore", blobRestore, "restore", req.RestoreFrom)
 	sb, err := s.Driver.CreateSandbox(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
@@ -293,7 +292,7 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 	}
 	lineWriter.Flush()
 
-	// 结果「摘要 + 引用」：≤256KB 内联；更大外置工作区文件（MinIO 后置替换）
+	// 结果「摘要 + 引用」：≤256KB 内联；更大外置工作区文件（RustFS 已落地）
 	cached := map[string]any{"exit": result.Exit}
 	body := output.String()
 	if len(body) <= maxInlineOutput {
@@ -424,7 +423,7 @@ func (s *Server) writeSSE(w http.ResponseWriter, fl http.Flusher, v any) {
 	fl.Flush()
 }
 
-// externalize 把大输出写到宿主机工作区文件，返回 file:// 引用（MinIO 后置替换）。
+// externalize 把大输出写到宿主机工作区文件，返回 file:// 引用（RustFS 已落地）。
 func (s *Server) externalize(sandboxID, body string) (string, error) {
 	path := fmt.Sprintf("%s/%s/output-%d.txt", strings.TrimRight(s.WorkspaceRoot, "/"), sandboxID, time.Now().UnixNano())
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -607,7 +606,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"sandbox_id": id, "snapshot_ref": ref})
 }
 
-// Tier 3 拆除（文件已增量同步 MinIO 是前提；W2 简化为直接销毁）。
+// Tier 3 拆除（文件已增量同步 RustFS 是前提；W2 简化为直接销毁）。
 func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "sandboxID")
 	if err := s.Driver.Destroy(r.Context(), id); err != nil {

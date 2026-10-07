@@ -82,7 +82,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	}
 	if state.AgentConfig.Model == "" {
 		return RunOutput{}, restate.ToTerminalError(
-			fmt.Errorf("session %s has no agent config（session_object 未初始化）", in.SessionID))
+			fmt.Errorf("session %s has no agent config（session state not initialized）", in.SessionID))
 	}
 	// 版本绑定（正确性二期 ⑩）：run 绑定启动时的 config 快照——agent 升级/
 	// 会话 config 变化不改变本 run 的后续步骤（run 内确定性）；旧 run 无快照
