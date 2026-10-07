@@ -4,6 +4,7 @@
 DELETE FROM sandbox_execs e
 WHERE NOT EXISTS (SELECT 1 FROM sandboxes s WHERE s.sandbox_id = e.sandbox_id);
 
+-- 原含 ADD CONSTRAINT ... ON DELETE CASCADE：加后又被 008 解耦删除（effect
+-- 账本与沙箱生命周期解耦——评审 #3）——架构整洁 C3 删除死约束（保留 DROP
+-- 与孤儿清理，全量重放语义与终态 schema 一致）
 ALTER TABLE sandbox_execs DROP CONSTRAINT IF EXISTS sandbox_execs_sandbox_id_fkey;
-ALTER TABLE sandbox_execs ADD CONSTRAINT sandbox_execs_sandbox_id_fkey
-  FOREIGN KEY (sandbox_id) REFERENCES sandboxes (sandbox_id) ON DELETE CASCADE;
