@@ -45,6 +45,9 @@ var safeLimit = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?i?$`)
 type DockerDriver struct {
 	Runner        CommandRunner
 	WorkspaceRoot string // 宿主机工作区根（docker cp 文件快路径的暂存）
+	// SnapshotRoot 快照产物根（volume.tar 与工作区解耦——销毁沙箱不清快照；
+	// 真实 e2e 并发销毁实证 ENOENT）
+	SnapshotRoot string
 	// restoreTar/restoreID 暂存待恢复的卷 tar（CreateSandbox 创建后解回；单请求内）。
 	restoreTar string
 	restoreID  string
@@ -58,7 +61,9 @@ func NewDockerDriver(runner CommandRunner, workspaceRoot string) *DockerDriver {
 	if workspaceRoot == "" {
 		workspaceRoot = filepath.Join(os.TempDir(), "chronotope-workspaces")
 	}
-	return &DockerDriver{Runner: runner, WorkspaceRoot: workspaceRoot}
+	// 快照产物独立根（与工作区解耦——销毁不清快照；默认 <tmp>/chronotope-snapshots）
+	snapshotRoot := filepath.Join(os.TempDir(), "chronotope-snapshots")
+	return &DockerDriver{Runner: runner, WorkspaceRoot: workspaceRoot, SnapshotRoot: snapshotRoot}
 }
 
 func (d *DockerDriver) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
@@ -224,10 +229,16 @@ func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, 
 	if err := d.prepareHostDir(sandboxID); err != nil {
 		return "", err
 	}
-	tarPath := filepath.Join(d.WorkspaceRoot, sandboxID, "volume.tar")
+	// 快照产物写入 SnapshotRoot（期 3 真实 e2e 实证：存工作区内会被销毁清掉
+	// → 恢复永久 ENOENT）
+	snapDir := filepath.Join(d.SnapshotRoot, sandboxID)
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		return "", err
+	}
+	tarPath := filepath.Join(snapDir, "volume.tar")
 	if out, err := d.Runner.Run(ctx, "run", "--rm",
 		"--volumes-from", sandboxID,
-		"-v", filepath.Dir(tarPath)+":/backup",
+		"-v", snapDir+":/backup",
 		"alpine:3.20", "tar", "-cf", "/backup/volume.tar", "-C", "/workspace", "."); err != nil {
 		return "", fmt.Errorf("snapshot volume tar: %w: %s", err, strings.TrimSpace(string(out)))
 	}
