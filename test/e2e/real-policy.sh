@@ -43,7 +43,13 @@ sleep 3
 assert "非成员被拒（audit.approval_denied，仍挂起）" \
   bash -c 'grep -q "audit.approval_denied" /tmp/rpol-sse.out && ! grep -q "run.completed" /tmp/rpol-sse.out'
 curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' \
-  -d "{\"payload\":\"approve\",\"action_digest\":\"$DIGEST\",\"approver\":\"alice\"}"
+# class 2 每次调用都需审批——真实模型重试触发二次审批（实证挂起）→ 循环批准
+for a in $(seq 1 8); do
+  sleep 5
+  if grep -q '"type":"run.completed"' /tmp/rpol-sse.out 2>/dev/null; then break; fi
+  DIGEST2=$(python3 -c 'import json; t=open("/tmp/rpol-sse.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; ev=[e for e in m if e["type"]=="run.awaiting_approval"]; print(ev[-1]["payload"].get("action_digest","") if ev else "")' 2>/dev/null || echo "")
+  [ -n "$DIGEST2" ] && curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' -d "{\"payload\":\"approve\",\"action_digest\":\"$DIGEST2\",\"approver\":\"alice\"}"
+done
 wait "$RUN_PID" || true
 sleep 2
 kill "$SSE_PID" 2>/dev/null || true

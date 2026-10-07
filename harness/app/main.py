@@ -73,6 +73,18 @@ async def _misconfigured(message: str) -> AsyncIterator[dict[str, str]]:
     yield _sse(p.error("harness_misconfigured", message))
 
 
+async def _safe_stream(req: p.RunRequest, llm: LLMProvider):
+    """流异常捕获（真实 e2e 实证：模型 400 时流中断 EOF 而非 error 帧——
+    worker 收到 unexpected EOF → restate 僵尸 invocation 无限重试；此处转
+    error 帧让 worker 显式失败）。"""
+    try:
+        async for chunk in llm.stream(req):
+            yield chunk
+    except Exception as exc:  # noqa: BLE001——流异常统一转 error 帧
+        logger.exception("stream error run_id=%s", req.run_id)
+        yield llm.stream_error_chunk(f"model stream failed: {exc}")
+
+
 async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, str]]:
     """执行一段 agent 循环：模型流式调用 → delta 帧 → 工具分流 → done/交棒/error。"""
 
@@ -95,7 +107,10 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
         tool_calls: dict[int, dict] = {}
         usage = p.LLMUsage()
 
-        async for chunk in llm.stream(req):
+        async for chunk in _safe_stream(req, llm):
+            if getattr(chunk, "error", None):
+                yield _sse(p.error("model_stream_failed", str(chunk.error)))
+                return
             if chunk.delta:
                 total_bytes += len(chunk.delta.encode("utf-8"))
                 if total_bytes > req.max_output_bytes:

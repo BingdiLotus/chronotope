@@ -26,9 +26,8 @@ AID=$(echo "$AGENT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id
 
 # ① 写入（显式向量——嵌入模型凭据后置：Anthropic 无 embeddings 端点；
 # 挂载/回答断言仍为真实模型链路）
-EMB=$(python3 -c 'import json; print(json.dumps([0.01]*1024))')
 KN=""
-for i in $(seq 1 5); do KN=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/knowledge" -H 'content-type: application/json' -d "{\"content\":\"Chronotope 的口号是：让时间成为一等公民。\",\"embedding\":$EMB}" 2>/dev/null || true); [ -n "$KN" ] && break; sleep 2; done
+for i in $(seq 1 5); do KN=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/knowledge" -H 'content-type: application/json' -d '{"content":"Chronotope 的口号是：让时间成为一等公民。"}' 2>/dev/null || true); [ -n "$KN" ] && break; sleep 2; done
 assert "共享知识写入" \
   python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["id"], d' <<< "$KN"
 

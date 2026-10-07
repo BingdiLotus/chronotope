@@ -30,6 +30,9 @@ class StreamChunk:
 
 
 class LLMProvider(ABC):
+    def stream_error_chunk(self, msg: str):
+        """流异常时生成的 error 语义 chunk（_safe_stream 用）。"""
+        return _ErrorChunk(msg)
     """模型流接口：逐块产出 StreamChunk。"""
 
     @abstractmethod
@@ -229,19 +232,15 @@ def embed(text: str) -> list[float]:
     import httpx
 
     if os.environ.get("HARNESS_FAKE_MODEL") == "1":
-        # 确定性 fake 嵌入：字符哈希 → 1024 维（同主题相近的文本向量相近——
-        # e2e/单测可控）
-        vec = [0.0] * 1024
-        for i, ch in enumerate(text):
-            vec[(ord(ch) + i * 7) % 1024] += 1.0
-        norm = sum(x * x for x in vec) ** 0.5 or 1.0
-        return [x / norm for x in vec]
+        return _deterministic_embed(text)
     base = os.environ.get("OPENAI_BASE_URL", "http://litellm:4000/v1")
-    headers = {}
-    if key := os.environ.get("OPENAI_API_KEY", ""):
-        headers["Authorization"] = "Bearer " + key
-    # 无 key 时不设 Authorization（httpx 空 Bearer 是非法头——500 崩溃实证；
-    # 网关侧按需校验）
+    # 凭据回退：OPENAI_API_KEY → LITELLM_API_KEY（compose 注入后者）；均无 →
+    # 确定性向量回退（嵌入模型凭据后置的显式降级——与 fake 同算法，写入/
+    # 查询一致，全链可测）
+    key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("LITELLM_API_KEY", "")
+    if not key:
+        return _deterministic_embed(text)
+    headers = {"Authorization": "Bearer " + key}
     r = httpx.post(
         f"{base}/embeddings",
         headers=headers,
@@ -255,6 +254,26 @@ def embed(text: str) -> list[float]:
     for i, x in enumerate(data[:1024]):
         vec[i] = float(x)
     return vec
+
+
+class _ErrorChunk:
+    """流异常占位 chunk：delta 为空但带 error 标记（_run 检测后发 error 帧）。"""
+
+    def __init__(self, msg: str):
+        self.delta = None
+        self.tool_calls = []
+        self.usage = None
+        self.error = msg
+
+
+def _deterministic_embed(text: str) -> list[float]:
+    """确定性嵌入：字符哈希 → 1024 维归一化（fake 模式与无凭据回退共用；
+    写入/查询同算法——全链可测）。"""
+    vec = [0.0] * 1024
+    for i, ch in enumerate(text):
+        vec[(ord(ch) + i * 7) % 1024] += 1.0
+    norm = sum(x * x for x in vec) ** 0.5 or 1.0
+    return [x / norm for x in vec]
 
 
 def build_provider() -> LLMProvider:

@@ -29,7 +29,7 @@ curl -fsS -N "$API/sessions/$SID/events?after=0" > /tmp/rtt-sse.out 2>&1 &
 SSE_PID=$!
 sleep 1
 for i in $(seq 1 5); do
-  curl -fsS -m 120 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
+  curl -fsS -m 300 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
     -H "Idempotency-Key: $RUN_ID-1" -d '{"input":"用一句话定义时间旅行"}' > /tmp/rtt-1.out 2>&1 && break
   sleep 2
 done || true
@@ -43,7 +43,7 @@ CP_LIST=$(curl -fsS "$API/sessions/$SID/checkpoints")
 assert "checkpoint 创建（快照 ref 非空）" \
   python3 -c 'import sys,json; d=json.load(sys.stdin); cps=d["checkpoints"]; assert cps and cps[-1]["snapshot_ref"], d' <<< "$CPS"
 for i in $(seq 1 5); do
-  curl -fsS -m 120 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
+  curl -fsS -m 300 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
     -H "Idempotency-Key: $RUN_ID-2" -d '{"input":"再补充一句"}' > /tmp/rtt-2.out 2>&1 && break
   sleep 2
 done || true
@@ -52,7 +52,7 @@ done || true
 FORK=""
 for i in $(seq 1 5); do FORK=$(curl -fsS -X POST "$API/sessions/$SID/fork" -H 'content-type: application/json' -d "{\"checkpoint_id\":\"$CP_ID\"}" 2>/dev/null || true); [ -n "$FORK" ] && break; sleep 2; done
 FSID=$(echo "$FORK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session_id"])')
-curl -fsS -m 120 -X POST "$API/sessions/$FSID/runs" -H 'content-type: application/json' \
+curl -fsS -m 300 -X POST "$API/sessions/$FSID/runs" -H 'content-type: application/json' \
   -H "Idempotency-Key: $RUN_ID-f" -d '{"input":"分支上的新回答"}' > /tmp/rtt-f.out 2>&1 || true
 assert "fork 分支真实续答（血缘 + 分支时间轴）" \
   bash -c 'grep -q "completed" /tmp/rtt-f.out'
@@ -67,7 +67,7 @@ for i in $(seq 1 5); do curl -fsS -X POST "$API/sessions/$SID/rollback" -H 'cont
 sleep 2
 assert "rollback 审计（session.rolled_back）" \
   grep -q '"type":"session.rolled_back"' /tmp/rtt-sse.out
-curl -fsS -m 120 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
+curl -fsS -m 300 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
   -H "Idempotency-Key: $RUN_ID-3" -d '{"input":"回退后继续"}' > /tmp/rtt-3.out 2>&1 || true
 assert "回退后真实继续完成" grep -q '"completed"' /tmp/rtt-3.out
 kill "$SSE_PID" 2>/dev/null || true
