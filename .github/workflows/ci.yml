@@ -239,7 +239,7 @@ jobs:
             sleep 1
           done
           bash test/e2e/w10-timetravel.sh http://localhost:8080
-      - name: 工作区 blob 合同 e2e（内容寻址 + 销毁后 blob: 恢复）
+      - name: 工作区 blob 合同 e2e（内容寻址 + 销毁后 blob 恢复）
         env:
           HARNESS_FAKE_MODEL: "1"
           HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/b.txt","content":"blob合同内容"}}},{"final":"已写入。"}]'
