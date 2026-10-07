@@ -1,4 +1,4 @@
-package execproto
+package blobstore
 
 import (
 	"context"

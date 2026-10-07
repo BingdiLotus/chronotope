@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -720,6 +722,92 @@ func (h *Handler) diffSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, diff)
+}
+
+// POST /sessions/{id}/archive —— 冷层归档（期 2 §B）：老会话（默认 30 天无
+// 活动，ARCHIVE_MIN_AGE 可配）→ events/messages ndjson.gz 到 RustFS
+// archives/{org}/{session}/ + 清单行 + archived_at。MVP 不删热数据。
+func (h *Handler) archiveSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if _, err := h.Store.GetSession(r.Context(), sessionID); err != nil {
+		writeError(w, http.StatusNotFound, 404, "session not found")
+		return
+	}
+	// 年龄闸门先于 S3 检查（活跃期 409 语义不依赖归档是否启用）
+	if h.ArchiveMinAge > 0 {
+		if last, err := h.Store.SessionLastEventAt(r.Context(), sessionID); err == nil && !last.IsZero() &&
+			time.Since(last) < h.ArchiveMinAge {
+			writeError(w, http.StatusConflict, 409, "会话仍在活跃期（archive_min_age 未到）")
+			return
+		}
+	}
+	if h.Blob == nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "archive 未启用（无 S3 配置）")
+		return
+	}
+	events, err := h.Store.ListEvents(r.Context(), sessionID, 0, 100000)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	messages, err := h.Store.ListMessages(r.Context(), sessionID, 100000)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	orgID := "single-org"
+	if sess, sErr := h.Store.GetSession(r.Context(), sessionID); sErr == nil {
+		orgID = sess.OrgID
+	}
+	// 打包：ndjson.gz（真相 + 投影一并冷存）
+	var eb, mb bytes.Buffer
+	gzE := gzip.NewWriter(&eb)
+	for _, ev := range events {
+		b, _ := json.Marshal(ev)
+		_, _ = gzE.Write(append(b, '\n'))
+	}
+	_ = gzE.Close()
+	gzM := gzip.NewWriter(&mb)
+	for _, m := range messages {
+		b, _ := json.Marshal(m)
+		_, _ = gzM.Write(append(b, '\n'))
+	}
+	_ = gzM.Close()
+	bucketPath := strings.Join([]string{orgID, sessionID}, "/")
+	if err := h.Blob.PutBytes(r.Context(), "archives/"+bucketPath+"/events.ndjson.gz", eb.Bytes()); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, "archive events: "+err.Error())
+		return
+	}
+	if err := h.Blob.PutBytes(r.Context(), "archives/"+bucketPath+"/messages.ndjson.gz", mb.Bytes()); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, "archive messages: "+err.Error())
+		return
+	}
+	if err := h.Store.CreateArchive(r.Context(), store.Archive{
+		SessionID: sessionID, BucketPath: bucketPath,
+		EventsCount: int64(len(events)), MessagesCount: int64(len(messages)),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"session_id": sessionID, "bucket_path": bucketPath,
+		"events": len(events), "messages": len(messages),
+	})
+}
+
+// GET /sessions/{id}/archive —— 归档清单。
+func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	a, err := h.Store.GetArchive(r.Context(), sessionID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, 404, "archive not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
 }
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：

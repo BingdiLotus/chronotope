@@ -91,6 +91,7 @@ type Session struct {
 	RestateKey   *string
 	LastActiveAt *time.Time
 	DeletedAt    *time.Time
+	ArchivedAt   *time.Time // 冷层归档标记（期 2 §B）
 }
 
 // CreateSession 创建 session（id 由调用方生成；status=created，沙箱懒创建完成后 → ready）。
@@ -106,10 +107,10 @@ VALUES ($1, $2, $3, 'created', $1)`
 
 // GetSession 读取会话。
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
-	const q = `SELECT id, org_id, agent_id, status, restate_key, last_active_at, deleted_at FROM sessions WHERE id = $1`
+	const q = `SELECT id, org_id, agent_id, status, restate_key, last_active_at, deleted_at, archived_at FROM sessions WHERE id = $1`
 	var sess Session
 	err := s.Pool.QueryRow(ctx, q, id).Scan(
-		&sess.ID, &sess.OrgID, &sess.AgentID, &sess.Status, &sess.RestateKey, &sess.LastActiveAt, &sess.DeletedAt)
+		&sess.ID, &sess.OrgID, &sess.AgentID, &sess.Status, &sess.RestateKey, &sess.LastActiveAt, &sess.DeletedAt, &sess.ArchivedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

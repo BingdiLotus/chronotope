@@ -1,4 +1,4 @@
-package execproto
+package blobstore
 
 import (
 	"bytes"
@@ -105,3 +105,13 @@ func (b *BlobStore) EnsureBucket(ctx context.Context) error {
 
 // SyncWindow 是写路径的同步重试窗口（失败不阻断 run——标记 syncing 后重试）。
 const SyncWindow = 30 * time.Second
+
+// PutBytes 上传内存字节到指定对象键（归档等非内容寻址用途）。
+func (b *BlobStore) PutBytes(ctx context.Context, key string, data []byte) error {
+	if _, err := b.client.PutObject(ctx, b.bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
+		ContentType: "application/gzip",
+	}); err != nil {
+		return fmt.Errorf("blob: put bytes: %w", err)
+	}
+	return nil
+}

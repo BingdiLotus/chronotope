@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/events"
 	"github.com/bingdilotus/chronotope/internal/store"
@@ -48,6 +49,13 @@ type Store interface {
 	MarkDeliverableDelivered(ctx context.Context, id int64) error
 	// 事件投递（outbox，落地方案 §5）
 	Subscribe(ctx context.Context, sessionID, channel, target string) error
+	// 期 2 §B：usage 增量 rollup + 冷层归档
+	GetUsageWatermark(ctx context.Context) (int64, error)
+	ApplyUsageDelta(ctx context.Context, fromID, toID int64, deltas []store.UsageRow) error
+	RunStartedAt(ctx context.Context, runID string) (time.Time, error)
+	CreateArchive(ctx context.Context, a store.Archive) error
+	GetArchive(ctx context.Context, sessionID string) (*store.Archive, error)
+	SessionLastEventAt(ctx context.Context, sessionID string) (time.Time, error)
 	// 接纳屏障（评审 #6：queued 遗留重投扫描）
 	ListStaleQueuedRuns(ctx context.Context, olderThan time.Time, limit int) ([]*store.Run, error)
 	// journal 审计导出（正式版架构 期 1）
@@ -81,6 +89,10 @@ type RestateIngress interface {
 
 // Handler 是网关依赖集。
 type Handler struct {
+	// Blob 是冷层归档的 S3 门面（期 2 §B；nil = 归档未启用）。
+	Blob *blobstore.BlobStore
+	// ArchiveMinAge 是归档前的最小无活动时长（默认 30 天）。
+	ArchiveMinAge        time.Duration
 	Store                Store
 	DeliveryAllowPrivate bool // 事件投递 SSRF 放行（本地/e2e；生产拒绝）
 	Hub                  *events.Hub
@@ -108,6 +120,8 @@ func New(st Store, hub *events.Hub, ingress RestateIngress) *Handler {
 		Logger:       slog.Default(),
 		// session 桶默认：1 run/5s、突发 3（三级限流的 session 级；org/user 待身份体系）
 		Limiter: NewLimiter(0.2, 3),
+		// 归档（期 2 §B）：默认 30 天无活动才可归档；Blob 为空时端点 503
+		ArchiveMinAge: 30 * 24 * time.Hour,
 	}
 }
 
@@ -151,6 +165,8 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/fork", h.forkSession)
 		r.Post("/rollback", h.rollbackSession)
 		r.Get("/diff", h.diffSessions)
+		r.Post("/archive", h.archiveSession) // 冷层归档（期 2 §B）
+		r.Get("/archive", h.getArchive)
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Get("/runs/{runID}/audit", h.runAudit) // journal 审计导出（期 1：重放轨迹 + dedupe 证据链）

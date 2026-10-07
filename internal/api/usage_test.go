@@ -83,10 +83,38 @@ func TestAggregatorPassRebuildsSessions(t *testing.T) {
 	if err := a.pass(context.Background()); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-	if len(fs.usage) == 0 {
+	if len(fs.usageBuckets) == 0 {
 		t.Fatal("应产出 usage 行")
 	}
-	if a.watermark == 0 {
+	if fs.watermark == 0 {
 		t.Fatal("水位应推进")
+	}
+	// 幂等：同水位重跑 → 零增量（delta 不变，usage 不变）
+	var totalBefore float64
+	for _, u := range fs.usageBuckets {
+		totalBefore += u.ActiveSeconds
+	}
+	if err := a.pass(context.Background()); err != nil {
+		t.Fatalf("重跑 pass: %v", err)
+	}
+	var totalAfter float64
+	for _, u := range fs.usageBuckets {
+		totalAfter += u.ActiveSeconds
+	}
+	if totalAfter != totalBefore {
+		t.Fatalf("同水位重跑应零增量: %v → %v", totalBefore, totalAfter)
+	}
+	// 新事件 → delta 累加
+	fs.addEvent("s_1", event.RunStarted)
+	fs.addEvent("s_1", event.RunCompleted)
+	if err := a.pass(context.Background()); err != nil {
+		t.Fatalf("新事件 pass: %v", err)
+	}
+	var totalNew float64
+	for _, u := range fs.usageBuckets {
+		totalNew += u.ActiveSeconds
+	}
+	if totalNew <= totalAfter {
+		t.Fatalf("新事件应累加: %v → %v", totalAfter, totalNew)
 	}
 }

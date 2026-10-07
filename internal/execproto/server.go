@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -52,7 +53,7 @@ type Server struct {
 	Driver Driver
 	Store  SandboxStore
 	// Blob 是工作区 blob 合同（期 2 §A）；nil = 禁用（无 S3 时回退纯卷语义）。
-	Blob *BlobStore
+	Blob *blobstore.BlobStore
 	// WorkspaceRoot 与 docker driver 同源（大输出外置的宿主目录）。
 	WorkspaceRoot string
 	Logger        *slog.Logger

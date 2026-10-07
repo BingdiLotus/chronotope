@@ -42,6 +42,9 @@ type fakeStore struct {
 	checkpoints    map[string]store.Checkpoint
 	forks          []map[string]any
 	rollbacks      []map[string]any
+	watermark      int64
+	usageBuckets   map[string]store.UsageRow
+	archives       map[string]store.Archive
 	pendingOutbox  []*store.PendingOutboxRow
 	pendingType    string
 	pendingPayload []byte
@@ -271,6 +274,49 @@ func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, s
 }
 
 func (f *fakeStore) LatestEventSeq(_ context.Context, _ string) (int64, error) { return 0, nil }
+func (f *fakeStore) GetUsageWatermark(_ context.Context) (int64, error)        { return f.watermark, nil }
+func (f *fakeStore) ApplyUsageDelta(_ context.Context, fromID, toID int64, deltas []store.UsageRow) error {
+	for _, u := range deltas {
+		key := u.SessionID + "|" + u.Bucket.Format(time.RFC3339)
+		if f.usageBuckets == nil {
+			f.usageBuckets = map[string]store.UsageRow{}
+		}
+		ex := f.usageBuckets[key]
+		ex.SessionID, ex.Bucket = u.SessionID, u.Bucket
+		ex.ActiveSeconds += u.ActiveSeconds
+		ex.TokensIn += u.TokensIn
+		ex.TokensOut += u.TokensOut
+		ex.ComputeSeconds += u.ComputeSeconds
+		f.usageBuckets[key] = ex
+	}
+	if f.watermark != fromID {
+		return fmt.Errorf("watermark 竞态：期望 %d 实际 %d", fromID, f.watermark)
+	}
+	f.watermark = toID
+	return nil
+}
+func (f *fakeStore) RunStartedAt(_ context.Context, runID string) (time.Time, error) {
+	for _, e := range f.events {
+		if e.RunID == runID && e.Type == event.RunStarted {
+			return e.At, nil
+		}
+	}
+	return time.Time{}, store.ErrNotFound
+}
+func (f *fakeStore) CreateArchive(_ context.Context, a store.Archive) error {
+	f.archives[a.SessionID] = a
+	return nil
+}
+func (f *fakeStore) GetArchive(_ context.Context, sessionID string) (*store.Archive, error) {
+	a, ok := f.archives[sessionID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &a, nil
+}
+func (f *fakeStore) SessionLastEventAt(_ context.Context, _ string) (time.Time, error) {
+	return time.Now(), nil
+}
 func (f *fakeStore) CreateCheckpoint(_ context.Context, cp store.Checkpoint) (bool, error) {
 	if f.checkpoints == nil {
 		f.checkpoints = map[string]store.Checkpoint{}
@@ -1300,5 +1346,38 @@ func TestTimeTravelEndpoints(t *testing.T) {
 	rec = doJSON(t, h.Router(), http.MethodGet, "/sessions/s_seed/diff?against=s_other", "", nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "common_prefix") {
 		t.Fatalf("diff 应 200: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestArchiveEndpoints 期 2 §B：归档（活跃期 409/成功/清单/未启用 503）。
+func TestArchiveEndpoints(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	h.ArchiveMinAge = time.Hour
+	// 活跃期（fake 最后事件 = 现在）→ 409
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/archive", `{}`, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("活跃期应 409: %d %s", rec.Code, rec.Body.String())
+	}
+	// 超过最小年龄 → 归档成功（fake S3：Blob nil 则 503——此处只验证年龄闸门后的流程走通
+	// 需 Blob：注入 fake？——单测验证 503 路径（无 S3 配置）与年龄闸门
+	h.ArchiveMinAge = 0
+	rec = doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/archive", `{}`, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("无 S3 配置应 503: %d %s", rec.Code, rec.Body.String())
+	}
+	// GET 清单：无归档 → 404
+	rec = doJSON(t, h.Router(), http.MethodGet, "/sessions/s_seed/archive", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("无归档应 404: %d", rec.Code)
+	}
+	// 有清单 → 200
+	if fs.archives == nil {
+		fs.archives = map[string]store.Archive{}
+	}
+	fs.archives["s_seed"] = store.Archive{SessionID: "s_seed", BucketPath: "org/s_seed", EventsCount: 5, MessagesCount: 3}
+	rec = doJSON(t, h.Router(), http.MethodGet, "/sessions/s_seed/archive", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bucket_path") {
+		t.Fatalf("清单应 200: %d %s", rec.Code, rec.Body.String())
 	}
 }

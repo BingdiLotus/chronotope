@@ -130,6 +130,11 @@ HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
 for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
 bash test/e2e/w11-blob.sh "$API" > /tmp/demo-blob.log 2>&1 && pass "工作区 blob 合同（4 项断言）" || { fail "工作区 blob 合同"; tail -5 /tmp/demo-blob.log; }
 
+# 17. 冷层归档（期 2 §B：老会话 → RustFS 冷层 + 清单 + archived_at）
+ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate api harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w12-archive.sh "$API" > /tmp/demo-arc.log 2>&1 && pass "冷层归档（4 项断言）" || { fail "冷层归档"; tail -5 /tmp/demo-arc.log; }
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

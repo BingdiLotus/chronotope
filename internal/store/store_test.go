@@ -781,3 +781,71 @@ func TestWorkspaceFileIndex(t *testing.T) {
 		t.Fatalf("应单行且为最新 hash: %+v err=%v", files, err)
 	}
 }
+
+// TestUsageDeltaWatermark 期 2 §B：delta 加算 + 水位推进 + 同水位重跑零增量（幂等）。
+func TestUsageDeltaWatermark(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_delta_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, "a_"+key); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	// 测试库水位跨跑残留（014 INSERT ON CONFLICT 不重置）——测试前归零
+	if _, err := s.Pool.Exec(ctx, `UPDATE usage_watermark SET last_event_id = 0 WHERE id = 1`); err != nil {
+		t.Fatalf("重置水位: %v", err)
+	}
+	bucket := time.Now().UTC().Truncate(time.Minute)
+	deltas := []store.UsageRow{{SessionID: key, Bucket: bucket, ActiveSeconds: 10, TokensIn: 4, TokensOut: 7}}
+	if err := s.ApplyUsageDelta(ctx, 0, 5, deltas); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	// 同水位重跑 → 竞态错误（水位已推进）——幂等由「不重复应用」保证
+	if err := s.ApplyUsageDelta(ctx, 0, 5, deltas); err == nil {
+		t.Fatal("同水位重跑应竞态拒绝（水位已推进）")
+	}
+	wm, _ := s.GetUsageWatermark(ctx)
+	if wm != 5 {
+		t.Fatalf("水位应推进到 5: %d", wm)
+	}
+	// 新批次 → 加算
+	if err := s.ApplyUsageDelta(ctx, 5, 8, deltas); err != nil {
+		t.Fatalf("delta2: %v", err)
+	}
+	usage, _ := s.ListUsage(ctx, key)
+	if len(usage) != 1 || usage[0].ActiveSeconds != 20 || usage[0].TokensOut != 14 {
+		t.Fatalf("两次 delta 应加算（10→20）: %+v", usage)
+	}
+}
+
+// TestArchiveCRUD 期 2 §B：归档清单 + archived_at 标记。
+func TestArchiveCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_arc_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, "a_"+key); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	if err := s.CreateArchive(ctx, store.Archive{SessionID: key, BucketPath: "o/" + key, EventsCount: 5, MessagesCount: 3}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	got, err := s.GetArchive(ctx, key)
+	if err != nil || got.BucketPath != "o/"+key || got.EventsCount != 5 {
+		t.Fatalf("get: %+v err=%v", got, err)
+	}
+	sess, _ := s.GetSession(ctx, key)
+	if sess.ArchivedAt == nil {
+		t.Fatal("archived_at 应标记")
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/execproto"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
@@ -66,7 +67,7 @@ func main() {
 	}
 	// 工作区 blob 合同（期 2 §A）：RUSTFS_ENDPOINT 未配置时禁用（纯卷语义回退）
 	if endpoint := envOr("RUSTFS_ENDPOINT", ""); endpoint != "" {
-		blob, err := execproto.NewBlobStore(endpoint,
+		blob, err := blobstore.NewBlobStore(endpoint,
 			envOr("RUSTFS_ACCESS_KEY", "rustfsadmin"),
 			envOr("RUSTFS_SECRET_KEY", "rustfsadmin"),
 			envOr("RUSTFS_BUCKET", "workspaces"),

@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/bingdilotus/chronotope/internal/api"
+	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/events"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
@@ -45,6 +46,26 @@ func main() {
 	defer st.Close()
 
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
+	// 冷层归档（期 2 §B）：RUSTFS_ENDPOINT 未配置时归档端点 503
+	if endpoint := envOr("ARCHIVE_ENDPOINT", envOr("RUSTFS_ENDPOINT", "")); endpoint != "" {
+		if blob, err := blobstore.NewBlobStore(endpoint,
+			envOr("RUSTFS_ACCESS_KEY", "chronotope"),
+			envOr("RUSTFS_SECRET_KEY", "chronotope_dev"),
+			envOr("RUSTFS_BUCKET", "workspaces"),
+			envOr("RUSTFS_SECURE", "") == "true"); err == nil {
+			if err := blob.EnsureBucket(context.Background()); err == nil {
+				h.Blob = blob
+				slog.Info("冷层归档已启用", "endpoint", endpoint)
+			} else {
+				slog.Warn("归档 bucket 初始化失败（归档禁用）", "err", err)
+			}
+		}
+	}
+	if v := os.Getenv("ARCHIVE_MIN_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			h.ArchiveMinAge = d
+		}
+	}
 	h.DeliveryAllowPrivate = os.Getenv("OUTBOX_ALLOW_PRIVATE") == "true"
 	if v := os.Getenv("EXECUTOR_URL"); v != "" {
 		h.Executor = api.NewHTTPExecutor(v)
