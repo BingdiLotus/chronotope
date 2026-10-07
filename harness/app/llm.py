@@ -34,7 +34,6 @@ class LLMProvider(ABC):
     def stream_error_chunk(self, msg: str):
         """流异常时生成的 error 语义 chunk（_safe_stream 用）。"""
         return _ErrorChunk(msg)
-    """模型流接口：逐块产出 StreamChunk。"""
 
     @abstractmethod
     def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
@@ -237,7 +236,7 @@ def embed(text: str) -> list[float]:
 
     if os.environ.get("HARNESS_FAKE_MODEL") == "1":
         return _deterministic_embed(text)
-    base = os.environ.get("OPENAI_BASE_URL", "http://litellm:4000/v1")
+    base = os.environ.get("LITELLM_BASE_URL", os.environ.get("OPENAI_BASE_URL", "http://litellm:4000/v1"))
     # 凭据回退：OPENAI_API_KEY → LITELLM_API_KEY（compose 注入后者）；均无 →
     # 确定性向量回退（嵌入模型凭据后置的显式降级——与 fake 同算法，写入/
     # 查询一致，全链可测）

@@ -19,7 +19,7 @@ async def run_api_tool(name: str, arguments: dict[str, Any]) -> str:
     if name == "http_request":
         return await _http_request(arguments)
     if name == "web_search":
-        return json.dumps({"error": "web_search 未配置（W1 后置，需检索 API key）"}, ensure_ascii=False)
+        return json.dumps({"error": "web_search 未配置（检索 API 凭据后置——平台后置项）"}, ensure_ascii=False)
     return json.dumps({"error": f"未知 API 工具 {name}"}, ensure_ascii=False)
 
 

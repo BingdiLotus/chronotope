@@ -23,23 +23,18 @@ type Bucket = {
 };
 
 type Memory = {
-  summaries: { topic: string; version: number; summary: string; created_by_run?: string }[];
-  items: { topic: string; kind: string; content: string; source_run_id?: string }[];
+  summaries: { topic: string; version: number; summary: string }[];
+  items: { topic: string; kind: string; content: string }[];
 };
 
 type Checkpoint = {
   id: string;
-  session_id: string;
   seq: number;
   snapshot_ref: string;
-  created_at: string;
 };
 
 type SessionMeta = {
   id: string;
-  agent_id: string;
-  status: string;
-  last_active_at: string | null;
   forked_from_session?: string;
   forked_at_seq?: number;
 };

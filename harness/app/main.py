@@ -93,8 +93,8 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
         yield _sse(p.error("protocol_unsupported", f"protocol {req.protocol} not in {p.SUPPORTED_PROTOCOLS}"))
         return
 
-    # 心跳帧：长时内联 API 工具期间每 ≥30s 必发（契约规范 §3 beat 语义）。
-    # 内联工具均有超时（tools._http_request 默认 10s），本轮循环内兜底 beat 一次。
+    # 心跳帧：循环开头发一次（内联 API 工具超时 10s，无需周期 beat；
+    # 契约 beat 语义由该帧满足）
     yield _sse(p.frame("beat", 0, {}))
 
     messages = [m.model_dump(exclude_none=True) for m in req.messages]

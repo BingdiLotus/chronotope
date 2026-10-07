@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 // run 树拓扑图 e2e（期 2 §C 后置 #3）：subagent.spawned 派生边 + 终态渲染。
 // 前置：平台 API 运行于 API_URL；harness 带 spawn_subagent 脚本。
-// 编排：scripts/console-rt-e2e.sh。
+// 编排：scripts/console-e2e.sh runtree。
 
 const API = process.env.API_URL || "http://localhost:8080";
 
@@ -19,13 +19,6 @@ let sessionID: string;
 
 test.beforeAll(async () => {
   const org = `org-rt-${Date.now()}`;
-  const child = await api(`/orgs/org-rt-child/agents`, {
-    method: "POST",
-    body: JSON.stringify({
-      name: "rt-child",
-      config: { model: "chronotope-subagent", instructions: "子任务助手。", tools: [], version: 1 },
-    }),
-  });
   const parent = await api(`/orgs/${org}/agents`, {
     method: "POST",
     body: JSON.stringify({

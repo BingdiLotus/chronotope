@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 PROTOCOL_VERSION = "1.0"
 
-# 平台同时支持最近 2 个协议版本；run 绑定协议版本路由（蓝绿）
+# 当前仅支持协议 1.0（预留蓝绿升级）；run 绑定协议版本路由（蓝绿）
 SUPPORTED_PROTOCOLS = {"1.0"}
 
 Role = Literal["system", "user", "assistant", "tool"]
@@ -21,6 +21,7 @@ FrameType = Literal["delta", "tool_call", "turn_end", "done", "error", "beat"]
 
 # 工具名词汇表（硬约束，只增不改）——框架自有工具名必须映射后发出
 VOCABULARY = {
+    "next_speaker",  # 群聊主持（W7 控制工具——CONTROL_TOOLS 同列，词汇表补录）
     "bash",
     "run_python",
     "read_file",
@@ -75,18 +76,6 @@ class LLMUsage(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     usage_partial: bool = False
-
-
-class DonePayload(BaseModel):
-    final: str
-    usage: LLMUsage = Field(default_factory=LLMUsage)
-    truncated: bool | None = None
-    usage_partial: bool | None = None
-
-
-class ErrorPayload(BaseModel):
-    code: str
-    message: str
 
 
 class Frame(BaseModel):

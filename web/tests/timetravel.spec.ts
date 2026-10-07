@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 // 时空视图 e2e（期 2 §C）：checkpoint 标记 / fork 血缘 / rollback 审计 / diff 差集。
 // 前置：平台 API 运行于 API_URL（默认 localhost:8080）；harness fake plain 模式。
-// 编排：scripts/console-tt-e2e.sh（起 api + fake harness + web + 跑本测试）。
+// 编排：scripts/console-e2e.sh tt（起 api + fake harness + web + 跑本测试）。
 
 const API = process.env.API_URL || "http://localhost:8080";
 
