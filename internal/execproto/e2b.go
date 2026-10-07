@@ -91,6 +91,12 @@ func (d *E2BDriver) Snapshot(ctx context.Context, sandboxID string) (string, err
 }
 
 // Destroy → E2B 删除（Tier 3）。
+// ListOrphanContainers：E2B 沙箱生命周期由 E2B 侧 TTL 自动回收（微 VM 无本地
+// 容器残留面）——sweep 空操作；容器卷泄漏是 docker driver 专属问题。
+func (d *E2BDriver) ListOrphanContainers(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (d *E2BDriver) Destroy(ctx context.Context, sandboxID string) error {
 	return d.API.Delete(ctx, sandboxID)
 }
