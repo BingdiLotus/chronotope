@@ -193,7 +193,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.web
     environment:
-      API_URL: http://localhost:8080
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080} # 构建期注入（页面直连）
     ports:
       - "3000:3000"
 
