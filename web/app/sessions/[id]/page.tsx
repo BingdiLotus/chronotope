@@ -1,7 +1,8 @@
 "use client";
 
-// 会话页（W4 控制台 + P2-2 人控闭环）：时间轴回放（SSE after=seq）+ 人控操作
-// （class 2 审批批准/拒绝、欠费冻结解冻）+ 分层记忆面板 + 三轴计量。
+// 会话页（W4 控制台 + P2-2 人控闭环 + 期 2 §C 时空视图）：时间轴回放
+// （SSE after=seq + checkpoint 标记）+ 人控操作 + 时空操作（checkpoint 树 /
+// fork / rollback / diff）+ 分层记忆面板 + 三轴计量。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
@@ -26,6 +27,29 @@ type Memory = {
   items: { topic: string; kind: string; content: string; source_run_id?: string }[];
 };
 
+type Checkpoint = {
+  id: string;
+  session_id: string;
+  seq: number;
+  snapshot_ref: string;
+  created_at: string;
+};
+
+type SessionMeta = {
+  id: string;
+  agent_id: string;
+  status: string;
+  last_active_at: string | null;
+  forked_from_session?: string;
+  forked_at_seq?: number;
+};
+
+type Diff = {
+  common_prefix: number;
+  only_a: { seq: number; type: string; payload: Record<string, unknown>; at: string }[];
+  only_b: { seq: number; type: string; payload: Record<string, unknown>; at: string }[];
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
 export default function SessionPage() {
@@ -33,9 +57,22 @@ export default function SessionPage() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [memory, setMemory] = useState<Memory>({ summaries: [], items: [] });
+  const [meta, setMeta] = useState<SessionMeta | null>(null);
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [connState, setConnState] = useState("connecting");
   const [busy, setBusy] = useState<string>("");
+  const [notice, setNotice] = useState("");
+  const [forkResult, setForkResult] = useState<{ session_id: string; at_seq: number } | null>(null);
+  const [diffAgainst, setDiffAgainst] = useState("");
+  const [diff, setDiff] = useState<Diff | null>(null);
   const lastSeq = useRef(0);
+
+  const refreshCheckpoints = () => {
+    fetch(`${API_BASE}/sessions/${id}/checkpoints`)
+      .then((r) => r.json())
+      .then((d) => setCheckpoints(d.checkpoints || []))
+      .catch(() => {});
+  };
 
   // 时间轴：断线重连按 after=seq 续读（seq 允许 gap）
   useEffect(() => {
@@ -46,8 +83,19 @@ export default function SessionPage() {
       const ev: TimelineEvent = JSON.parse(msg.data);
       lastSeq.current = ev.seq;
       setEvents((prev) => [...prev.slice(-199), ev]);
+      if (ev.type === "session.checkpoint" || ev.type === "session.rolled_back" || ev.type === "session.forked") {
+        refreshCheckpoints();
+      }
     };
     return () => es.close();
+  }, [id]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/sessions/${id}`)
+      .then((r) => r.json())
+      .then((d) => setMeta(d))
+      .catch(() => {});
+    refreshCheckpoints();
   }, [id]);
 
   useEffect(() => {
@@ -90,17 +138,51 @@ export default function SessionPage() {
   const pendingApproval = Object.entries(runStates).find(([, t]) => t === "run.awaiting_approval");
   const frozenRun = Object.entries(runStates).find(([, t]) => t === "run.frozen");
 
-  const act = async (label: string, fn: () => Promise<Response>) => {
+  const act = async (label: string, fn: () => Promise<Response>, after?: (r: Response) => void) => {
     setBusy(label);
+    setNotice("");
     try {
       const r = await fn();
       if (!r.ok) throw new Error(await r.text());
+      if (after) after(r);
+      setNotice(`✓ ${label} 完成`);
     } catch (e) {
-      console.error("action failed", e);
+      setNotice(`✗ ${label} 失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy("");
     }
   };
+
+  const createCheckpoint = () =>
+    act("创建检查点", () =>
+      fetch(`${API_BASE}/sessions/${id}/checkpoints`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }),
+    ).then(refreshCheckpoints);
+
+  const forkAt = (cp: Checkpoint) =>
+    act("Fork 分支", () =>
+      fetch(`${API_BASE}/sessions/${id}/fork`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ checkpoint_id: cp.id }),
+      }),
+      (r) => r.json().then((d) => setForkResult(d)),
+    );
+
+  const rollbackTo = (cp: Checkpoint) =>
+    act("回退", () =>
+      fetch(`${API_BASE}/sessions/${id}/rollback`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ checkpoint_id: cp.id }),
+      }),
+    ).then(refreshCheckpoints);
+
+  const runDiff = () =>
+    act(
+      "对比",
+      () => fetch(`${API_BASE}/sessions/${id}/diff?against=${encodeURIComponent(diffAgainst)}`),
+      (r) => r.json().then((d) => setDiff(d)),
+    );
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem", maxWidth: 860, margin: "0 auto" }}>
@@ -108,7 +190,87 @@ export default function SessionPage() {
         <a href="/">← 会话列表</a>
       </p>
       <h1>会话 {id}</h1>
-      <p style={{ color: "#666" }}>时间轴连接状态：{connState}</p>
+      <p style={{ color: "#666" }}>
+        时间轴连接状态：{connState}
+        {meta?.forked_from_session && (
+          <>
+            {" · "}分支自{" "}
+            <a href={`/sessions/${meta.forked_from_session}`} data-testid="forked-breadcrumb">
+              {meta.forked_from_session.slice(0, 12)}…@{meta.forked_at_seq}
+            </a>
+          </>
+        )}
+      </p>
+
+      {/* 时空操作（期 2 §C：checkpoint 树 + fork/rollback/diff） */}
+      <div data-testid="timetravel-panel" style={{ border: "1px solid #2563eb", background: "#eff6ff", borderRadius: 8, padding: 12, margin: "12px 0" }}>
+        <strong>时空视图</strong>（checkpoint(session, seq) 钉住时间×空间；真相不可变——回退追加审计事件）
+        <div style={{ margin: "8px 0" }}>
+          <button data-testid="create-checkpoint-btn" disabled={busy !== ""} style={btnStyle("blue")} onClick={createCheckpoint}>
+            创建检查点
+          </button>{" "}
+          {notice && <span style={{ color: notice.startsWith("✓") ? "#16a34a" : "#dc2626", marginLeft: 8 }}>{notice}</span>}
+        </div>
+        {checkpoints.length > 0 && (
+          <ul data-testid="checkpoint-list" style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 14 }}>
+            {checkpoints.map((cp) => (
+              <li key={cp.id} style={{ margin: "4px 0" }} data-testid={`checkpoint-${cp.id}`}>
+                <span style={{ fontFamily: "monospace" }}>{cp.id.slice(0, 14)}…</span>{" "}
+                <span style={{ color: "#888" }}>seq={cp.seq}</span>{" "}
+                <span style={{ color: "#aaa" }}>{cp.snapshot_ref ? `快照 ${cp.snapshot_ref.slice(0, 18)}…` : "无快照"}</span>{" "}
+                <button data-testid={`fork-${cp.id}`} disabled={busy !== ""} style={btnStyle("blue")} onClick={() => forkAt(cp)}>
+                  Fork
+                </button>{" "}
+                <button data-testid={`rollback-${cp.id}`} disabled={busy !== ""} style={btnStyle("red")} onClick={() => rollbackTo(cp)}>
+                  回退
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {checkpoints.length === 0 && <p style={{ color: "#999", fontSize: 13 }}>暂无检查点。</p>}
+        {forkResult && (
+          <p data-testid="fork-result" style={{ fontSize: 14 }}>
+            已派生分支：<a href={`/sessions/${forkResult.session_id}`}>{forkResult.session_id}</a>（at_seq={forkResult.at_seq}）
+          </p>
+        )}
+        <div style={{ marginTop: 8, fontSize: 14 }}>
+          对比分支会话：
+          <input
+            data-testid="diff-input"
+            value={diffAgainst}
+            onChange={(e) => setDiffAgainst(e.target.value)}
+            placeholder="分支会话 id"
+            style={{ margin: "0 8px", padding: 4, width: 220, fontFamily: "monospace" }}
+          />
+          <button data-testid="diff-btn" disabled={busy !== "" || diffAgainst === ""} style={btnStyle("blue")} onClick={runDiff}>
+            对比
+          </button>
+        </div>
+        {diff && (
+          <div data-testid="diff-view" style={{ marginTop: 8, fontSize: 13, borderTop: "1px solid #c7d2fe", paddingTop: 8 }}>
+            公共前缀 {diff.common_prefix} 条 · 本会话独有 {diff.only_a.length} · 对方独有 {diff.only_b.length}
+            <div style={{ display: "flex", gap: 12, marginTop: 6 }}>
+              <div style={{ flex: 1 }}>
+                <strong>本会话</strong>
+                {diff.only_a.map((e) => (
+                  <div key={`a-${e.seq}`} style={{ fontFamily: "monospace", fontSize: 12 }}>
+                    {e.type}
+                  </div>
+                ))}
+              </div>
+              <div style={{ flex: 1 }}>
+                <strong>分支</strong>
+                {diff.only_b.map((e) => (
+                  <div key={`b-${e.seq}`} style={{ fontFamily: "monospace", fontSize: 12 }}>
+                    {e.type}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* 人控操作区（P2-2）：审批 / 解冻 */}
       {(pendingApproval || frozenRun) && (
@@ -196,13 +358,25 @@ export default function SessionPage() {
 
       <h2>时间轴回放（最近 200 条）</h2>
       <div data-testid="timeline" style={{ border: "1px solid #ddd", borderRadius: 8, maxHeight: 320, overflow: "auto", padding: 8 }}>
-        {events.map((ev) => (
-          <div key={ev.seq} style={{ fontFamily: "monospace", fontSize: 12, padding: "2px 0" }}>
-            <span style={{ color: "#888" }}>{new Date(ev.at).toLocaleTimeString()}</span>{" "}
-            <strong>{ev.type}</strong>{" "}
-            <span style={{ color: "#555" }}>{JSON.stringify(ev.payload)}</span>
-          </div>
-        ))}
+        {events.map((ev) =>
+          ev.type === "session.checkpoint" ? (
+            <div
+              key={ev.seq}
+              data-testid="checkpoint-marker"
+              style={{ fontFamily: "monospace", fontSize: 12, padding: "2px 0", background: "#dbeafe", borderLeft: "4px solid #2563eb", margin: "2px 0" }}
+            >
+              <span style={{ color: "#888" }}>{new Date(ev.at).toLocaleTimeString()}</span>{" "}
+              <strong>⏱ checkpoint</strong>{" "}
+              <span style={{ color: "#555" }}>{JSON.stringify(ev.payload)}</span>
+            </div>
+          ) : (
+            <div key={ev.seq} style={{ fontFamily: "monospace", fontSize: 12, padding: "2px 0" }}>
+              <span style={{ color: "#888" }}>{new Date(ev.at).toLocaleTimeString()}</span>{" "}
+              <strong>{ev.type}</strong>{" "}
+              <span style={{ color: "#555" }}>{JSON.stringify(ev.payload)}</span>
+            </div>
+          ),
+        )}
         {events.length === 0 && <p style={{ color: "#999" }}>暂无事件。</p>}
       </div>
 
@@ -255,5 +429,5 @@ export default function SessionPage() {
 
 function btnStyle(color: "green" | "red" | "blue"): React.CSSProperties {
   const bg = { green: "#16a34a", red: "#dc2626", blue: "#2563eb" }[color];
-  return { background: bg, color: "#fff", border: "none", borderRadius: 6, padding: "8px 14px", cursor: "pointer" };
+  return { background: bg, color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontSize: 13 };
 }

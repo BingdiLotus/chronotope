@@ -220,6 +220,8 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": sess.ID, "agent_id": sess.AgentID, "status": sess.Status,
 		"last_active_at": sess.LastActiveAt, "recent_events": projected,
+		// 分支血缘（期 2 §C：控制台面包屑）
+		"forked_from_session": sess.ForkedFromSession, "forked_at_seq": sess.ForkedAtSeq,
 	})
 }
 
@@ -721,7 +723,25 @@ func (h *Handler) diffSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, diff)
+	// EventRow 无 json 标签（键为大写）——投影为 sseEvent 同构（控制台渲染契约）
+	type diffSide struct {
+		Seq     int64           `json:"seq"`
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+		At      time.Time       `json:"at"`
+	}
+	proj := func(rows []store.EventRow) []diffSide {
+		out := make([]diffSide, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, diffSide{Seq: row.Seq, Type: string(row.Type), Payload: row.Payload, At: row.At})
+		}
+		return out
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"common_prefix": diff.CommonPrefix,
+		"only_a":        proj(diff.OnlyA),
+		"only_b":        proj(diff.OnlyB),
+	})
 }
 
 // POST /sessions/{id}/archive —— 冷层归档（期 2 §B）：老会话（默认 30 天无

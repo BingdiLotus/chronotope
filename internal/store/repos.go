@@ -84,14 +84,16 @@ func (s *Store) GetAgent(ctx context.Context, id string) (*Agent, error) {
 
 // Session 是 sessions 表行。
 type Session struct {
-	ID           string
-	OrgID        string
-	AgentID      string
-	Status       sessionapi.SessionPhase
-	RestateKey   *string
-	LastActiveAt *time.Time
-	DeletedAt    *time.Time
-	ArchivedAt   *time.Time // 冷层归档标记（期 2 §B）
+	ID                string
+	OrgID             string
+	AgentID           string
+	Status            sessionapi.SessionPhase
+	RestateKey        *string
+	LastActiveAt      *time.Time
+	DeletedAt         *time.Time
+	ArchivedAt        *time.Time // 冷层归档标记（期 2 §B）
+	ForkedFromSession string     // 分支血缘（期 2 §C 面包屑；fork 时记录）
+	ForkedAtSeq       int64      // 分支点位（父会话事件水位）
 }
 
 // CreateSession 创建 session（id 由调用方生成；status=created，沙箱懒创建完成后 → ready）。
@@ -107,10 +109,10 @@ VALUES ($1, $2, $3, 'created', $1)`
 
 // GetSession 读取会话。
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
-	const q = `SELECT id, org_id, agent_id, status, restate_key, last_active_at, deleted_at, archived_at FROM sessions WHERE id = $1`
+	const q = `SELECT id, org_id, agent_id, status, restate_key, last_active_at, deleted_at, archived_at, forked_from_session, forked_at_seq FROM sessions WHERE id = $1`
 	var sess Session
 	err := s.Pool.QueryRow(ctx, q, id).Scan(
-		&sess.ID, &sess.OrgID, &sess.AgentID, &sess.Status, &sess.RestateKey, &sess.LastActiveAt, &sess.DeletedAt, &sess.ArchivedAt)
+		&sess.ID, &sess.OrgID, &sess.AgentID, &sess.Status, &sess.RestateKey, &sess.LastActiveAt, &sess.DeletedAt, &sess.ArchivedAt, &sess.ForkedFromSession, &sess.ForkedAtSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
