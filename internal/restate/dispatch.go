@@ -35,7 +35,12 @@ func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg s
 		// 哨兵识别：errors.Is 优先；文本兜底——Restate 的 ToTerminalError 只
 		// 复制消息不保留错误链（SDK 文档实证），journal 重放的错误经包装后
 		// errors.Is 失效——「sandbox not found」文本即 404 契约文本
-		if !errors.Is(err, execproto.ErrSandboxNotFound) &&
+		// 哨兵识别：① TerminalError code 404（SDK 研究结论：Run 错误统一
+		// ToTerminalError 包装携带 code）② errors.Is 裸哨兵 ③ 文本兜底
+		//（TerminalError 只保留 message——转换丢原始错误链，SDK 文档实证）
+		if t := restate.AsTerminalError(err); t != nil && t.Code() == 404 {
+			// 哨兵命中
+		} else if !errors.Is(err, execproto.ErrSandboxNotFound) &&
 			!strings.Contains(err.Error(), "sandbox not found") &&
 			!strings.Contains(err.Error(), "sandbox destroyed") {
 			return err
@@ -72,7 +77,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 				res, err := deps.Executor.Execute(rc, sandboxID, tc.Name, input,
 					execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
 				if err != nil {
-					return nil, restate.ToTerminalError(err)
+					return nil, restate.ToTerminalError(err, restate.WithErrorCode(404))
 				}
 				return &execOutcome{Result: res, Duration: time.Since(started)}, nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
@@ -126,7 +131,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			result, e := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 				content, rErr := deps.Executor.ReadFile(rc, sb, path)
 				if rErr != nil {
-					return "", restate.ToTerminalError(rErr)
+					return "", restate.ToTerminalError(rErr, restate.WithErrorCode(404))
 				}
 				return content, nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
