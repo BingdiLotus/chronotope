@@ -108,7 +108,11 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		//（blob 合同 e2e 实证：不经恢复会 500 循环旧容器）
 		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sandboxID string) error {
 			_, wErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
-				return "", deps.Executor.WriteFile(rc, sandboxID, path, content)
+				// TerminalError 包装（#2 修复纪律：裸错误 → Infinite 重试循环）
+				if e := deps.Executor.WriteFile(rc, sandboxID, path, content); e != nil {
+					return "", restate.ToTerminalError(e, restate.WithErrorCode(404))
+				}
+				return "", nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
 			return wErr
 		})
