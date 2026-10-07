@@ -21,7 +21,7 @@ echo "== Chronotope 全场景演示 =="
 echo "[1/6] docker compose 启动全栈…"
 HARNESS_FAKE_MODEL=1 $DC up -d --build postgres restate litellm harness worker executor api
 for i in $(seq 1 60); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 2; done
-pass "全栈启动（api/worker/executor/harness + postgres/restate/minio/litellm）"
+pass "全栈启动（api/worker/executor/harness + postgres/restate/rustfs/litellm）"
 
 # 2. 注册 worker 端点
 curl -fsS -X POST "$ADMIN/deployments" -H 'content-type: application/json' \

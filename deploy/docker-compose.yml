@@ -1,6 +1,6 @@
 # Chronotope 部署编排（单机自托管，mvp-架构设计 §4）
 #
-# 基础设施：postgres(pgvector) / restate / litellm / minio
+# 基础设施：postgres(pgvector) / restate / litellm / rustfs（S3 兼容存储）
 # 应用服务：api / worker / executor / harness（make up 一键构建）
 # web 控制台属 W4，放入 profile "web"（docker compose --profile web up web）
 #
@@ -53,22 +53,22 @@ services:
       - ./litellm/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
 
-  minio:
-    # MinIO 全面下线（Docker Hub 撤库、quay 标签不可拉，GitHub CI 实证）——
-    # 替换为 RustFS（Rust 实现、S3 兼容、MinIO 迁移/共存，https://github.com/rustfs/rustfs）
-    image: ${MINIO_IMAGE:-rustfs/rustfs:1.0.1}
+  rustfs:
+    # RustFS：Rust 实现、S3 兼容对象存储（MinIO 全面下线后的替换，
+    # https://github.com/rustfs/rustfs）——架构整洁 C6：服务名统一
+    image: ${RUSTFS_IMAGE:-rustfs/rustfs:1.0.1}
     environment:
       # RustFS S3 凭证须经 RUSTFS_ACCESS_KEY/RUSTFS_SECRET_KEY（MINIO_ROOT_*
       # 仅 admin 面板——容器日志实证「Access Key Id 不存在」）
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rustfsadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rustfsadmin}
+      RUSTFS_ROOT_USER: ${RUSTFS_ROOT_USER:-rustfsadmin}
+      RUSTFS_ROOT_PASSWORD: ${RUSTFS_ROOT_PASSWORD:-rustfsadmin}
     ports:
       - "9000:9000" # S3 API
       - "9001:9001" # console
     volumes:
-      - miniodata:/data
+      - rustfsdata:/data
     healthcheck:
       # RustFS 无 /minio/health/live 兼容路径——S3 根任意 HTTP 响应即存活
       test: ["CMD", "curl", "-sS", "-o", "/dev/null", "http://localhost:9000/"]
@@ -91,7 +91,7 @@ services:
       OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-5s}
       OUTBOX_ALLOW_PRIVATE: ${OUTBOX_ALLOW_PRIVATE:-false}
       # 冷层归档（期 2 §B）：RustFS S3 + 年龄闸门（0 = 立即可归档）
-      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-minio:9000}
+      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-workspaces}
@@ -148,7 +148,7 @@ services:
       EXECUTOR_ADDR: ":9082"
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       # 工作区 blob 合同（期 2 §A）：RustFS S3（内容寻址对象图）
-      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-minio:9000}
+      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-workspaces}
@@ -160,7 +160,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy # executor 启动即连库——未就绪会 fatal 退出（GitHub CI 实证 180s 超时）
-      minio:
+      rustfs:
         condition: service_healthy
 
   harness:
@@ -193,5 +193,5 @@ services:
 
 volumes:
   pgdata: {}
-  miniodata: {}
+  rustfsdata: {}
   restatedata: {}
