@@ -40,7 +40,10 @@ const (
 	// 能力
 	SkillInstall  Type = "skill.install"
 	AuditApproval Type = "audit.approval"
-	RunCanceled   Type = "run.canceled"
+	// 期 3 §B：审批策略路由审计
+	AuditApprovalDenied  Type = "audit.approval_denied"
+	AuditApprovalExpired Type = "audit.approval_expired"
+	RunCanceled          Type = "run.canceled"
 	// 时间旅行（正式版架构 期 2）
 	SessionCheckpoint Type = "session.checkpoint"  // 时间坐标：seq + 沙箱快照引用
 	SessionRolledBack Type = "session.rolled_back" // 回退：投影截断 + 追加（事件轴不可变）
@@ -67,7 +70,7 @@ func (t Type) Valid() bool {
 	case RunStarted, RunCompleted, RunFailed, RunCancelled,
 		LLMCall, ToolCall, SandboxExec, MCPCall, StepJournaled, EventTruncated,
 		RunPaused, RunResumed, RunAwaitingApproval, RunFrozen, RunUnfrozen, SessionWoken,
-		SkillInstall, MCPConnected, MCPUpdated, AuditApproval, RunCanceled,
+		SkillInstall, MCPConnected, MCPUpdated, AuditApproval, AuditApprovalDenied, AuditApprovalExpired, RunCanceled,
 		SessionCheckpoint, SessionRolledBack, SessionForked,
 		SubagentSpawned, SubagentCompleted, GroupTurn,
 		MemoryConsolidated,

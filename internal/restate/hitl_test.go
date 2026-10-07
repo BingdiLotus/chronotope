@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 	"github.com/restatedev/sdk-go/x/mocks"
@@ -14,6 +15,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/policy"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -177,4 +179,87 @@ func TestResolveApprovalDigestBinding(t *testing.T) {
 // ctx2 从 mock context 构造 restate 上下文（测试内联）。
 func ctx2(mockCtx *mocks.MockContext) restate.Context {
 	return restate.WithMockContext(mockCtx)
+}
+
+// TestApprovalRouterPolicy 期 3 §B：路由策略缝——非成员拒绝 + 过期自动拒绝。
+func TestApprovalRouterPolicy(t *testing.T) {
+	newDeps := func(router policy.ApprovalRouter, pendingSince time.Time) (*fakeStore, *Deps) {
+		st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+		se := &fakeSessions{state: SessionState{
+			Phase:            sessionapi.PhaseReady,
+			AgentConfig:      sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{}, Version: 1},
+			PendingAwakeable: "awake_1", PendingActionDigest: "d1",
+			PendingSince: &pendingSince,
+		}}
+		d := deps(st, &fakeHarness{}, se, &fakeExecutor{})
+		d.ApprovalRouter = router
+		return st, d
+	}
+	mockCtx := func(t *testing.T) restate.Context {
+		m := mocks.NewMockContext(t)
+		m.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+			func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+				v, err := f(fakeRunContext{context.Background()})
+				if err != nil {
+					return restate.ToTerminalError(err)
+				}
+				reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+				return nil
+			}).Maybe()
+		mockA := mocks.NewMockAwakeableFuture(t)
+		mockA.EXPECT().Id().Return("awake_1").Maybe()
+		mockA.EXPECT().Result(mock.Anything).RunAndReturn(func(output any) restate.TerminalError {
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf("approve"))
+			return nil
+		}).Maybe()
+		m.EXPECT().Awakeable().Return(mockA).Maybe()
+		m.EXPECT().ResolveAwakeable(mock.Anything, mock.Anything).Maybe()
+		return restate.WithMockContext(m)
+	}
+
+	now := time.Now()
+	// 非成员 approver → 拒绝 + audit.approval_denied
+	st, d := newDeps(&policy.OrgApprovalPolicy{
+		Get: func(context.Context, string) ([]string, []string, int64, error) {
+			return nil, []string{"alice"}, 0, nil
+		},
+	}, now)
+	_, err := resolveApproval(mockCtx(t), d, WebhookResolveInput{
+		RunID: "r_1", Payload: "ok", ActionDigest: "d1", Approver: "bob",
+	})
+	if err == nil || !strings.Contains(err.Error(), "不在策略集合") {
+		t.Fatalf("非成员应拒绝: %v", err)
+	}
+	if len(eventsOf(st, event.AuditApprovalDenied)) != 1 {
+		t.Fatalf("应有 audit.approval_denied: %+v", st.events)
+	}
+	// 成员 approver → 放行（无拒绝事件）
+	st2, d2 := newDeps(&policy.OrgApprovalPolicy{
+		Get: func(context.Context, string) ([]string, []string, int64, error) {
+			return nil, []string{"alice"}, 0, nil
+		},
+	}, now)
+	if _, err := resolveApproval(mockCtx(t), d2, WebhookResolveInput{
+		RunID: "r_1", Payload: "ok", ActionDigest: "d1", Approver: "alice",
+	}); err != nil {
+		t.Fatalf("成员应放行: %v", err)
+	}
+	if len(eventsOf(st2, event.AuditApprovalDenied)) != 0 {
+		t.Fatalf("成员不应有拒绝事件: %+v", st2.events)
+	}
+	// TTL 过期 → 自动拒绝决议 + audit.approval_expired
+	st3, d3 := newDeps(&policy.OrgApprovalPolicy{
+		Get: func(context.Context, string) ([]string, []string, int64, error) {
+			return nil, []string{"alice"}, 1, nil // TTL 1s
+		},
+	}, now.Add(-2*time.Second))
+	out, err := resolveApproval(mockCtx(t), d3, WebhookResolveInput{
+		RunID: "r_1", Payload: "ok", ActionDigest: "d1", Approver: "alice",
+	})
+	if err != nil || out != "expired" {
+		t.Fatalf("过期应自动拒绝: %v err=%v", out, err)
+	}
+	if len(eventsOf(st3, event.AuditApprovalExpired)) != 1 {
+		t.Fatalf("应有 audit.approval_expired: %+v", st3.events)
+	}
 }

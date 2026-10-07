@@ -3,11 +3,23 @@ package restate
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/policy"
 )
+
+// containsStr 字符串集合成员判定。
+func containsStr(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
 
 // WebhookResolveInput 是 webhook 服务的输入（HITL 审批回调，worker-架构设计 §2：
 // POST /webhooks/approval/{run_id} → resolve awakeable，幂等）。
@@ -54,6 +66,35 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 	legacy := in.ActionDigest == ""
 	if !legacy && state.PendingActionDigest != "" && in.ActionDigest != state.PendingActionDigest {
 		return "", restate.ToTerminalError(fmt.Errorf("审批摘要不匹配：请求 %s ≠ 挂起 %s", in.ActionDigest, state.PendingActionDigest))
+	}
+	// 审批策略路由（期 3 §B）：ApprovalRouter 策略缝——approver 集合校验 +
+	// TTL 过期自动拒绝。默认 ManualOnly（无路由集合）放行；参考实现
+	// OrgApprovalPolicy（org 策略）。审计事件留痕。
+	if sess, sErr := deps.Store.GetSession(ctx, run.SessionID); sErr == nil && deps.ApprovalRouter != nil {
+		approvers, ttl, rErr := deps.ApprovalRouter.Route(ctx, policy.ApprovalRequest{
+			TenantID: sess.OrgID, Tool: "", Class: 2, SessionID: run.SessionID, RunID: in.RunID,
+		})
+		if rErr == nil && len(approvers) > 0 {
+			allowed := in.Approver != "" && containsStr(approvers, in.Approver)
+			if !allowed {
+				denied, _ := json.Marshal(map[string]any{
+					"run_id": in.RunID, "approver": in.Approver, "reason": "approver_not_in_policy",
+				})
+				_, _ = deps.Store.AppendEvent(ctx, run.SessionID, in.RunID, event.AuditApprovalDenied, denied, run.SessionID+":audit:approval_denied:"+in.RunID)
+				return "", restate.ToTerminalError(fmt.Errorf("审批人 %q 不在策略集合", in.Approver))
+			}
+		}
+		if rErr == nil && ttl > 0 && state.PendingSince != nil &&
+			time.Since(*state.PendingSince) > time.Duration(ttl)*time.Second {
+			expired, _ := json.Marshal(map[string]any{
+				"run_id": in.RunID, "ttl_seconds": ttl, "reason": "approval_expired",
+			})
+			_, _ = deps.Store.AppendEvent(ctx, run.SessionID, in.RunID, event.AuditApprovalExpired, expired, run.SessionID+":audit:approval_expired:"+in.RunID)
+			// 过期自动拒绝：解析 awakeable 为拒绝决议（run 以 tool_denied 终态收场）
+			rejectPayload, _ := json.Marshal(map[string]any{"approved": false, "note": "approval expired"})
+			restate.ResolveAwakeable[string](ctx, state.PendingAwakeable, string(rejectPayload))
+			return "expired", nil
+		}
 	}
 	restate.ResolveAwakeable[string](ctx, state.PendingAwakeable, in.Payload)
 	// 审计事件：审批者与决议留痕（幂等 dedupe 按 run）

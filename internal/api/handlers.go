@@ -639,6 +639,47 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PUT /orgs/{orgID}/approval-policy —— 审批策略（期 3 §B 参考业务层；
+// ApprovalRouter 策略缝的参考实现数据）。
+func (h *Handler) upsertApprovalPolicy(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	var req struct {
+		ToolPatterns []string `json:"tool_patterns"`
+		Approvers    []string `json:"approvers"`
+		TTLSeconds   int64    `json:"ttl_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, 422, "invalid policy")
+		return
+	}
+	if req.TTLSeconds <= 0 {
+		req.TTLSeconds = 86400
+	}
+	if err := h.Store.UpsertApprovalPolicy(r.Context(), store.ApprovalPolicy{
+		TenantID: orgID, ToolPatterns: req.ToolPatterns, Approvers: req.Approvers, TTLSeconds: req.TTLSeconds,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tenant_id": orgID, "approvers": req.Approvers, "ttl_seconds": req.TTLSeconds})
+}
+
+// GET /orgs/{orgID}/audit?kind=approval|mcp —— 审计导出（期 3 §B/C：按事件
+// 类型前缀过滤的审计留存）。
+func (h *Handler) orgAudit(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "audit."
+	}
+	rows, err := h.Store.ListOrgAuditEvents(r.Context(), orgID, kind, 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audit": rows})
+}
+
 // POST /orgs/{orgID}/users —— 建技术主体（principal；期 3 §A：归属/权限/限流，
 // 与计费解耦）。
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {

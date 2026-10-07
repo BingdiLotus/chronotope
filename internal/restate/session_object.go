@@ -2,6 +2,7 @@ package restate
 
 import (
 	"fmt"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -19,17 +20,19 @@ const (
 // SessionState 是 session_object 的持久状态（分层原则：Restate 只放协调态——
 // 游标/引用/版本/小配置；大载荷在 PG/MinIO，worker-架构设计 §4）。
 type SessionState struct {
-	Phase               sessionapi.SessionPhase  `json:"phase"`
-	AgentConfig         sessionapi.AgentConfig   `json:"agent_config"`
-	LastRunID           string                   `json:"last_run_id,omitempty"`
-	PendingAwakeable    string                   `json:"pending_awakeable,omitempty"`     // HITL 审批槽
-	PendingActionDigest string                   `json:"pending_action_digest,omitempty"` // 待审批动作摘要（精确绑定，评审 #5）
-	FrozenAwakeable     string                   `json:"frozen_awakeable,omitempty"`      // 欠费冻结槽（与审批独立）
-	Participants        []sessionapi.Participant `json:"participants,omitempty"`          // 群聊成员（非空 = 群聊会话；moderator 主持）
-	MCP                 []MCPConnection          `json:"mcp,omitempty"`                   // MCP 连接（tools 懒缓存）
-	Skills              []string                 `json:"skills,omitempty"`                // 已安装 skill 名（沙箱 skills/<name>/）
-	CancelRequested     bool                     `json:"cancel_requested,omitempty"`      // 取消请求（run 检查点生效，非抢占——评审 #6）
-	SandboxID           string                   `json:"sandbox_id,omitempty"`            // 会话作用域沙箱（懒创建，W2）
+	Phase               sessionapi.SessionPhase `json:"phase"`
+	AgentConfig         sessionapi.AgentConfig  `json:"agent_config"`
+	LastRunID           string                  `json:"last_run_id,omitempty"`
+	PendingAwakeable    string                  `json:"pending_awakeable,omitempty"`     // HITL 审批槽
+	PendingActionDigest string                  `json:"pending_action_digest,omitempty"` // 待审批动作摘要（精确绑定，评审 #5）
+	// PendingSince 挂起审批时刻（期 3 §B：TTL 过期自动拒绝的依据）
+	PendingSince    *time.Time               `json:"pending_since,omitempty"`
+	FrozenAwakeable string                   `json:"frozen_awakeable,omitempty"` // 欠费冻结槽（与审批独立）
+	Participants    []sessionapi.Participant `json:"participants,omitempty"`     // 群聊成员（非空 = 群聊会话；moderator 主持）
+	MCP             []MCPConnection          `json:"mcp,omitempty"`              // MCP 连接（tools 懒缓存）
+	Skills          []string                 `json:"skills,omitempty"`           // 已安装 skill 名（沙箱 skills/<name>/）
+	CancelRequested bool                     `json:"cancel_requested,omitempty"` // 取消请求（run 检查点生效，非抢占——评审 #6）
+	SandboxID       string                   `json:"sandbox_id,omitempty"`       // 会话作用域沙箱（懒创建，W2）
 }
 
 const sessionStateKey = "state"
@@ -109,6 +112,8 @@ func setPendingAwakeable(ctx restate.ObjectContext, in SetPendingApprovalInput) 
 	if state.PendingAwakeable != in.AwakeableID || state.PendingActionDigest != in.ActionDigest {
 		state.PendingAwakeable = in.AwakeableID
 		state.PendingActionDigest = in.ActionDigest
+		now := time.Now()
+		state.PendingSince = &now // 期 3 §B：TTL 过期自动拒绝的依据
 		restate.Set(ctx, sessionStateKey, state)
 	}
 	return state, nil

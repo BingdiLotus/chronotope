@@ -28,34 +28,35 @@ import (
 // --- fakes ---
 
 type fakeStore struct {
-	mu             sync.Mutex
-	orgs           map[string]bool
-	orgRows        map[string]*store.Org
-	agents         map[string]*store.Agent
-	sessions       map[string]*store.Session
-	runs           map[string]*store.Run
-	msgs           []store.Message
-	apiKeys        []*store.APIKeyRow
-	deliverables   []*store.DeliverableRow
-	subs           []map[string]string
-	staleQueued    []*store.Run
-	checkpoints    map[string]store.Checkpoint
-	forks          []map[string]any
-	rollbacks      []map[string]any
-	watermark      int64
-	usageBuckets   map[string]store.UsageRow
-	archives       map[string]store.Archive
-	users          map[string]store.User
-	pendingOutbox  []*store.PendingOutboxRow
-	pendingType    string
-	pendingPayload []byte
-	deliveredIDs   []int64
-	retriedIDs     []int64
-	events         []store.EventRow
-	usage          []store.UsageRow
-	summaries      []store.Summary
-	memoryItems    []store.MemoryItem
-	seq            int64
+	mu               sync.Mutex
+	orgs             map[string]bool
+	orgRows          map[string]*store.Org
+	agents           map[string]*store.Agent
+	sessions         map[string]*store.Session
+	runs             map[string]*store.Run
+	msgs             []store.Message
+	apiKeys          []*store.APIKeyRow
+	deliverables     []*store.DeliverableRow
+	subs             []map[string]string
+	staleQueued      []*store.Run
+	checkpoints      map[string]store.Checkpoint
+	forks            []map[string]any
+	rollbacks        []map[string]any
+	watermark        int64
+	usageBuckets     map[string]store.UsageRow
+	archives         map[string]store.Archive
+	users            map[string]store.User
+	approvalPolicies map[string]store.ApprovalPolicy
+	pendingOutbox    []*store.PendingOutboxRow
+	pendingType      string
+	pendingPayload   []byte
+	deliveredIDs     []int64
+	retriedIDs       []int64
+	events           []store.EventRow
+	usage            []store.UsageRow
+	summaries        []store.Summary
+	memoryItems      []store.MemoryItem
+	seq              int64
 }
 
 func newFakeStore() *fakeStore {
@@ -289,6 +290,18 @@ func (f *fakeStore) RunStartedAt(_ context.Context, runID string) (time.Time, er
 	}
 	return time.Time{}, store.ErrNotFound
 }
+func (f *fakeStore) UpsertApprovalPolicy(_ context.Context, p store.ApprovalPolicy) error {
+	if f.approvalPolicies == nil {
+		f.approvalPolicies = map[string]store.ApprovalPolicy{}
+	}
+	f.approvalPolicies[p.TenantID] = p
+	return nil
+}
+
+func (f *fakeStore) ListOrgAuditEvents(_ context.Context, _ string, _ string, _ int) ([]store.AuditEvent, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) CreateUser(_ context.Context, u store.User) error {
 	if f.users == nil {
 		f.users = map[string]store.User{}
@@ -1399,5 +1412,23 @@ func TestPrincipalFlow(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("key 应绑 principal u_x: %+v", fs.apiKeys)
+	}
+}
+
+// TestApprovalPolicyAndAuditEndpoints 期 3 §B：审批策略 upsert + 审计导出。
+func TestApprovalPolicyAndAuditEndpoints(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPut, "/orgs/org_seed/approval-policy",
+		`{"tool_patterns":[],"approvers":["alice","bob"],"ttl_seconds":3600}`, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "alice") {
+		t.Fatalf("策略应 200: %d %s", rec.Code, rec.Body.String())
+	}
+	if fs.approvalPolicies["org_seed"].Approvers[0] != "alice" || fs.approvalPolicies["org_seed"].TTLSeconds != 3600 {
+		t.Fatalf("策略应落 fake: %+v", fs.approvalPolicies["org_seed"])
+	}
+	rec = doJSON(t, h.Router(), http.MethodGet, "/orgs/org_seed/audit?kind=audit.", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "audit") {
+		t.Fatalf("审计导出应 200: %d %s", rec.Code, rec.Body.String())
 	}
 }
