@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -224,6 +225,9 @@ class FakeProvider(LLMProvider):
             await asyncio.sleep(self.chunk_ms / 1000)
             yield StreamChunk(delta=self.reply[i : i + 3])
         yield StreamChunk(usage={"tokens_in": 4, "tokens_out": len(self.reply) // 3})
+
+
+logger = logging.getLogger("chronotope-harness.embed")
 
 
 def embed(text: str) -> list[float]:
