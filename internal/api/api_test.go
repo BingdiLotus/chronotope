@@ -48,6 +48,7 @@ type fakeStore struct {
 	users            map[string]store.User
 	approvalPolicies map[string]store.ApprovalPolicy
 	mcpAllowlists    map[string][]string
+	knowledge        map[string]store.KnowledgeItem
 	pendingOutbox    []*store.PendingOutboxRow
 	pendingType      string
 	pendingPayload   []byte
@@ -291,6 +292,14 @@ func (f *fakeStore) RunStartedAt(_ context.Context, runID string) (time.Time, er
 	}
 	return time.Time{}, store.ErrNotFound
 }
+func (f *fakeStore) CreateKnowledge(_ context.Context, k store.KnowledgeItem) error {
+	if f.knowledge == nil {
+		f.knowledge = map[string]store.KnowledgeItem{}
+	}
+	f.knowledge[k.ID] = k
+	return nil
+}
+
 func (f *fakeStore) UpsertMCPAllowlist(_ context.Context, tenantID, server string, patterns []string) error {
 	if f.mcpAllowlists == nil {
 		f.mcpAllowlists = map[string][]string{}

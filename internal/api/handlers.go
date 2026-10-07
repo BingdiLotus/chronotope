@@ -699,6 +699,40 @@ func (h *Handler) upsertMCPAllowlist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tenant_id": orgID, "server": req.Server, "tool_patterns": req.ToolPatterns})
 }
 
+// POST /orgs/{orgID}/knowledge —— 共享知识（期 3 §D：tenant 级基础数据服务；
+// 嵌入经 harness /embed；业务方自行决定沉淀策略）。
+func (h *Handler) createKnowledge(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	var req struct {
+		Content       string    `json:"content"`
+		Embedding     []float32 `json:"embedding"` // 可选：显式向量；空则调 harness /embed
+		SourceSession string    `json:"source_session"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "content 必填")
+		return
+	}
+	emb := req.Embedding
+	if len(emb) == 0 && h.Embedder != nil {
+		var err error
+		emb, err = h.Embedder.Embed(r.Context(), req.Content)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, 500, "embed: "+err.Error())
+			return
+		}
+	}
+	if len(emb) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, 422, "embedding 必填（或提供 embedder）")
+		return
+	}
+	item := store.KnowledgeItem{ID: "kn_" + genID(""), TenantID: orgID, Content: req.Content, Embedding: emb, SourceSession: req.SourceSession}
+	if err := h.Store.CreateKnowledge(r.Context(), item); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": item.ID, "tenant_id": orgID, "content": req.Content})
+}
+
 // POST /orgs/{orgID}/users —— 建技术主体（principal；期 3 §A：归属/权限/限流，
 // 与计费解耦）。
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {

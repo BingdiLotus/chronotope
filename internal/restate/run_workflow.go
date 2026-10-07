@@ -139,7 +139,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
-	msgs, err := buildMessages(ctx, deps.Store, in, cfg, state.Skills)
+	msgs, err := buildMessages(ctx, deps.Store, deps.Harness, in, cfg, state.Skills)
 	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
@@ -412,7 +412,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 }
 
 // buildMessages 组装本轮消息（分层记忆的 W5 前简化形态：system 指令 + 历史 + 本 run 输入）。
-func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.AgentConfig, skills []string) ([]runs.Message, error) {
+func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, cfg sessionapi.AgentConfig, skills []string) ([]runs.Message, error) {
 	history, err := st.ListMessages(ctx, in.SessionID, 50)
 	if err != nil {
 		return nil, err
@@ -423,6 +423,22 @@ func buildMessages(ctx context.Context, st Store, in RunInput, cfg sessionapi.Ag
 		msgs = append(msgs, runs.Message{Role: "system", Source: "trusted",
 			Content: "【已安装技能】" + strings.Join(skills, "、") +
 				"。使用前先 read_file /workspace/skills/<name>/SKILL.md 获取用法说明。"})
+	}
+	// 共享知识注入（期 3 §D：tenant 级 pgvector 检索——基础数据服务；
+	// 查询嵌入经 harness /embed；检索失败静默降级不阻断 run）
+	if har != nil {
+		if sess, sErr := st.GetSession(ctx, in.SessionID); sErr == nil {
+			if emb, eErr := har.Embed(ctx, topicOf(in)); eErr == nil && len(emb) > 0 {
+				if items, kErr := st.RetrieveKnowledge(ctx, sess.OrgID, emb, 3); kErr == nil && len(items) > 0 {
+					var b strings.Builder
+					b.WriteString("【共享知识】")
+					for _, it := range items {
+						b.WriteString("\n- " + it.Content)
+					}
+					msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
+				}
+			}
+		}
 	}
 	// 分层记忆注入（边界语义 §7 组装函数）：主题滚动摘要 + 检索片段（topic 作用域优先）
 	topic := topicOf(in)

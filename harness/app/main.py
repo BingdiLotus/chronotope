@@ -30,6 +30,17 @@ app = FastAPI(title="chronotope-harness", version="0.1.0")
 _provider: LLMProvider | None = None
 
 
+@app.post("/embed")
+async def embed_endpoint(body: dict):
+    """文本嵌入（期 3 §D：共享知识库检索的向量来源；真实模式 LiteLLM）。"""
+    text = body.get("text", "")
+    if not text:
+        return {"embedding": []}
+    from .llm import embed
+
+    return {"embedding": embed(text)}
+
+
 def get_provider() -> LLMProvider:
     """惰性构造 provider（import 不依赖环境；蓝绿按 run 协议版本路由——契约规范 §3）。"""
     global _provider

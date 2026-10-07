@@ -885,3 +885,41 @@ func TestMCPAllowlist(t *testing.T) {
 		t.Fatal("未列工具应拒绝")
 	}
 }
+
+// TestKnowledgeRetrieve 期 3 §D：pgvector 余弦检索 topK。
+func TestKnowledgeRetrieve(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_kn_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	// 两条知识：主题相近向量近邻
+	base := make([]float32, 1024)
+	base[0], base[1], base[2] = 1, 1, 1
+	near := make([]float32, 1024)
+	copy(near, base)
+	near[3] = 0.5
+	far := make([]float32, 1024)
+	far[500] = 1
+	for i, c := range []string{"主题相近的内容", "完全无关的内容"} {
+		emb := near
+		if i == 1 {
+			emb = far
+		}
+		if err := s.CreateKnowledge(ctx, store.KnowledgeItem{
+			ID: key + "-k" + string(rune('a'+i)), TenantID: "o_" + key, Content: c, Embedding: emb,
+		}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	q := make([]float32, 1024)
+	copy(q, base)
+	got, err := s.RetrieveKnowledge(ctx, "o_"+key, q, 2)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("retrieve: %d err=%v", len(got), err)
+	}
+	if got[0].Content != "主题相近的内容" {
+		t.Fatalf("top1 应为近邻: %+v", got[0])
+	}
+}

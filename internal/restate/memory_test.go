@@ -2,6 +2,7 @@ package restate
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestBuildMessagesInjectsMemory(t *testing.T) {
 	}
 	cfg := sessionapi.AgentConfig{Model: "m", Instructions: "你是助手。", Version: 1}
 
-	msgs, err := buildMessages(t.Context(), st, RunInput{SessionID: "s_1", Input: "继续", Topic: "default"}, cfg, nil)
+	msgs, err := buildMessages(t.Context(), st, nil, RunInput{SessionID: "s_1", Input: "继续", Topic: "default"}, cfg, nil)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}
@@ -125,3 +126,30 @@ func TestConsolidateBelowThreshold(t *testing.T) {
 }
 
 var _ = json.RawMessage{} // 保持导入（fake 消息构造）
+
+// TestBuildMessagesKnowledgeInjection 期 3 §D：共享知识挂载注入（检索失败静默降级）。
+func TestBuildMessagesKnowledgeInjection(t *testing.T) {
+	st := &fakeStore{} // GetSession 返回假行（org_test）
+	har := &fakeHarness{embed: []float32{0.1}}
+	st.knowledge = []store.KnowledgeItem{{ID: "k1", TenantID: "o_1", Content: "共享知识片段"}}
+	cfg := sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{}, Version: 1}
+	msgs, err := buildMessages(t.Context(), st, har, RunInput{SessionID: "s_1", Input: "hi", Topic: "default"}, cfg, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "【共享知识】") && strings.Contains(m.Content, "共享知识片段") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("应注入共享知识: %+v", msgs)
+	}
+	// 嵌入失败 → 静默降级（不阻断 run）
+	har2 := &fakeHarness{embedErr: fmt.Errorf("embed down")}
+	msgs2, err := buildMessages(t.Context(), st, har2, RunInput{SessionID: "s_1", Input: "hi", Topic: "default"}, cfg, nil)
+	if err != nil || len(msgs2) == 0 {
+		t.Fatalf("嵌入失败应降级: %v", err)
+	}
+}

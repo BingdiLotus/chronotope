@@ -61,6 +61,9 @@ func main() {
 		// 预算策略缝（期 3 §A）：POLICY_BUDGET=none → AllowAll（无业务=无限）；
 		// 默认 org-daily → 参考实现（org 日预算，w5 语义）
 		BudgetPolicy: budgetPolicyOf(st),
+		// 审批路由缝（期 3 §B）：POLICY_APPROVAL=none → ManualOnly 人工；
+		// 默认 org-policy → 参考实现（org 策略 approver 集合 + TTL）
+		ApprovalRouter: approvalRouterOf(st),
 	}
 	handler, err := restate.BuildEndpoint(deps)
 	if err != nil {
@@ -86,6 +89,22 @@ func main() {
 	log.Printf("注册部署: curl -X POST :9070/deployments -d '{\"uri\":\"http://<worker>\",\"version\":\"v1\",\"use_http_11\":true,\"force\":true}'")
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+// approvalRouterOf 装配审批路由缝（期 3 §B：env 选择；默认参考实现）。
+func approvalRouterOf(st *store.Store) policy.ApprovalRouter {
+	if envOr("POLICY_APPROVAL", "org-policy") == "none" {
+		return policy.ApprovalRouter(policy.ManualOnly{})
+	}
+	return &policy.OrgApprovalPolicy{
+		Get: func(ctx context.Context, tenantID string) ([]string, []string, int64, error) {
+			p, err := st.GetApprovalPolicy(ctx, tenantID)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			return p.ToolPatterns, p.Approvers, p.TTLSeconds, nil
+		},
 	}
 }
 

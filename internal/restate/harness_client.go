@@ -18,6 +18,8 @@ import (
 // 唯一协议：POST /runs → SSE，契约规范 §3）。
 type Harness interface {
 	Call(ctx context.Context, req *runs.Request) (*Result, error)
+	// Embed 文本嵌入（期 3 §D：共享知识检索的向量来源；harness /embed）
+	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
 // Result 是一次 /runs 调用的聚合结果（SSE 帧流 → 结构）。
@@ -160,3 +162,28 @@ func ParseFrames(r io.Reader) (*Result, error) {
 
 // 心跳语义占位：帧间隔超时（30s 无帧）判定在调用方结合 ctx 处理（W1 简化）。
 const frameGapTimeout = 30 * time.Second
+
+// Embed 调 harness POST /embed（期 3 §D：共享知识检索向量）。
+func (c *harnessClient) Embed(ctx context.Context, text string) ([]float32, error) {
+	body, _ := json.Marshal(map[string]string{"text": text})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/embed", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("harness embed: %d", resp.StatusCode)
+	}
+	var out struct {
+		Embedding []float32 `json:"embedding"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Embedding, nil
+}

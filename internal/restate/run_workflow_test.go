@@ -32,8 +32,9 @@ type storedEvent struct {
 }
 
 type fakeStore struct {
-	events   []storedEvent
-	messages []struct {
+	knowledge []store.KnowledgeItem
+	events    []storedEvent
+	messages  []struct {
 		sessionID, runID, role, content string
 		step                            int
 	}
@@ -94,6 +95,10 @@ func (f *fakeStore) DiffSessions(_ context.Context, _, _ string, _ int) (*store.
 
 func (f *fakeStore) ListWorkspaceFiles(_ context.Context, _ string, _ int) ([]store.WorkspaceFile, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) RetrieveKnowledge(_ context.Context, _ string, _ []float32, _ int) ([]store.KnowledgeItem, error) {
+	return f.knowledge, nil
 }
 
 func (f *fakeStore) MCPToolAllowed(_ context.Context, tenantID, server, tool string) (bool, error) {
@@ -236,9 +241,15 @@ func (f *fakeStore) CreateRun(_ context.Context, id, sessionID string, trigger j
 
 // fakeHarness 按脚本顺序返回结果，并记录每次请求（断言消息组装）。
 type fakeHarness struct {
-	script []*Result
-	calls  []*runs.Request
-	onCall func() // 每次 Call 前的钩子（确定性测试注入副作用）
+	script   []*Result
+	calls    []*runs.Request
+	onCall   func() // 每次 Call 前的钩子（确定性测试注入副作用）
+	embed    []float32
+	embedErr error
+}
+
+func (f *fakeHarness) Embed(_ context.Context, _ string) ([]float32, error) {
+	return f.embed, f.embedErr
 }
 
 func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error) {

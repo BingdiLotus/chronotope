@@ -56,6 +56,7 @@ type Store interface {
 	ListOrgAuditEvents(ctx context.Context, orgID, kind string, limit int) ([]store.AuditEvent, error)
 	UpsertMCPAllowlist(ctx context.Context, tenantID, server string, patterns []string) error
 	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
+	CreateKnowledge(ctx context.Context, k store.KnowledgeItem) error
 	CreateArchive(ctx context.Context, a store.Archive) error
 	GetArchive(ctx context.Context, sessionID string) (*store.Archive, error)
 	SessionLastEventAt(ctx context.Context, sessionID string) (time.Time, error)
@@ -91,10 +92,17 @@ type RestateIngress interface {
 	Call(ctx context.Context, path, method string, body any, out any) error
 }
 
+// HarnessEmbedder 是嵌入门面（期 3 §D；harness /embed 的窄接口）。
+type HarnessEmbedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
 // Handler 是网关依赖集。
 type Handler struct {
 	// Blob 是冷层归档的 S3 门面（期 2 §B；nil = 归档未启用）。
 	Blob *blobstore.BlobStore
+	// Embedder 文本嵌入（期 3 §D：共享知识写入的向量来源；nil = 需显式向量）。
+	Embedder HarnessEmbedder
 	// ArchiveMinAge 是归档前的最小无活动时长（默认 30 天）。
 	ArchiveMinAge        time.Duration
 	Store                Store

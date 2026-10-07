@@ -223,6 +223,35 @@ class FakeProvider(LLMProvider):
         yield StreamChunk(usage={"tokens_in": 4, "tokens_out": len(self.reply) // 3})
 
 
+def embed(text: str) -> list[float]:
+    """文本嵌入（真实模式经 LiteLLM /embeddings；fake 模式确定性向量——单测）。
+    返回 1024 维向量；失败抛异常（调用方决定降级）。"""
+    import httpx
+
+    if os.environ.get("HARNESS_FAKE_MODEL") == "1":
+        # 确定性 fake 嵌入：字符哈希 → 1024 维（同主题相近的文本向量相近——
+        # e2e/单测可控）
+        vec = [0.0] * 1024
+        for i, ch in enumerate(text):
+            vec[(ord(ch) + i * 7) % 1024] += 1.0
+        norm = sum(x * x for x in vec) ** 0.5 or 1.0
+        return [x / norm for x in vec]
+    base = os.environ.get("OPENAI_BASE_URL", "http://litellm:4000/v1")
+    r = httpx.post(
+        f"{base}/embeddings",
+        headers={"Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", "")},
+        json={"model": os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"), "input": text},
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()["data"][0]["embedding"]
+    # 对齐 1024 维（截断/零填充）
+    vec = [0.0] * 1024
+    for i, x in enumerate(data[:1024]):
+        vec[i] = float(x)
+    return vec
+
+
 def build_provider() -> LLMProvider:
     """按环境构造 provider：HARNESS_FAKE_MODEL=1 → Fake（e2e/演示），否则 LiteLLM 网关。"""
     if os.environ.get("HARNESS_FAKE_MODEL") == "1":
