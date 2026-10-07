@@ -138,6 +138,29 @@ export default function SessionPage() {
   const pendingApproval = Object.entries(runStates).find(([, t]) => t === "run.awaiting_approval");
   const frozenRun = Object.entries(runStates).find(([, t]) => t === "run.frozen");
 
+  // run 树（期 2 §C 后置 #3）：组合关系入时间轴——subagent.spawned 派生边 +
+  // 各 run 终态（父会话视角；子 run 的完整轨迹在子会话时间轴）
+  const runTree = useMemo(() => {
+    const status: Record<string, string> = {};
+    const edges: { parent: string; child: string; childSession: string; agent: string }[] = [];
+    for (const ev of events) {
+      if (ev.run_id && ["run.started", "run.completed", "run.failed", "run.cancelled"].includes(ev.type)) {
+        status[ev.run_id] = ev.type;
+      }
+      if (ev.type === "subagent.spawned" && ev.run_id) {
+        const p = ev.payload as { child_run_id?: string; child_session_id?: string; agent?: string };
+        if (p.child_run_id) {
+          edges.push({ parent: ev.run_id, child: p.child_run_id, childSession: p.child_session_id || "", agent: p.agent || "" });
+        }
+      }
+      if ((ev.type === "subagent.completed" || ev.type === "subagent.failed") && ev.run_id) {
+        const p = ev.payload as { child_run_id?: string };
+        if (p.child_run_id) status[p.child_run_id] = ev.type;
+      }
+    }
+    return { status, edges };
+  }, [events]);
+
   const act = async (label: string, fn: () => Promise<Response>, after?: (r: Response) => void) => {
     setBusy(label);
     setNotice("");
@@ -350,6 +373,23 @@ export default function SessionPage() {
             {participants.map(([agentID, info]) => (
               <li key={agentID} style={{ fontFamily: "monospace", fontSize: 13 }}>
                 {info.role || "成员"} <span style={{ color: "#888" }}>({agentID.slice(0, 12)}…)</span> —— 发言 {info.turns} 次
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {runTree.edges.length > 0 && (
+        <div data-testid="run-tree" style={{ border: "1px solid #0891b2", background: "#ecfeff", borderRadius: 8, padding: 12, margin: "12px 0" }}>
+          <strong>run 树</strong>（组合关系：父 run → 派生子 run；状态随事件实时）
+          <ul style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 14 }}>
+            {runTree.edges.map((e, i) => (
+              <li key={i} style={{ fontFamily: "monospace", margin: "4px 0" }}>
+                {e.parent.slice(0, 10)}… <span style={{ color: "#0891b2" }}>→ spawn</span> {e.child.slice(0, 10)}…
+                <span style={{ color: "#666" }}>（{e.agent}）</span>{" "}
+                <span style={{ color: (runTree.status[e.child] || "running") === "subagent.completed" ? "#16a34a" : "#888" }}>
+                  [{runTree.status[e.child] || "running"}]
+                </span>
               </li>
             ))}
           </ul>
