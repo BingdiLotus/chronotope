@@ -64,6 +64,24 @@ func main() {
 		WorkspaceRoot: workspace,
 		Logger:        slog.Default(),
 	}
+	// 工作区 blob 合同（期 2 §A）：RUSTFS_ENDPOINT 未配置时禁用（纯卷语义回退）
+	if endpoint := envOr("RUSTFS_ENDPOINT", ""); endpoint != "" {
+		blob, err := execproto.NewBlobStore(endpoint,
+			envOr("RUSTFS_ACCESS_KEY", "rustfsadmin"),
+			envOr("RUSTFS_SECRET_KEY", "rustfsadmin"),
+			envOr("RUSTFS_BUCKET", "workspaces"),
+			envOr("RUSTFS_SECURE", "") == "true")
+		if err != nil {
+			slog.Error("blob store 初始化失败（禁用 blob 合同）", "err", err)
+		} else {
+			if err := blob.EnsureBucket(context.Background()); err != nil {
+				slog.Warn("blob bucket 初始化失败（禁用 blob 合同）", "err", err)
+			} else {
+				server.Blob = blob
+				slog.Info("工作区 blob 合同已启用", "endpoint", endpoint)
+			}
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
