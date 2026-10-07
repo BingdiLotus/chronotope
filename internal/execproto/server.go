@@ -133,7 +133,9 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	orgID, err := s.Store.SessionOrg(r.Context(), req.SessionID)
 	if err != nil {
-		orgID = "single-org" // MVP 单 org（worker 未传 session 时兜底）
+		// 异常路径（session 缺失）：org 归属空 + 告警（不再伪造 single-org——
+		// 架构整洁 C4：租户隔离边界不因兜底串而混淆）
+		s.Logger.Warn("createSandbox: session org 查询失败", "session", req.SessionID, "err", err)
 	}
 	if blobRestore {
 		if rErr := s.restoreFromBlob(r.Context(), &store.SandboxRow{
@@ -459,9 +461,11 @@ func (s *Server) syncBlob(ctx context.Context, sandboxID, path string, body []by
 	if err != nil || sb.SessionID == "" {
 		return
 	}
-	orgID := "single-org"
+	orgID := ""
 	if oid, oErr := s.Store.SessionOrg(ctx, sb.SessionID); oErr == nil && oid != "" {
 		orgID = oid
+	} else if oErr != nil {
+		s.Logger.Warn("syncBlob: session org 查询失败", "session", sb.SessionID, "err", oErr)
 	}
 	tmp, err := os.CreateTemp("", "chronotope-blob-*")
 	if err != nil {
@@ -495,9 +499,11 @@ func (s *Server) restoreFromBlob(ctx context.Context, sb *store.SandboxRow) erro
 	if s.Blob == nil || sb == nil || sb.SessionID == "" {
 		return fmt.Errorf("blob restore 不可用")
 	}
-	orgID := "single-org"
-	if oid, err := s.Store.SessionOrg(ctx, sb.SessionID); err == nil && oid != "" {
+	orgID := ""
+	if oid, oErr := s.Store.SessionOrg(ctx, sb.SessionID); oErr == nil && oid != "" {
 		orgID = oid
+	} else if oErr != nil {
+		s.Logger.Warn("restoreFromBlob: session org 查询失败", "session", sb.SessionID, "err", oErr)
 	}
 	files, err := s.Store.ListWorkspaceFiles(ctx, sb.SessionID, 500)
 	if err != nil {

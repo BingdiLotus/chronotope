@@ -775,7 +775,7 @@ func (h *Handler) archiveSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	orgID := "single-org"
+	orgID := ""
 	if sess, sErr := h.Store.GetSession(r.Context(), sessionID); sErr == nil {
 		orgID = sess.OrgID
 	}
