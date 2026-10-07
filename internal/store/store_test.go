@@ -706,6 +706,11 @@ func TestTimeTravelStore(t *testing.T) {
 		t.Fatalf("msg: %v", err)
 	}
 	// checkpoint（seq=ev1）
+	if err := s.UpsertWorkspaceFile(ctx, store.WorkspaceFile{
+		SessionID: key, Path: "/workspace/a.txt", Hash: "h-fork", Size: 3,
+	}); err != nil {
+		t.Fatalf("ws file: %v", err)
+	}
 	cp := store.Checkpoint{ID: "cp_" + key, SessionID: key, Seq: ev1, SnapshotRef: "img|tar"}
 	if ok, err := s.CreateCheckpoint(ctx, cp); err != nil || !ok {
 		t.Fatalf("create cp: %v", err)
@@ -733,6 +738,12 @@ func TestTimeTravelStore(t *testing.T) {
 	if err != nil || diff.CommonPrefix != 1 || len(diff.OnlyA) != 1 || len(diff.OnlyB) != 1 {
 		t.Fatalf("diff: %+v err=%v", diff, err)
 	}
+	// fork 空间面（期 2 遗留 #1）：workspace_files 索引复制到分支会话
+	forkFiles, err := s.ListWorkspaceFiles(ctx, forkID, 100)
+	if err != nil || len(forkFiles) != 1 || forkFiles[0].Hash != "h-fork" {
+		t.Fatalf("fork 应复制工作区索引: %+v err=%v", forkFiles, err)
+	}
+
 	// rollback 到 checkpoint：消息投影截断（step>0 删除）+ 状态 ready + 事件追加
 	if err := s.RollbackSession(ctx, key, got); err != nil {
 		t.Fatalf("rollback: %v", err)

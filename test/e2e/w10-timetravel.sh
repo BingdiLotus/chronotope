@@ -48,6 +48,9 @@ FORK=$(curl -fsS -X POST "$API/sessions/$SID/fork" -H 'content-type: application
 FSID=$(echo "$FORK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session_id"])')
 sleep 2
 FORK_EVENTS=$(curl -sS -N "$API/sessions/$FSID/events?after=0" --max-time 3 2>/dev/null | grep '^data: ' | head -20 || true)
+# fork 空间面（期 2 遗留 #1）：工作区索引复制——分支沙箱可从内容寻址恢复
+assert "fork 空间面复制（workspace_files 索引随分支）" \
+  bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT count(*) FROM workspace_files WHERE session_id='$FSID'\" | grep -qE '^[1-9]'"
 assert "fork 血缘（forked_from + at_seq）" \
   python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["forked_from"]=="'"$SID"'" and d["at_seq"]>0, d' <<< "$FORK"
 assert "fork 时间轴 = 前缀 + session.forked（仅首轮 completed，无次轮）" \

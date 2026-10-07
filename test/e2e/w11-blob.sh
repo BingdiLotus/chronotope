@@ -48,10 +48,13 @@ curl -fsS -X DELETE "$EXEC/sandboxes/$SB_ID" > /dev/null
 assert "沙箱销毁（无快照）" \
   bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT status FROM sandboxes WHERE sandbox_id='$SB_ID'\" | grep -q destroyed"
 
-# ④ blob: 恢复（直测 executor——销毁后从索引拉取重建，快照之外第二条恢复链；
-# worker 侧 ensureSandbox→blob: 触发的 invocation 挂起单独立项，见 期2-实施进度）
-SB2=$(curl -fsS -X POST "$EXEC/sandboxes" -H 'content-type: application/json' \
-  -d "{\"image\":\"python:3.12-slim\",\"session_id\":\"$SID\",\"restore_from\":\"blob:\",\"limits\":{},\"ttl\":\"\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["sandbox_id"])')
+# ④ 新 run 触发 blob: 恢复（真实链路——ensureSandbox 无快照有索引 → blob:）
+# ALT 脚本 bash cat 走 execute 恢复链（期 2 遗留 #2 闭环后此断言为完整链路）
+curl -fsS -m 120 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $RUN_ID-2" -d '{"input":"读文件"}' > /tmp/blob-2.out 2>&1
+assert "恢复 run 完成（blob: 恢复后 cat 输出原内容）" \
+  python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["status"]=="completed", d' < /tmp/blob-2.out
+SB2=$(PSQL "SELECT sandbox_id FROM sandboxes WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1")
 CONTENT=$(curl -fsS "$EXEC/files/$SB2/workspace/b.txt")
 assert "blob 恢复后内容一致（快照之外第二条恢复链）" \
   bash -c '[ "$1" = "blob合同内容" ]' _ "$CONTENT"

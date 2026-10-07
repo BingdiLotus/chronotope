@@ -72,7 +72,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 				res, err := deps.Executor.Execute(rc, sandboxID, tc.Name, input,
 					execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
 				if err != nil {
-					return nil, err
+					return nil, restate.ToTerminalError(err)
 				}
 				return &execOutcome{Result: res, Duration: time.Since(started)}, nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
@@ -124,7 +124,11 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		var content string
 		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sb string) error {
 			result, e := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
-				return deps.Executor.ReadFile(rc, sb, path)
+				content, rErr := deps.Executor.ReadFile(rc, sb, path)
+				if rErr != nil {
+					return "", restate.ToTerminalError(rErr)
+				}
+				return content, nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
 			if e != nil {
 				return e

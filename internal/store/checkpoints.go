@@ -108,6 +108,15 @@ SELECT $1, run_id, step, role, content, created_at
 FROM messages WHERE session_id = $2 ORDER BY id`, newSessionID, parentSessionID); err != nil {
 		return fmt.Errorf("store: fork messages: %w", err)
 	}
+	// 工作区索引复制（期 2 遗留 #1：fork 空间面写时复制——分支会话的沙箱从
+	// 内容寻址恢复（ensureSandbox 无快照有索引 → blob: 触发）；对象键
+	// org/blobs/{hash} 跨会话共享（org 级 dedup 语义，无需复制对象本体）
+	if _, err := tx.Exec(ctx, `
+INSERT INTO workspace_files (session_id, path, hash, size)
+SELECT $1, path, hash, size
+FROM workspace_files WHERE session_id = $2`, newSessionID, parentSessionID); err != nil {
+		return fmt.Errorf("store: fork workspace files: %w", err)
+	}
 	// 派生事件（fork 事件写入**新会话**时间轴——父会话时间轴不可变）
 	if _, err := tx.Exec(ctx, `
 INSERT INTO events (session_id, run_id, type, payload, dedupe_key)
