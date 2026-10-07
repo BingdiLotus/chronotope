@@ -32,9 +32,10 @@ type storedEvent struct {
 }
 
 type fakeStore struct {
-	knowledge []store.KnowledgeItem
-	events    []storedEvent
-	messages  []struct {
+	knowledge        []store.KnowledgeItem
+	allowlistAllowed map[string]bool
+	events           []storedEvent
+	messages         []struct {
 		sessionID, runID, role, content string
 		step                            int
 	}
@@ -102,7 +103,10 @@ func (f *fakeStore) RetrieveKnowledge(_ context.Context, _ string, _ []float32, 
 }
 
 func (f *fakeStore) MCPToolAllowed(_ context.Context, tenantID, server, tool string) (bool, error) {
-	// fake 默认：全放行（allowlist 语义由 mcp 相关单测覆盖）
+	// fake 默认：全放行；allowlistAllowed 显式配置（mcp 相关单测）
+	if v, ok := f.allowlistAllowed[server+"|"+tool]; ok {
+		return v, nil
+	}
 	return true, nil
 }
 

@@ -59,6 +59,9 @@ async def runs(req: p.RunRequest) -> EventSourceResponse:
     """POST /runs → SSE 事件流（契约规范 §3）。"""
     # 请求开始日志（chaos 套件的重调/重发计数依据；日志非状态，不破坏无状态纪律）
     logger.info("runs start run_id=%s step=%s model=%s", req.run_id, req.step, req.model)
+    # 消息载荷日志（期 3 §D e2e 断言：共享知识注入可见；仅打 system 消息文本）
+    systems = [m.content for m in req.messages if m.role == "system"]
+    logger.info("runs systems run_id=%s systems=%s", req.run_id, json.dumps(systems, ensure_ascii=False))
     try:
         provider = get_provider()
     except RuntimeError as exc:  # 配置错误：明确报错而非静默降级

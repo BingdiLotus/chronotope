@@ -151,6 +151,13 @@ ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-r
 for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
 bash test/e2e/w12-archive.sh "$API" > /tmp/demo-arc.log 2>&1 && pass "冷层归档（4 项断言）" || { fail "冷层归档"; tail -5 /tmp/demo-arc.log; }
 
+# 18. 期 3 治理 e2e（策略缝另一端的真实链路：principal 限流 / 审批路由+TTL /
+#     MCP allowlist / 共享知识挂载——脚本自包含本地 on 模式 api + restate 卷重置）
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= \
+  $DC up -d --force-recreate harness > /dev/null 2>&1
+bash test/e2e/w13-policy.sh "$API" > /tmp/demo-w13.log 2>&1 && pass "期 3 治理五项（7 断言）" || { fail "期 3 治理五项"; tail -5 /tmp/demo-w13.log; }
+
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

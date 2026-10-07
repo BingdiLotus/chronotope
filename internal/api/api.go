@@ -153,6 +153,8 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/users", h.createUser)                    // 技术主体（principal，期 3 §A）
 		r.Put("/approval-policy", h.upsertApprovalPolicy) // 审批策略（期 3 §B 参考业务层）
 		r.Get("/audit", h.orgAudit)                       // 审计导出（期 3 §B/C）
+		r.Put("/mcp-allowlist", h.upsertMCPAllowlist)     // MCP 网关工具白名单（期 3 §C）
+		r.Post("/knowledge", h.createKnowledge)           // 共享知识（期 3 §D：tenant 级）
 	})
 	r.Route("/agents/{agentID}", func(r chi.Router) {
 		r.Post("/sessions", h.createSession) // 创建 session → ready（沙箱懒创建）

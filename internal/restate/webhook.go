@@ -75,6 +75,7 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 			TenantID: sess.OrgID, Tool: "", Class: 2, SessionID: run.SessionID, RunID: in.RunID,
 		})
 		if rErr == nil && len(approvers) > 0 {
+
 			allowed := in.Approver != "" && containsStr(approvers, in.Approver)
 			if !allowed {
 				denied, _ := json.Marshal(map[string]any{

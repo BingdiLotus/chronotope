@@ -149,3 +149,64 @@ func (f *fakeMCP) Call(_ context.Context, _, tool string, _ json.RawMessage) (st
 	}
 	return f.callResult, nil
 }
+
+// TestMCPToolsAllowlistFilter 期 3 §C：过滤函数——未列工具不下发（nil = 网关未启用）。
+func TestMCPToolsAllowlistFilter(t *testing.T) {
+	client := &fakeMCP{specs: []MCPToolSpec{{Name: "echo", Schema: json.RawMessage(`{"type":"object"}`)}}}
+	conns := []MCPConnection{{Server: "echo", URL: "http://mcp"}}
+	// 拒绝（allowlist 只放行 other.*）→ 空清单
+	tools, err := mcpToolsFromState(context.Background(), client, conns, func(server, tool string) (bool, error) {
+		return tool != "echo", nil
+	})
+	if err != nil || len(tools) != 0 {
+		t.Fatalf("未列工具应不下发: %+v err=%v", tools, err)
+	}
+	// 放行 → 1 工具
+	tools, err = mcpToolsFromState(context.Background(), client, conns, func(server, tool string) (bool, error) {
+		return true, nil
+	})
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("白名单应放行: %+v err=%v", tools, err)
+	}
+}
+
+// TestRunLoopMCPAllowlistBlocks 期 3 §C runLoop 级：allowlist 拒绝 → 工具不下发
+// （harness 收到的 tools 清单不含 mcp 工具——runLoop 单测锁行为；e2e w13 保链路）。
+func TestRunLoopMCPAllowlistBlocks(t *testing.T) {
+	st := &fakeStore{
+		runs:             map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}},
+		allowlistAllowed: map[string]bool{"echo|echo": false}, // 拒绝 echo
+	}
+	ha := &fakeHarness{script: []*Result{{Done: true, Final: "完成。"}}}
+	se := &fakeSessions{state: SessionState{
+		Phase:       sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{}, Version: 1},
+		MCP:         []MCPConnection{{Server: "echo", URL: "http://mcp.example", Tools: []MCPToolSpec{{Name: "echo"}}}},
+	}}
+	_ = &fakeMCP{}
+
+	mockCtx := mocks.NewMockContext(t)
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.ToTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+
+	out, err := runLoop(restate.WithMockContext(mockCtx), deps(st, ha, se, &fakeExecutor{}), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil {
+		t.Fatalf("runLoop: %v", err)
+	}
+	_ = out
+	// harness 收到的 tools 清单不含 mcp 工具
+	for _, call := range ha.calls {
+		for _, tl := range call.Tools {
+			if strings.HasPrefix(tl.Name, "mcp:") {
+				t.Fatalf("allowlist 拒绝的工具不应下发: %+v", call.Tools)
+			}
+		}
+	}
+}

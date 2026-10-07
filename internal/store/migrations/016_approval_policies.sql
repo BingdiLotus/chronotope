@@ -6,3 +6,5 @@ CREATE TABLE IF NOT EXISTS org_approval_policies (
   approvers  jsonb NOT NULL DEFAULT '[]',    -- 审批人集合
   ttl_seconds bigint NOT NULL DEFAULT 86400  -- 过期自动拒绝（默认 24h）
 );
+-- created_at 兜底（store GetApprovalPolicy 依赖；早期 016 无此列——ALTER 幂等补）
+ALTER TABLE org_approval_policies ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
