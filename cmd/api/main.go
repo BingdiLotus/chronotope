@@ -21,6 +21,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/api"
 	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/events"
+	"github.com/bingdilotus/chronotope/internal/restate"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -46,6 +47,10 @@ func main() {
 	defer st.Close()
 
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
+	// 嵌入门面（期 3 §D：共享知识写入的向量来源——harness /embed）
+	if hu := os.Getenv("HARNESS_URL"); hu != "" {
+		h.Embedder = restate.NewHarnessClient(hu)
+	}
 	// 冷层归档（期 2 §B）：RUSTFS_ENDPOINT 未配置时归档端点 503
 	if endpoint := envOr("ARCHIVE_ENDPOINT", envOr("RUSTFS_ENDPOINT", "")); endpoint != "" {
 		if blob, err := blobstore.NewBlobStore(endpoint,

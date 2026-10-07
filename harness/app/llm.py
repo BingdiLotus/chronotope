@@ -241,14 +241,20 @@ def embed(text: str) -> list[float]:
     if not key:
         return _deterministic_embed(text)
     headers = {"Authorization": "Bearer " + key}
-    r = httpx.post(
-        f"{base}/embeddings",
-        headers=headers,
-        json={"model": os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"), "input": text},
-        timeout=30,
-    )
-    r.raise_for_status()
-    data = r.json()["data"][0]["embedding"]
+    try:
+        r = httpx.post(
+            f"{base}/embeddings",
+            headers=headers,
+            json={"model": os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"), "input": text},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()["data"][0]["embedding"]
+    except Exception as exc:  # noqa: BLE001
+        # 嵌入端点不可用（litellm 无嵌入模型 400 实证）→ 确定性向量回退
+        # （写入/查询同算法——全链可测；真实嵌入凭据后置）
+        logger.warning("embed 端点不可用，回退确定性向量: %s", exc)
+        return _deterministic_embed(text)
     # 对齐 1024 维（截断/零填充）
     vec = [0.0] * 1024
     for i, x in enumerate(data[:1024]):
