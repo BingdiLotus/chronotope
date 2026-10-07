@@ -84,6 +84,7 @@ services:
       API_ADDR: ":8080"
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       RESTATE_URL: http://restate:8080
+      HARNESS_URL: http://harness:8000 # 共享知识嵌入（期 3 §D——rkn 422 实证缺失）
       EXECUTOR_URL: http://executor:9082
       API_AGGREGATE_INTERVAL: ${API_AGGREGATE_INTERVAL:-1m}
       API_AUTH_MODE: ${API_AUTH_MODE:-off}
@@ -157,6 +158,11 @@ services:
     volumes:
       # docker driver（dev）：executor 需要宿主机 docker 守护进程（受限容器）
       - /var/run/docker.sock:/var/run/docker.sock
+      # 宿主工作区/快照目录共享（快照写宿主 /tmp——daemon 解析 -v 源；
+      # 恢复读容器内 /tmp——CLI 解析 docker cp 源。命名空间错位 →
+      # restore ENOENT 永久重试（真实 e2e 实证）——挂载后两侧一致）
+      - ${CHRONOTOPE_WORKSPACES:-/tmp/chronotope-workspaces}:/tmp/chronotope-workspaces
+      - ${CHRONOTOPE_SNAPSHOTS:-/tmp/chronotope-snapshots}:/tmp/chronotope-snapshots
     depends_on:
       postgres:
         condition: service_healthy # executor 启动即连库——未就绪会 fatal 退出（GitHub CI 实证 180s 超时）
