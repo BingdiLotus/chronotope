@@ -47,6 +47,7 @@ type fakeStore struct {
 	archives         map[string]store.Archive
 	users            map[string]store.User
 	approvalPolicies map[string]store.ApprovalPolicy
+	mcpAllowlists    map[string][]string
 	pendingOutbox    []*store.PendingOutboxRow
 	pendingType      string
 	pendingPayload   []byte
@@ -290,6 +291,16 @@ func (f *fakeStore) RunStartedAt(_ context.Context, runID string) (time.Time, er
 	}
 	return time.Time{}, store.ErrNotFound
 }
+func (f *fakeStore) UpsertMCPAllowlist(_ context.Context, tenantID, server string, patterns []string) error {
+	if f.mcpAllowlists == nil {
+		f.mcpAllowlists = map[string][]string{}
+	}
+	f.mcpAllowlists[tenantID+"|"+server] = patterns
+	return nil
+}
+
+func (f *fakeStore) MCPToolAllowed(_ context.Context, _, _, _ string) (bool, error) { return true, nil }
+
 func (f *fakeStore) UpsertApprovalPolicy(_ context.Context, p store.ApprovalPolicy) error {
 	if f.approvalPolicies == nil {
 		f.approvalPolicies = map[string]store.ApprovalPolicy{}

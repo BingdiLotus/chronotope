@@ -96,6 +96,11 @@ func (f *fakeStore) ListWorkspaceFiles(_ context.Context, _ string, _ int) ([]st
 	return nil, nil
 }
 
+func (f *fakeStore) MCPToolAllowed(_ context.Context, tenantID, server, tool string) (bool, error) {
+	// fake 默认：全放行（allowlist 语义由 mcp 相关单测覆盖）
+	return true, nil
+}
+
 func (f *fakeStore) GetSandboxBySession(_ context.Context, _ string) (*store.SandboxRow, error) {
 	if f.sandboxBySession == nil {
 		return nil, store.ErrNotFound

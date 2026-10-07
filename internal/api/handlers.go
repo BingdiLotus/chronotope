@@ -680,6 +680,25 @@ func (h *Handler) orgAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"audit": rows})
 }
 
+// PUT /orgs/{orgID}/mcp-allowlist —— MCP 网关工具白名单（期 3 §C：
+// 基础设施安全面——空列表 = 全拒，默认安全）。
+func (h *Handler) upsertMCPAllowlist(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	var req struct {
+		Server       string   `json:"server"`
+		ToolPatterns []string `json:"tool_patterns"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Server == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "server 必填")
+		return
+	}
+	if err := h.Store.UpsertMCPAllowlist(r.Context(), orgID, req.Server, req.ToolPatterns); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tenant_id": orgID, "server": req.Server, "tool_patterns": req.ToolPatterns})
+}
+
 // POST /orgs/{orgID}/users —— 建技术主体（principal；期 3 §A：归属/权限/限流，
 // 与计费解耦）。
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {

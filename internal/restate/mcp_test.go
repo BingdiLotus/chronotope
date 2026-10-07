@@ -76,7 +76,7 @@ func TestHTTPMCPClient(t *testing.T) {
 func TestMCPToolsFromState(t *testing.T) {
 	client := &fakeMCP{specs: []MCPToolSpec{{Name: "echo", Schema: json.RawMessage(`{"type":"object"}`)}}}
 	conns := []MCPConnection{{Server: "s1", URL: "http://mcp"}}
-	tools, err := mcpToolsFromState(context.Background(), client, conns)
+	tools, err := mcpToolsFromState(context.Background(), client, conns, nil)
 	if err != nil || len(tools) != 1 {
 		t.Fatalf("tools: %+v err=%v", tools, err)
 	}

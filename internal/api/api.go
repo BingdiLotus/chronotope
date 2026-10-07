@@ -54,6 +54,8 @@ type Store interface {
 	CreateUser(ctx context.Context, u store.User) error
 	UpsertApprovalPolicy(ctx context.Context, p store.ApprovalPolicy) error
 	ListOrgAuditEvents(ctx context.Context, orgID, kind string, limit int) ([]store.AuditEvent, error)
+	UpsertMCPAllowlist(ctx context.Context, tenantID, server string, patterns []string) error
+	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
 	CreateArchive(ctx context.Context, a store.Archive) error
 	GetArchive(ctx context.Context, sessionID string) (*store.Archive, error)
 	SessionLastEventAt(ctx context.Context, sessionID string) (time.Time, error)

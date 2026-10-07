@@ -14,7 +14,7 @@ import (
 
 // mcpToolsFromState 把 session 的 MCP 连接展开为协议工具清单（名字 mcp:<server>:<tool>，
 // schema 透传——真实模型凭 schema 填参数）。连接工具缓存为空时懒 tools/list。
-func mcpToolsFromState(ctx context.Context, client MCPCaller, conns []MCPConnection) ([]runs.Tool, error) {
+func mcpToolsFromState(ctx context.Context, client MCPCaller, conns []MCPConnection, allowlist func(server, tool string) (bool, error)) ([]runs.Tool, error) {
 	if client == nil || len(conns) == 0 {
 		return nil, nil
 	}
@@ -29,6 +29,17 @@ func mcpToolsFromState(ctx context.Context, client MCPCaller, conns []MCPConnect
 			}
 		}
 		for _, t := range specs {
+			// MCP 网关 allowlist（期 3 §C 基础设施安全面）：未列工具不下发
+			//（无行 = 全拒，默认安全）；allowlist nil = 未启用网关（旧行为）
+			if allowlist != nil {
+				allowed, aErr := allowlist(conn.Server, t.Name)
+				if aErr != nil {
+					return nil, fmt.Errorf("mcp allowlist: %w", aErr)
+				}
+				if !allowed {
+					continue
+				}
+			}
 			out = append(out, runs.Tool{
 				Type:      "function",
 				Name:      runs.MCPToolPrefix + conn.Server + ":" + t.Name,

@@ -857,3 +857,31 @@ func TestArchiveCRUD(t *testing.T) {
 		t.Fatal("archived_at 应标记")
 	}
 }
+
+// TestMCPAllowlist 期 3 §C：工具白名单前缀匹配 + 空列表全拒。
+func TestMCPAllowlist(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_mcp_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	// 空列表 = 全拒
+	ok, err := s.MCPToolAllowed(ctx, "o_"+key, "echo", "echo")
+	if err != nil || ok {
+		t.Fatalf("空列表应全拒: %v err=%v", ok, err)
+	}
+	// 前缀匹配
+	if err := s.UpsertMCPAllowlist(ctx, "o_"+key, "echo", []string{"echo", "files."}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if ok, _ := s.MCPToolAllowed(ctx, "o_"+key, "echo", "echo"); !ok {
+		t.Fatal("精确匹配应放行")
+	}
+	if ok, _ := s.MCPToolAllowed(ctx, "o_"+key, "echo", "files.read"); !ok {
+		t.Fatal("前缀匹配应放行")
+	}
+	if ok, _ := s.MCPToolAllowed(ctx, "o_"+key, "echo", "danger"); ok {
+		t.Fatal("未列工具应拒绝")
+	}
+}

@@ -220,7 +220,13 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		}
 		// MCP 工具（落地方案 §11：worker 托管客户端，harness 只见 schema）：
 		// 懒 tools/list（失败降级跳过该 server，不阻断 run）
-		mcpTools, mcpErr := mcpToolsFromState(ctx, deps.MCP, state.MCP)
+		// MCP 网关 allowlist（期 3 §C）：按会话租户过滤工具（无行 = 全拒）
+		mcpTools, mcpErr := mcpToolsFromState(ctx, deps.MCP, state.MCP, func(server, tool string) (bool, error) {
+			if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+				return deps.Store.MCPToolAllowed(ctx, sess.OrgID, server, tool)
+			}
+			return false, nil
+		})
 		if mcpErr != nil {
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.EventTruncated, "mcp", "tools", map[string]any{
 				"step": step, "error": mcpErr.Error(),

@@ -52,6 +52,8 @@ type Store interface {
 	CreateSummary(ctx context.Context, sum store.Summary) (bool, error)
 	CreateMemoryItem(ctx context.Context, item store.MemoryItem) (bool, error)
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
+	// MCP 网关 allowlist（期 3 §C）
+	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
 }
 
 // SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object
