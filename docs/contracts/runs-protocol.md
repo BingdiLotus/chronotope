@@ -75,7 +75,7 @@ Content-Type: application/json
 - 帧间隔超时（30s 无帧，beat 缺失）同上述处理；
 - 输出超 `max_output_bytes` → 截断 + `done{truncated:true}` + 平台事件 `event.truncated`（截断是 journaled 事实）；
 - 截断/断流时 `done.usage` 允许不完整：以已收到分片为准、标 `usage_partial:true`（Anthropic 流断流时无 usage，契约必须容忍）；
-- `tool_result` 大 payload 走 `result_ref`（引用外置，见契约规范 §7 journal 大小策略）。
+- `tool_result` 大 payload 走 `result_ref`（引用外置；实现现状：exec 结果 >256KB 外置 RustFS（store 层），其余 payload 由 worker 侧 4096 字节截断内联）。
 
 ## 工具分流（harness 侧实现要点）
 

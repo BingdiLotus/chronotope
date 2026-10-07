@@ -24,6 +24,9 @@ type Limits struct {
 // Capabilities 是沙箱能力（cpu/gpu/network/browser 字段从第一天就在协议里，实现可后补）。
 type Capabilities struct {
 	Network bool `json:"network"`
+	// GPU 能力（预设未实现：正式版架构「能力路由（网络/GPU/镜像）」——曾误删，
+	// 恢复为规划标记；实现时加 executor 侧透传）
+	GPU bool `json:"gpu"`
 }
 
 // CreateSandboxRequest 是 POST /sandboxes 的请求体。
@@ -38,10 +41,11 @@ type CreateSandboxRequest struct {
 }
 
 // Sandbox 是沙箱引用。
-// Sandbox 是创建结果的窄视图（仅 ID——Status/Image/Driver 曾写而不读，
-// 架构审计死字段删除；行状态以 store.SandboxRow 为准）。
+// Sandbox 是创建结果视图。Driver 是 e2b 身份的缝（server 响应曾硬编码
+// "docker"——审计后续审查恢复并接线）。
 type Sandbox struct {
-	ID string `json:"sandbox_id"`
+	ID     string `json:"sandbox_id"`
+	Driver string `json:"driver"` // docker | e2b_selfhosted
 }
 
 // ExecuteRequest 是 POST /execute 的请求体；Name 必须是工具名词汇表规范名。

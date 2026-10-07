@@ -51,24 +51,24 @@ func TestEventTypeUniverse(t *testing.T) {
 
 func TestEventSampleRoundTrip(t *testing.T) {
 	b := testdata(t, "events.sample.json")
-	// 样本契约是 SSE 事件形状（snake_case 键——EventRow 无 json 标签）
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
+	// 契约形状 = Event 投影（events.schema.json 的 Go 形状）
+	var ev event.Event
+	if err := json.Unmarshal(b, &ev); err != nil {
 		t.Fatalf("unmarshal sample: %v", err)
 	}
-	if m["session_id"] != "s_1" || m["run_id"] != "r_1" || m["seq"] != float64(42) || m["type"] != "sandbox.exec" {
-		t.Fatalf("unexpected sample content: %+v", m)
+	if ev.SessionID != "s_1" || ev.RunID != "r_1" || ev.Type != event.SandboxExec || ev.Seq != 42 {
+		t.Fatalf("unexpected sample content: %+v", ev)
 	}
-	if !event.Type(m["type"].(string)).Valid() {
-		t.Fatalf("sample type invalid: %v", m["type"])
+	if !ev.Type.Valid() {
+		t.Fatalf("sample type invalid: %q", ev.Type)
 	}
 	// 回序列化稳定（字段顺序无关，语义一致）
-	var m2 map[string]any
-	if err := json.Unmarshal(mustMarshal(t, m), &m2); err != nil {
+	var ev2 event.Event
+	if err := json.Unmarshal(mustMarshal(t, ev), &ev2); err != nil {
 		t.Fatalf("re-unmarshal: %v", err)
 	}
-	if m2["seq"] != m["seq"] || m2["type"] != m["type"] || m2["session_id"] != m["session_id"] {
-		t.Fatalf("round trip mismatch: %+v vs %+v", m, m2)
+	if ev2.Seq != ev.Seq || ev2.Type != ev.Type || ev2.SessionID != ev.SessionID {
+		t.Fatalf("round trip mismatch: %+v vs %+v", ev, ev2)
 	}
 }
 

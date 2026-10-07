@@ -51,7 +51,7 @@ func (d *E2BDriver) CreateSandbox(ctx context.Context, req CreateSandboxRequest)
 	if err != nil {
 		return nil, err
 	}
-	return &Sandbox{ID: id}, nil
+	return &Sandbox{ID: id, Driver: "e2b"}, nil
 }
 
 // Execute 命令执行：E2B 无流式通道，收集完成后写入 log（执行期间无帧；

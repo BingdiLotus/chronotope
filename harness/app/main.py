@@ -137,6 +137,8 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
                 usage.tokens_out += chunk.usage.get("tokens_out", 0)
 
         if truncated:
+            # 截断时 usage 不完整——契约要求标 usage_partial:true（预设落地）
+            usage.usage_partial = True
             yield _sse(p.done("".join(deltas), usage, truncated=True, seq=seq))
             return
 

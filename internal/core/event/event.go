@@ -6,7 +6,9 @@
 package event
 
 import (
+	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Type 是事件类型全集（契约规范 §5，只增不改）。
@@ -78,6 +80,26 @@ func (t Type) Valid() bool {
 	return false
 }
 
+// Event 是事件行的契约投影（events.schema.json 的 Go 形状——契约测试
+// roundtrip 用；生产行用 store.EventRow）。曾被误删（架构审计后续审查：
+// schema 契约需要类型化投影，map 断言削弱契约）。
+type Event struct {
+	ID        int64           `json:"id,omitempty"`
+	SessionID string          `json:"session_id"`
+	RunID     string          `json:"run_id"`
+	Seq       int64           `json:"seq"` // 每 session 单调，允许 gap
+	Type      Type            `json:"type"`
+	Payload   json.RawMessage `json:"payload"` // 必须携带 v 字段（契约规范 §5）
+	At        time.Time       `json:"at"`
+}
+
+// LLMUsage 是 llm.call 事件的 usage 载荷（断流时 usage_partial:true，契约规范 §3）。
+type LLMUsage struct {
+	TokensIn     int  `json:"tokens_in"`
+	TokensOut    int  `json:"tokens_out"`
+	UsagePartial bool `json:"usage_partial,omitempty"`
+}
+
 // DedupeKey 生成事件去重键：run_id:step:kind[:tool]（契约规范 §5）。
 // 重放重复发射时靠它幂等吞掉；tool 为空则省略该段。
 func DedupeKey(runID string, step int, kind, tool string) string {
@@ -86,11 +108,4 @@ func DedupeKey(runID string, step int, kind, tool string) string {
 		k += ":" + tool
 	}
 	return k
-}
-
-// LLMUsage 是 llm.call 事件的 usage 载荷（断流时允许 usage_partial:true，契约规范 §3）。
-type LLMUsage struct {
-	TokensIn     int  `json:"tokens_in"`
-	TokensOut    int  `json:"tokens_out"`
-	UsagePartial bool `json:"usage_partial,omitempty"`
 }

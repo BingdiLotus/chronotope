@@ -202,7 +202,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"sandbox_id": sb.ID, "status": "ready", "image": req.Image, "driver": "docker",
+		"sandbox_id": sb.ID, "status": "ready", "image": req.Image, "driver": sb.Driver,
 	})
 }
 

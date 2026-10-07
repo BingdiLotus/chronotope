@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
@@ -82,6 +83,59 @@ func (a *Aggregator) pass(ctx context.Context) error {
 		watermark = toID
 	}
 	return nil
+}
+
+// computeUsage 纯函数：事件 → 1min 桶用量（全量重建语义——冷层归档物化回放
+// 与计量重建的预设；生产聚合走 computeDelta 增量）。曾误删（审计后续审查：
+// 未来用途有文档记录，纯函数保留成本极低）。
+func computeUsage(sessionID string, events []store.EventRow) []store.UsageRow {
+	buckets := map[time.Time]*store.UsageRow{}
+	getBucket := func(at time.Time) *store.UsageRow {
+		key := at.Truncate(usageBucketDuration)
+		u, ok := buckets[key]
+		if !ok {
+			u = &store.UsageRow{SessionID: sessionID, Bucket: key}
+			buckets[key] = u
+		}
+		return u
+	}
+	for i, ev := range events {
+		switch ev.Type {
+		case event.RunCompleted, event.RunFailed, event.RunCancelled:
+			for j := i - 1; j >= 0; j-- {
+				if events[j].Type == event.RunStarted && events[j].RunID == ev.RunID {
+					dur := ev.At.Sub(events[j].At).Seconds()
+					if dur < 0 {
+						dur = 0 // 时钟回拨防御（边界语义 §5）
+					}
+					getBucket(events[j].At).ActiveSeconds += dur
+					break
+				}
+			}
+		case event.LLMCall:
+			var u struct {
+				Usage struct {
+					TokensIn  int `json:"tokens_in"`
+					TokensOut int `json:"tokens_out"`
+				} `json:"usage"`
+			}
+			_ = json.Unmarshal(ev.Payload, &u)
+			getBucket(ev.At).TokensIn += int64(u.Usage.TokensIn)
+			getBucket(ev.At).TokensOut += int64(u.Usage.TokensOut)
+		case event.SandboxExec:
+			var p struct {
+				DurationMs float64 `json:"duration_ms"`
+			}
+			_ = json.Unmarshal(ev.Payload, &p)
+			getBucket(ev.At).ComputeSeconds += p.DurationMs / 1000
+		}
+	}
+	out := make([]store.UsageRow, 0, len(buckets))
+	for _, u := range buckets {
+		out = append(out, *u)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bucket.Before(out[j].Bucket) })
+	return out
 }
 
 // computeDelta 纯增量：本批新事件 → usage 增量行。活跃秒跨度经 RunStartedAt
