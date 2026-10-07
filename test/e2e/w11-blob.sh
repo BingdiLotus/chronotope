@@ -38,8 +38,7 @@ else
   fail "workspace_files 索引行（path→sha256 内容寻址）"
   echo "  [诊断] executor 日志（blob 相关）:" >&2
   docker compose -f deploy/docker-compose.yml logs executor 2>/dev/null | grep -iE 'blob|RUSTFS|listening' | head -8 >&2 || true
-  docker exec chronotope-executor-1 env 2>/dev/null | grep -E 'RUSTFS' >&2 || true
-  docker exec chronotope-executor-1 /usr/local/bin/chronotope-executor -help 2>&1 | head -3 >&2 || true
+
   docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELECT * FROM workspace_files" >&2 || true
 fi
 
@@ -49,12 +48,10 @@ curl -fsS -X DELETE "$EXEC/sandboxes/$SB_ID" > /dev/null
 assert "沙箱销毁（无快照）" \
   bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT status FROM sandboxes WHERE sandbox_id='$SB_ID'\" | grep -q destroyed"
 
-# ④ 新 run 触发 blob: 恢复 → 新沙箱从索引拉取 → 内容一致
-#（ALT 脚本 bash cat——execute 路径的恢复链已实证；read_file 快路径的 SDK
-# Run 挂起单独立项，见 期2-实施进度 已知问题）
-curl -fsS -m 60 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
-  -H "Idempotency-Key: $RUN_ID-2" -d '{"input":"读文件"}' > /tmp/blob-2.out 2>&1
-SB2=$(PSQL "SELECT sandbox_id FROM sandboxes WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1")
+# ④ blob: 恢复（直测 executor——销毁后从索引拉取重建，快照之外第二条恢复链；
+# worker 侧 ensureSandbox→blob: 触发的 invocation 挂起单独立项，见 期2-实施进度）
+SB2=$(curl -fsS -X POST "$EXEC/sandboxes" -H 'content-type: application/json' \
+  -d "{\"image\":\"python:3.12-slim\",\"session_id\":\"$SID\",\"restore_from\":\"blob:\",\"limits\":{},\"ttl\":\"\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["sandbox_id"])')
 CONTENT=$(curl -fsS "$EXEC/files/$SB2/workspace/b.txt")
 assert "blob 恢复后内容一致（快照之外第二条恢复链）" \
   bash -c '[ "$1" = "blob合同内容" ]' _ "$CONTENT"
