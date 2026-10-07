@@ -37,7 +37,7 @@ if docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELE
 else
   fail "workspace_files 索引行（path→sha256 内容寻址）"
   echo "  [诊断] executor 日志（blob 相关）:" >&2
-  docker compose -f deploy/docker-compose.yml logs executor 2>/dev/null | grep -iE 'blob|RUSTFS' | tail -5 >&2 || true
+  docker compose -f deploy/docker-compose.yml logs executor 2>/dev/null | grep -iE 'blob|RUSTFS|listening' | head -8 >&2 || true
   docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELECT * FROM workspace_files" >&2 || true
 fi
 
