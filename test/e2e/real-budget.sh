@@ -43,14 +43,15 @@ assert "真实用量触发冻结（budget.exceeded + run.frozen）" \
 # 充值解冻
 curl -fsS -X PUT "$API/orgs/org-$RUN_ID/budget" -H 'content-type: application/json' \
   -d '{"daily_token_budget":1000000}' > /dev/null
-curl -fsS -m 120 -X POST "$API/sessions/$SID/actions" -H 'content-type: application/json' \
 curl -fsS -N "$API/sessions/$SID/events?after=0" > /tmp/rbud-uf-sse.out 2>&1 &
 UF_SSE=$!
 sleep 1
+curl -fsS -m 120 -X POST "$API/sessions/$SID/actions" -H 'content-type: application/json' \
   -d '{"action":"unfreeze"}' > /dev/null 2>&1 || true
 sleep 5
 assert "解冻后真实模型继续完成（run.completed）" \
   bash -c 'for i in $(seq 1 90); do grep -q "run.completed" /tmp/rbud-uf-sse.out && exit 0; sleep 2; done; exit 1'
+kill "$UF_SSE" 2>/dev/null || true
 
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
 [ "$FAIL" = "0" ]

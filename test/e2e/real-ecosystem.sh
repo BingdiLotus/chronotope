@@ -41,7 +41,6 @@ curl -fsS -m 300 -X POST "$API/sessions/$SID/runs" -H 'content-type: application
 RUN_PID=$!
 wait "$RUN_PID" || true
 sleep 2
-kill "$SSE_PID" 2>/dev/null || true
 assert "真实模型调用 MCP（mcp.call 无错误 + 完成）" \
   bash -c 'grep -q "mcp.call" /tmp/reco-sse.out && grep -q "completed" /tmp/reco-mcp.out && ! grep -q "\\"error\\":true" /tmp/reco-sse.out'
 
@@ -49,6 +48,7 @@ assert "真实模型调用 MCP（mcp.call 无错误 + 完成）" \
 curl -fsS -X POST "$API/sessions/$SID/skills" -H 'content-type: application/json' \
   -d '{"name":"demo-skill","content":"# Demo Skill\n真实模型安装的演示技能。"}' > /dev/null
 sleep 2
+kill "$SSE_PID" 2>/dev/null || true
 assert "skill 安装（skill.install 事件）" \
   bash -c 'grep -q "skill.install" /tmp/reco-sse.out'
 
