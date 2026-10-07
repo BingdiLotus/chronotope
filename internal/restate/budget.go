@@ -2,66 +2,44 @@ package restate
 
 import (
 	"context"
-	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
-	"github.com/bingdilotus/chronotope/internal/store"
+	"github.com/bingdilotus/chronotope/internal/policy"
 )
 
-// orgQuotaExceeded 三级熔断 ② 级检查：org 当日用量 vs 预算（0/缺省 = 无限）。
-// 返回 (超限, 键, error)；org 读失败按不阻断处理（fail-open，防御配额元数据故障）。
-// budgetSnapshot 是 org 预算入口快照（正确性二期 ⑧：journal 化——run 内检查
-// 只基于快照 + 本 run 累计，不再读可变 org 用量；重放回放同一快照，确定性）。
-// 字段必须导出 + json 标签（journal 序列化；未导出会重放成 nil——e2e 实证过的坑）。
-type budgetSnapshot struct {
-	OrgID        string  `json:"org_id"`
-	QuotaTokens  float64 `json:"quota_tokens"`
-	QuotaCompute float64 `json:"quota_compute"`
-	UsageTokens  int64   `json:"usage_tokens"`
-	UsageCompute float64 `json:"usage_compute"`
+// budgetSnapshotOf 策略缝快照装配：nil/AllowAll → 零快照（Check 恒 Allow）；
+// 参考实现（*policy.OrgDailyBudget）→ SnapshotOrg。业务方实现自己的
+// BudgetPolicy 时，若快照装配不同（如订阅席位），在此类型切换扩展。
+func budgetSnapshotOf(ctx context.Context, p BudgetPolicy, tenantID string) policy.BudgetSnapshot {
+	if p == nil {
+		return policy.BudgetSnapshot{}
+	}
+	if snap, ok := p.(interface {
+		SnapshotOrg(context.Context, string) policy.BudgetSnapshot
+	}); ok {
+		return snap.SnapshotOrg(ctx, tenantID)
+	}
+	return policy.BudgetSnapshot{TenantID: tenantID}
 }
 
-// snapshotOrgBudget 读 org 配额 + 当日用量（一次；失败 fail-open 零值）。
-func snapshotOrgBudget(ctx context.Context, deps *Deps, orgID string) (budgetSnapshot, error) {
-	org, err := deps.Store.GetOrg(ctx, orgID)
-	if err != nil || org == nil {
-		return budgetSnapshot{OrgID: orgID}, nil
+// 预算检查已迁至策略缝（期 3 §A）：internal/policy.BudgetPolicy + 参考实现
+// OrgDailyBudget（原 org 日预算逻辑平移）。本文件保留 freezeRun——
+// 冻结槽是层 0 运行态原语（挂起零进程占用等待外部信号），策略缝判定
+// Hold 后调用；业务语义不在运行时硬编码。
+
+// budgetCheck 策略缝判定：nil = AllowAll（无业务=无限）。
+func budgetCheck(ctx context.Context, p BudgetPolicy, snap policy.BudgetSnapshot, acc policy.Accum) policy.Decision {
+	if p == nil {
+		return policy.Decision{Allow: true}
 	}
-	tokens, compute, err := deps.Store.OrgDailyUsage(ctx, orgID, time.Now().UTC().Truncate(24*time.Hour))
-	if err != nil {
-		return budgetSnapshot{OrgID: orgID}, nil
-	}
-	snap := budgetSnapshot{OrgID: orgID, UsageTokens: tokens, UsageCompute: compute}
-	if b, ok := org.Quotas[store.QuotaDailyTokenBudget]; ok {
-		if f, ok := b.(float64); ok && f > 0 {
-			snap.QuotaTokens = f
-		}
-	}
-	if b, ok := org.Quotas[store.QuotaDailyComputeBudget]; ok {
-		if f, ok := b.(float64); ok && f > 0 {
-			snap.QuotaCompute = f
-		}
-	}
-	return snap, nil
+	return p.Check(ctx, snap, acc)
 }
 
-// quotaExceededSnap 快照判定：快照用量 + 本 run 累计 vs 快照配额（0 = 无限）。
-func quotaExceededSnap(snap budgetSnapshot, accTokens int64, accCompute float64) (bool, string) {
-	if snap.QuotaTokens > 0 && float64(snap.UsageTokens+accTokens) >= snap.QuotaTokens {
-		return true, store.QuotaDailyTokenBudget
-	}
-	if snap.QuotaCompute > 0 && snap.UsageCompute+accCompute >= snap.QuotaCompute {
-		return true, store.QuotaDailyComputeBudget
-	}
-	return false, ""
-}
-
-// freezeRun 欠费冻结（边界语义 §1）：budget.exceeded + run.frozen → awakeable 挂起
-// （零成本，不杀 run）→ 充值后 Unfreeze resolve → run.unfrozen → 继续执行。
-// 冻结槽独立于审批槽（FrozenAwakeable），二者可共存互不干扰。
+// freezeRun 挂起 run 等待解冻信号（冻结槽原语——欠费/预算只是策略缝的
+// 一种 Hold 来源；awaiting_approval 同构）。
 func freezeRun(ctx restate.Context, deps *Deps, in RunInput, runID string, emit *Emitter, key string) error {
 	awakeable := restate.Awakeable[string](ctx)
 	if err := deps.Sessions.SetFrozenAwakeable(ctx, in.SessionID, awakeable.Id()); err != nil {

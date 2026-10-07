@@ -9,6 +9,7 @@ import (
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/policy"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -74,11 +75,13 @@ type SessionSource interface {
 // Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
 // EM+ST 经 Store / MO 后置）。
 type Deps struct {
-	MCP      MCPCaller // MCP 客户端（nil = 未启用）
-	Store    Store
-	Harness  Harness
-	Executor Executor
-	Sessions SessionSource
+	// BudgetPolicy 预算策略缝（期 3 §A；nil = AllowAll）
+	BudgetPolicy BudgetPolicy
+	MCP          MCPCaller // MCP 客户端（nil = 未启用）
+	Store        Store
+	Harness      Harness
+	Executor     Executor
+	Sessions     SessionSource
 	// ConsolidateThreshold 是记忆消化触发的消息数阈值（默认 40；测试/演示可调小）。
 	ConsolidateThreshold int
 }
@@ -138,3 +141,7 @@ func (RestateSessionSource) Unfreeze(ctx restate.Context, sessionID string) erro
 		Request(restate.Void{})
 	return err
 }
+
+// BudgetPolicy 是预算策略缝（期 3 §A 三层分离：业务语义经接口注入；
+// 默认 AllowAll 无业务=无限；参考实现 OrgDailyBudget 平移自 org 日预算）。
+type BudgetPolicy = policy.BudgetPolicy

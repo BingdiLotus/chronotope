@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bingdilotus/chronotope/internal/policy"
 	"github.com/bingdilotus/chronotope/internal/restate"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
@@ -57,6 +58,9 @@ func main() {
 		MCP:                  restate.NewHTTPMCPClient(),
 		Sessions:             restate.RestateSessionSource{},
 		ConsolidateThreshold: consolidateThreshold,
+		// 预算策略缝（期 3 §A）：POLICY_BUDGET=none → AllowAll（无业务=无限）；
+		// 默认 org-daily → 参考实现（org 日预算，w5 语义）
+		BudgetPolicy: budgetPolicyOf(st),
 	}
 	handler, err := restate.BuildEndpoint(deps)
 	if err != nil {
@@ -82,6 +86,17 @@ func main() {
 	log.Printf("注册部署: curl -X POST :9070/deployments -d '{\"uri\":\"http://<worker>\",\"version\":\"v1\",\"use_http_11\":true,\"force\":true}'")
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+// budgetPolicyOf 装配预算策略缝（期 3 §A：env 选择；默认参考实现）。
+func budgetPolicyOf(st *store.Store) restate.BudgetPolicy {
+	if envOr("POLICY_BUDGET", "org-daily") == "none" {
+		return restate.BudgetPolicy(policy.AllowAll{})
+	}
+	return &policy.OrgDailyBudget{
+		Org:   st.GetOrgQuotas,
+		Usage: st.OrgDailyUsage,
 	}
 }
 

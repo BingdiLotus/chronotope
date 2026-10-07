@@ -74,3 +74,12 @@ WHERE sess.org_id = $1 AND u.bucket >= $2`
 	}
 	return tokens, computeSeconds, nil
 }
+
+// GetOrgQuotas 读租户配额（期 3 §A 策略缝参考实现的数据装配）。
+func (s *Store) GetOrgQuotas(ctx context.Context, orgID string) (map[string]any, error) {
+	org, err := s.GetOrg(ctx, orgID)
+	if err != nil || org == nil {
+		return nil, err
+	}
+	return org.Quotas, nil
+}

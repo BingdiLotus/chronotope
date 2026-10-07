@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 	"github.com/restatedev/sdk-go/x/mocks"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/policy"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
@@ -19,37 +21,42 @@ import (
 // token/计算秒双轴、0/缺省 = 无限、非法值忽略、快照+累计语义。
 func TestOrgBudgetSnapshotAndCheck(t *testing.T) {
 	st := &fakeStore{orgQuotas: map[string]any{store.QuotaDailyTokenBudget: float64(100)}}
-	deps := &Deps{Store: st}
+	p := policy.OrgDailyBudget{
+		Org: func(_ context.Context, _ string) (map[string]any, error) { return st.orgQuotas, nil },
+		Usage: func(_ context.Context, _ string, _ time.Time) (int64, float64, error) {
+			return st.orgTokens, st.orgCompute, nil
+		},
+	}
 
 	st.orgTokens = 99
-	snap, err := snapshotOrgBudget(t.Context(), deps, "org_test")
-	if err != nil || snap.QuotaTokens != 100 || snap.UsageTokens != 99 {
-		t.Fatalf("快照不符: %+v err=%v", snap, err)
+	snap := p.SnapshotOrg(t.Context(), "org_test")
+	if snap.QuotaTokens != 100 || snap.UsageTokens != 99 {
+		t.Fatalf("快照不符: %+v", snap)
 	}
-	if exceeded, _ := quotaExceededSnap(snap, 0, 0); exceeded {
+	if d := p.Check(t.Context(), snap, policy.Accum{}); d.Allow == false {
 		t.Fatal("99 < 100 不应超限")
 	}
 	// 本 run 累计使快照超限（其他会话用量不变）
-	if exceeded, key := quotaExceededSnap(snap, 1, 0); !exceeded || key != store.QuotaDailyTokenBudget {
-		t.Fatalf("99+1 >= 100 应超限: %s", key)
+	if d := p.Check(t.Context(), snap, policy.Accum{Tokens: 1}); d.Allow || d.Key != store.QuotaDailyTokenBudget {
+		t.Fatalf("99+1 >= 100 应超限: %+v", d)
 	}
 	// 计算秒轴
 	st.orgTokens = 0
 	st.orgQuotas = map[string]any{store.QuotaDailyComputeBudget: float64(10)}
 	st.orgCompute = 10
-	snap, _ = snapshotOrgBudget(t.Context(), deps, "org_test")
-	if exceeded, key := quotaExceededSnap(snap, 0, 0); !exceeded || key != store.QuotaDailyComputeBudget {
-		t.Fatalf("计算秒应超限: %s", key)
+	snap = p.SnapshotOrg(t.Context(), "org_test")
+	if d := p.Check(t.Context(), snap, policy.Accum{}); d.Allow || d.Key != store.QuotaDailyComputeBudget {
+		t.Fatalf("计算秒应超限: %+v", d)
 	}
 	// 缺省/非法 → 无限
 	st.orgQuotas = map[string]any{store.QuotaDailyTokenBudget: "bad"}
-	snap, _ = snapshotOrgBudget(t.Context(), deps, "org_test")
+	snap = p.SnapshotOrg(t.Context(), "org_test")
 	if snap.QuotaTokens != 0 {
 		t.Fatalf("非法值应视为无限: %+v", snap)
 	}
 	st.orgQuotas = nil
-	snap, _ = snapshotOrgBudget(t.Context(), deps, "org_test")
-	if exceeded, _ := quotaExceededSnap(snap, 100000, 0); exceeded {
+	snap = p.SnapshotOrg(t.Context(), "org_test")
+	if d := p.Check(t.Context(), snap, policy.Accum{Tokens: 100000}); !d.Allow {
 		t.Fatal("无预算应视为无限")
 	}
 }
@@ -87,7 +94,7 @@ func TestRunLoopBudgetSnapshotDeterministic(t *testing.T) {
 	// 首次 harness 调用前把 org 用量推进到 200（模拟其他会话消费）——
 	// 旧实现每步读库会冻结；新实现用入口快照（90）不受影响
 	ha.onCall = func() { st.orgTokens = 200 }
-	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	out, err := runLoop(ctx, budgetDeps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
 	if err != nil || out.Final != "完成。" {
 		t.Fatalf("快照确定性：应正常完成: %+v err=%v", out, err)
 	}
@@ -99,6 +106,18 @@ func TestRunLoopBudgetSnapshotDeterministic(t *testing.T) {
 
 // newBudgetMockedLoop：Run 真执行 + Awakeable mock（freeze 挂起 → resolve "unfrozen"；
 // resolve 时模拟充值：配额调大，后续每步检查不再超限）。
+// budgetDeps 为预算测试装配参考实现（期 3 §A：策略缝注入——w5 语义平移）。
+func budgetDeps(st *fakeStore, ha *fakeHarness, se *fakeSessions, ex *fakeExecutor) *Deps {
+	d := deps(st, ha, se, ex)
+	d.BudgetPolicy = &policy.OrgDailyBudget{
+		Org: func(_ context.Context, _ string) (map[string]any, error) { return st.orgQuotas, nil },
+		Usage: func(_ context.Context, _ string, _ time.Time) (int64, float64, error) {
+			return st.orgTokens, st.orgCompute, nil
+		},
+	}
+	return d
+}
+
 func newBudgetMockedLoop(t *testing.T, st *fakeStore) (restate.Context, *fakeSessions) {
 	t.Helper()
 	mockCtx := mocks.NewMockContext(t)
@@ -138,7 +157,7 @@ func TestRunLoopOrgBudgetFreezeAndUnfreeze(t *testing.T) {
 	ex := &fakeExecutor{}
 	ctx, se := newBudgetMockedLoop(t, st)
 
-	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "hi"}, "r_1")
+	out, err := runLoop(ctx, budgetDeps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "hi"}, "r_1")
 	if err != nil || out.Final != "完成。" {
 		t.Fatalf("解冻后应正常完成: out=%+v err=%v", out, err)
 	}
@@ -169,7 +188,7 @@ func TestRunLoopOrgBudgetNotExceeded(t *testing.T) {
 	ex := &fakeExecutor{}
 	ctx, se := newBudgetMockedLoop(t, st)
 
-	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "hi"}, "r_1")
+	out, err := runLoop(ctx, budgetDeps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "hi"}, "r_1")
 	if err != nil || out.Final != "完成。" {
 		t.Fatalf("应正常完成: out=%+v err=%v", out, err)
 	}

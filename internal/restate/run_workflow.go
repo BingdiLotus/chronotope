@@ -14,6 +14,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/policy"
 )
 
 // maxSteps 是 MVP 防失控上限（边界语义 §1 的 无进展检测/预算熔断 在其内触发）。
@@ -109,24 +110,26 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 
 	// 三级熔断 ②：org 日预算入口快照（正确性二期 ⑧——journal 化，run 内检查
 	// 只基于快照+累计；重放回放同一快照，执行中其他会话推进用量不影响分支）
-	var budgetSnap budgetSnapshot
+	var budgetSnap policy.BudgetSnapshot
 	if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
-		budgetSnap, err = restate.Run(ctx, func(rc restate.RunContext) (budgetSnapshot, error) {
-			return snapshotOrgBudget(rc, deps, sess.OrgID)
+		// 预算策略缝（期 3 §A）：快照 journal 化（⑧ 确定性）+ 策略判定——
+		// 默认 AllowAll（无业务=无限）；参考实现 OrgDailyBudget 平移自 org 日预算
+		budgetSnap, err = restate.Run(ctx, func(rc restate.RunContext) (policy.BudgetSnapshot, error) {
+			return budgetSnapshotOf(rc, deps.BudgetPolicy, sess.OrgID), nil
 		}, restate.WithName("budget-snapshot"))
 		if err != nil {
-			budgetSnap = budgetSnapshot{OrgID: sess.OrgID} // fail-open
+			budgetSnap = policy.BudgetSnapshot{TenantID: sess.OrgID} // fail-open
 		}
-		if exceeded, key := quotaExceededSnap(budgetSnap, 0, 0); exceeded {
-			if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
+		if d := budgetCheck(ctx, deps.BudgetPolicy, budgetSnap, policy.Accum{}); !d.Allow {
+			if err := freezeRun(ctx, deps, in, runID, emit, d.Key); err != nil {
 				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
 			}
 			// 解冻 = 充值后继续：重新快照（journaled）——充值后的配额对后续检查生效
-			budgetSnap, err = restate.Run(ctx, func(rc restate.RunContext) (budgetSnapshot, error) {
-				return snapshotOrgBudget(rc, deps, sess.OrgID)
+			budgetSnap, err = restate.Run(ctx, func(rc restate.RunContext) (policy.BudgetSnapshot, error) {
+				return budgetSnapshotOf(rc, deps.BudgetPolicy, sess.OrgID), nil
 			}, restate.WithName("budget-snapshot"))
 			if err != nil {
-				budgetSnap = budgetSnapshot{OrgID: sess.OrgID}
+				budgetSnap = policy.BudgetSnapshot{TenantID: sess.OrgID}
 			}
 		}
 	}
@@ -263,14 +266,14 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			return failBudget(step, budgetKeyTokens)
 		}
 		// 三级熔断 ②：org 日预算每步检查（快照 + 本 run 累计——确定性）→ 冻结
-		if exceeded, key := quotaExceededSnap(budgetSnap, accTokens, accCompute); exceeded {
-			if err := freezeRun(ctx, deps, in, runID, emit, key); err != nil {
+		if d := budgetCheck(ctx, deps.BudgetPolicy, budgetSnap, policy.Accum{Tokens: accTokens, Compute: accCompute}); !d.Allow {
+			if err := freezeRun(ctx, deps, in, runID, emit, d.Key); err != nil {
 				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("freeze: %w", err))
 			}
 			// 解冻后重新快照（充值生效；journaled 重放确定性）
 			if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
-				budgetSnap, _ = restate.Run(ctx, func(rc restate.RunContext) (budgetSnapshot, error) {
-					return snapshotOrgBudget(rc, deps, sess.OrgID)
+				budgetSnap, _ = restate.Run(ctx, func(rc restate.RunContext) (policy.BudgetSnapshot, error) {
+					return budgetSnapshotOf(rc, deps.BudgetPolicy, sess.OrgID), nil
 				}, restate.WithName("budget-snapshot"))
 			}
 		}
