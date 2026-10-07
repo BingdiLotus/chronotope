@@ -267,6 +267,21 @@ func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, s
 	return nil
 }
 
+func (f *fakeStore) ListAuditEventsByRun(_ context.Context, runID string, limit int) ([]store.AuditEventRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.AuditEventRow
+	for _, e := range f.events {
+		if e.RunID == runID {
+			out = append(out, store.AuditEventRow{Seq: e.Seq, Type: e.Type, At: e.At, DedupeKey: "dedupe:" + runID, Payload: e.Payload})
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (f *fakeStore) ListStaleQueuedRuns(_ context.Context, _ time.Time, _ int) ([]*store.Run, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1196,5 +1211,29 @@ func TestSubmitRunBindsConfigSnapshot(t *testing.T) {
 	_ = json.Unmarshal(b, &bound)
 	if bound.SpecDigest == "" || bound.Protocol != "1.0" || bound.AgentConfig.Model != "claude-sonnet-4-6" {
 		t.Fatalf("bound 应含 digest/协议/快照: %s", b)
+	}
+}
+
+// TestRunAuditEndpoint 期 1：journal 审计导出——重放轨迹 + dedupe 证据链 ndjson。
+func TestRunAuditEndpoint(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	runID := runIDFromIdempotency("s_seed", "k-audit")
+	fs.runs[runID] = &store.Run{ID: runID, SessionID: "s_seed", Status: sessionapi.RunCompleted}
+	fs.events = []store.EventRow{
+		{Seq: 1, RunID: runID, Type: event.RunStarted, At: time.Now()},
+		{Seq: 2, RunID: runID, Type: event.SandboxExec, At: time.Now()},
+	}
+	rec := doJSON(t, h.Router(), http.MethodGet, "/runs/"+runID+"/audit", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit 应 200: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "dedupe:"+runID) || !strings.Contains(rec.Body.String(), "sandbox.exec") {
+		t.Fatalf("审计应含 dedupe 键与轨迹: %s", rec.Body.String())
+	}
+	// 未知 run → 404
+	rec = doJSON(t, h.Router(), http.MethodGet, "/runs/r_none/audit", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知 run 应 404: %d", rec.Code)
 	}
 }

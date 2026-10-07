@@ -1,8 +1,23 @@
 # Chronotope
 
+[![CI](https://github.com/BingdiLotus/chronotope/actions/workflows/ci.yml/badge.svg)](https://github.com/BingdiLotus/chronotope/actions/workflows/ci.yml)
+
 > **时空可组合持久运行时** — An agent runtime that persists. Any time, any space, composably.
 
 Chronotope（chrono 时间 + tope 空间）是一个可在任意时间、任意空间持久执行的 Agent SaaS 运行时：以「只追加事件日志 + journal 重放」为地基，以「可插拔 Executor 协议」为空间边界，以「会话生命周期（创建→任务→休眠→唤醒→续跑）」为主轴；harness、模型、沙箱、记忆四者可替换。
+
+## 快速开始
+
+```bash
+git clone git@github.com:BingdiLotus/chronotope.git && cd chronotope
+cp .env.example .env                              # 无需真实模型密钥（fake 模式）
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
+bash scripts/demo.sh                              # 15 阶段 67 项断言全链路演示
+bash scripts/ci.sh --e2e                          # 本地 CI 门禁（与 GitHub Actions 同源）
+```
+
+架构与路线：`docs/正式版架构.md`（时空可组合持久化运行时规划）、`mvp-落地方案.md`
+（架构决策）、`边界语义设计.md`（产品语义）、`contracts/`（契约规范）。
 
 ## 项目状态
 
@@ -40,10 +55,11 @@ config 快照（agent 升级不影响旧 run）。
 
 **后置迭代**：PG 分区 parquet 冷层归档与 usage 增量 rollup（MVP 事件量下
 收益低——单会话 <1 万行时全量导出/重建已足够；量大才痛）、E2B 真实实例
-smoke（凭证就绪即跑 e2b-smoke.sh）、GitHub CI 实跑。真实模型调用待配
+smoke（凭证就绪即跑 e2b-smoke.sh）、真实模型夜间回归（repo secrets 配代理
+key 后可开 workflow_dispatch job）。真实模型调用待配
 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`（代码已就绪）。
 
-## 快速开始（W1 闭环）
+## 快速开始（开发模式：宿主机跑三个 Go 二进制）
 
 ```bash
 # 前置：Go 1.25+（brew install go）、uv、docker compose

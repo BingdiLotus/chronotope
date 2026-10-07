@@ -95,3 +95,37 @@ func nullable(s string) any {
 	}
 	return s
 }
+
+// AuditEventRow 是审计轨迹行（journal 审计导出：重放键 + 事件）。
+type AuditEventRow struct {
+	Seq       int64           `json:"seq"`
+	Type      event.Type      `json:"type"`
+	At        time.Time       `json:"at"`
+	DedupeKey string          `json:"dedupe_key"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// ListAuditEventsByRun 按 run 读审计轨迹（正式版架构 期 1：journal 审计导出）——
+// 含 dedupe 键（重放幂等的证据链）+ 事件类型序列（重放轨迹）。
+func (s *Store) ListAuditEventsByRun(ctx context.Context, runID string, limit int) ([]AuditEventRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	const q = `
+SELECT seq, type, at, COALESCE(dedupe_key, ''), payload
+FROM events WHERE run_id = $1 ORDER BY seq LIMIT $2`
+	rows, err := s.Pool.Query(ctx, q, runID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list audit events: %w", err)
+	}
+	defer rows.Close()
+	var out []AuditEventRow
+	for rows.Next() {
+		var e AuditEventRow
+		if err := rows.Scan(&e.Seq, &e.Type, &e.At, &e.DedupeKey, &e.Payload); err != nil {
+			return nil, fmt.Errorf("store: scan audit event: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

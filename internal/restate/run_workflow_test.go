@@ -820,3 +820,51 @@ func TestRunLoopBoundConfigSnapshot(t *testing.T) {
 		t.Fatalf("旧 run 无快照应回退会话 config: %+v", ha2.calls)
 	}
 }
+
+// TestOutputSchemaContract 结构化输出契约（期 1）：匹配通过、违反失败、无契约跳过。
+func TestOutputSchemaContract(t *testing.T) {
+	newLoop := func(cfg sessionapi.AgentConfig, final string) (*fakeStore, *fakeHarness, *fakeSessions) {
+		st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+		ha := &fakeHarness{script: []*Result{{Done: true, Final: final}}}
+		se := &fakeSessions{state: SessionState{Phase: sessionapi.PhaseReady, AgentConfig: cfg}}
+		return st, ha, se
+	}
+	run := func(st *fakeStore, ha *fakeHarness, se *fakeSessions) (RunOutput, error) {
+		mockCtx := mocks.NewMockContext(t)
+		mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+			func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+				v, err := f(fakeRunContext{context.Background()})
+				if err != nil {
+					return restate.AsTerminalError(err)
+				}
+				reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+				return nil
+			}).Maybe()
+		ctx := restate.WithMockContext(mockCtx)
+		return runLoop(ctx, deps(st, ha, se, &fakeExecutor{}), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	}
+	schema := json.RawMessage(`{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}}}`)
+
+	// 契约匹配 → 完成
+	cfg := sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{}, Version: 1, OutputSchema: schema}
+	st, ha, se := newLoop(cfg, `{"answer":"42"}`)
+	out, err := run(st, ha, se)
+	if err != nil || out.Final != `{"answer":"42"}` {
+		t.Fatalf("契约匹配应完成: %+v err=%v", out, err)
+	}
+	// 违反契约（final 非 JSON 对象）→ 失败
+	st2, ha2, se2 := newLoop(cfg, "纯文本答案")
+	_, err = run(st2, ha2, se2)
+	if err == nil || !strings.Contains(err.Error(), "output schema") {
+		t.Fatalf("违反契约应失败: %v", err)
+	}
+	if len(eventsOf(st2, event.RunFailed)) != 1 || !strings.Contains(string(eventsOf(st2, event.RunFailed)[0].payload), "output_schema_violation") {
+		t.Fatalf("应有 output_schema_violation 事件: %+v", st2.events)
+	}
+	// 无契约 → 纯文本通过
+	cfgPlain := sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{}, Version: 1}
+	st3, ha3, se3 := newLoop(cfgPlain, "纯文本答案")
+	if _, err := run(st3, ha3, se3); err != nil {
+		t.Fatalf("无契约不应校验: %v", err)
+	}
+}

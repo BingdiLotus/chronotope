@@ -50,6 +50,8 @@ type Store interface {
 	Subscribe(ctx context.Context, sessionID, channel, target string) error
 	// 接纳屏障（评审 #6：queued 遗留重投扫描）
 	ListStaleQueuedRuns(ctx context.Context, olderThan time.Time, limit int) ([]*store.Run, error)
+	// journal 审计导出（正式版架构 期 1）
+	ListAuditEventsByRun(ctx context.Context, runID string, limit int) ([]store.AuditEventRow, error)
 	ListPendingOutbox(ctx context.Context, limit int) ([]*store.PendingOutboxRow, error)
 	GetEvent(ctx context.Context, eventID int64) (string, []byte, time.Time, error)
 	OutboxDelivered(ctx context.Context, id int64) error
@@ -136,6 +138,7 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/subscriptions", h.subscribe)                 // 事件投递订阅（webhook/email）
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
+	r.Get("/runs/{runID}/audit", h.runAudit) // journal 审计导出（期 1：重放轨迹 + dedupe 证据链）
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)
 	return r
 }

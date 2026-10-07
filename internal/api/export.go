@@ -73,6 +73,28 @@ func (h *Handler) exportSession(w http.ResponseWriter, r *http.Request) {
 	}
 	writeEntry("events.ndjson", []byte(eb.String()))
 
+	// journal 审计（正式版架构 期 1）：按 run 的审计轨迹（重放轨迹 + dedupe 键）
+	var audit strings.Builder
+	runSet := map[string]bool{}
+	for _, ev := range events {
+		if ev.RunID != "" {
+			runSet[ev.RunID] = true
+		}
+	}
+	for runID := range runSet {
+		rows, _ := h.Store.ListAuditEventsByRun(r.Context(), runID, 200)
+		if len(rows) == 0 {
+			continue
+		}
+		audit.Reset()
+		for _, row := range rows {
+			b, _ := json.Marshal(row)
+			audit.Write(b)
+			audit.WriteByte('\n')
+		}
+		writeEntry("run-"+runID+"-audit.ndjson", []byte(audit.String()))
+	}
+
 	var mbuf strings.Builder
 	for _, m := range messages {
 		b, _ := json.Marshal(m)

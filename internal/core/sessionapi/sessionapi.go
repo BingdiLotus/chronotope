@@ -8,6 +8,8 @@
 //	         → completed / failed / cancelled
 package sessionapi
 
+import "encoding/json"
+
 // SessionPhase 是会话状态机全集。
 type SessionPhase string
 
@@ -52,13 +54,16 @@ const (
 
 // AgentConfig 是 agent.config（每次变更 version+1；run 启动时绑定版本）。
 type AgentConfig struct {
-	Model        string         `json:"model"`
-	Instructions string         `json:"instructions"`
-	Tools        []string       `json:"tools"`
-	MCPServers   []string       `json:"mcp_servers,omitempty"`
-	Skills       []string       `json:"skills,omitempty"`
-	Environment  Environment    `json:"environment,omitempty"`
-	Budget       map[string]any `json:"budget,omitempty"`
+	// OutputSchema 是 run 终态的结构化输出契约（JSON Schema；空 = 不限）。
+	// 校验失败 → run.failed{output_schema_violation}（正式版架构 期 1）。
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
+	Model        string          `json:"model"`
+	Instructions string          `json:"instructions"`
+	Tools        []string        `json:"tools"`
+	MCPServers   []string        `json:"mcp_servers,omitempty"`
+	Skills       []string        `json:"skills,omitempty"`
+	Environment  Environment     `json:"environment,omitempty"`
+	Budget       map[string]any  `json:"budget,omitempty"`
 	// ToolClasses 是工具风险分级覆盖表（边界语义 §2）：name → 0/1/2；
 	// 缺省按内置词汇分级（read_file/list_files=0 只读，其余=1 敏感）。
 	// class 2（危险）→ 强制 request_approval，永不自动执行。

@@ -361,6 +361,16 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		}
 
 		if res.Done {
+			// 结构化输出契约（正式版架构 期 1）：final 必须符合 cfg.OutputSchema
+			if len(cfg.OutputSchema) > 0 {
+				if vErr := validateOutputSchema(cfg.OutputSchema, res.Final); vErr != nil {
+					_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
+						"reason": "output_schema_violation", "message": vErr.Error(),
+					})
+					_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+					return RunOutput{}, restate.ToTerminalError(fmt.Errorf("output schema violation: %w", vErr))
+				}
+			}
 			content, _ := json.Marshal(res.Final)
 			if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "assistant", content); err != nil {
 				return RunOutput{}, restate.ToTerminalError(err)

@@ -33,5 +33,11 @@ assert "投递回执 ack → 204" \
 assert "ack 后清单状态可见（delivered_at 非空）" \
   bash -c 'curl -fsS '"$API"'/sessions/'"$SID"'/deliveries | python3 -c "import sys,json; d=json.load(sys.stdin)[\"deliveries\"][0]; assert d[\"delivered_at\"] is not None, d"'
 
+# journal 审计导出（正式版架构 期 1）：重放轨迹 + dedupe 证据链
+RID=$(curl -fsS "$API/sessions/$SID/deliveries" | python3 -c 'import sys,json;print(json.load(sys.stdin)["deliveries"][0]["run_id"])')
+AUDIT=$(curl -fsS "$API/runs/$RID/audit")
+assert "journal 审计导出（run.started → run.completed 轨迹 + dedupe 键）" \
+  bash -c 'echo "$1" | grep -q "run.started" && echo "$1" | grep -q "run.completed" && echo "$1" | grep -q "dedupe_key"' _ "$AUDIT"
+
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
 [[ "$FAIL" -eq 0 ]]

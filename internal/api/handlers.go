@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -620,6 +621,30 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"channel": req.Channel, "target": req.Target, "subscribed": true,
 	})
+}
+
+// GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
+// 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+func (h *Handler) runAudit(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	if _, err := h.Store.GetRun(r.Context(), runID); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, 404, "run not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	rows, err := h.Store.ListAuditEventsByRun(r.Context(), runID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="chronotope-%s-audit.ndjson"`, runID))
+	for _, row := range rows {
+		b, _ := json.Marshal(row)
+		_, _ = w.Write(append(b, '\n'))
+	}
 }
 
 // GET /sessions/{sessionID}/deliveries —— 交付清单（run 完成产物：final/steps/
