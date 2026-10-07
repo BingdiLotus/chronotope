@@ -26,6 +26,7 @@ ENV_ARGS=()
 [ -f .env ] && ENV_ARGS=(--env-file .env)
 DC="docker compose ${ENV_ARGS[*]} -f deploy/docker-compose.yml"
 API=http://localhost:8080
+RUN_ID="demo-$(date +%s)"
 ADMIN=http://localhost:9070
 PASS=0; FAIL=0
 pass() { echo -e "  \033[1;32m✓\033[0m $*"; PASS=$((PASS+1)); }
