@@ -61,7 +61,7 @@ for u in 8000 9082 9080 8080; do curl -fsS "localhost:$u/healthz" > /dev/null; d
 # 4. Playwright（profile → 测试文件）
 cd web
 case "$PROFILE" in
-  console) pnpm exec playwright test console "${@:2}" ;;
-  tt)      pnpm exec playwright test timetravel "${@:2}" ;;
-  runtree) pnpm exec playwright test runtree "${@:2}" ;;
+  console) timeout 300 pnpm exec playwright test console "${@:2}" ;;
+  tt)      timeout 300 pnpm exec playwright test timetravel "${@:2}" ;;
+  runtree) timeout 300 pnpm exec playwright test runtree "${@:2}" ;;
 esac
