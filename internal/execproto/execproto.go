@@ -80,5 +80,7 @@ type Driver interface {
 	Freeze(ctx context.Context, sandboxID string) error // Tier 1
 	Unfreeze(ctx context.Context, sandboxID string) error
 	Snapshot(ctx context.Context, sandboxID string) (string, error) // Tier 2 → snapshot_ref
-	Destroy(ctx context.Context, sandboxID string) error            // Tier 3
+	Destroy(ctx context.Context, sandboxID string) error
+	// ListOrphanContainers 按 label 列沙箱容器名（D2 启动 sweep）
+	ListOrphanContainers(ctx context.Context) ([]string, error) // Tier 3
 }

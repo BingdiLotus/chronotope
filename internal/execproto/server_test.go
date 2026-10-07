@@ -18,15 +18,21 @@ import (
 
 // fakeDriver 实现 Driver（服务器单测替身）。
 type fakeDriver struct {
-	created     CreateSandboxRequest
-	sandboxID   string
-	executed    []ExecuteRequest
-	execResult  *ExecuteResult
-	files       map[string]string
-	frozen      bool
-	destroyed   map[string]bool
-	failDestroy bool
-	snapshot    string
+	orphanContainers []string
+	orphanErr        error
+	created          CreateSandboxRequest
+	sandboxID        string
+	executed         []ExecuteRequest
+	execResult       *ExecuteResult
+	files            map[string]string
+	frozen           bool
+	destroyed        map[string]bool
+	failDestroy      bool
+	snapshot         string
+}
+
+func (f *fakeDriver) ListOrphanContainers(_ context.Context) ([]string, error) {
+	return f.orphanContainers, f.orphanErr
 }
 
 func (f *fakeDriver) CreateSandbox(_ context.Context, req CreateSandboxRequest) (*Sandbox, error) {
@@ -456,5 +462,36 @@ func TestLeaseEndpoints(t *testing.T) {
 		`{"sandbox_id":"sb_1","name":"bash","input":"echo hi","idempotency_key":"k1"}`)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "lease expired") {
 		t.Fatalf("无租约执行应 409 lease expired: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestServerSweep 生命周期闭环 D2：孤儿容器 vs DB 行矩阵——无行/已 destroyed/
+// 过期 → 销毁；ready 未过期 → 保留。
+func TestServerSweep(t *testing.T) {
+	mk := func(rows map[string]*store.SandboxRow, names []string) (*Server, *fakeDriver, *fakeSBStore) {
+		st := &fakeSBStore{sandboxes: rows}
+		d := &fakeDriver{orphanContainers: names}
+		return &Server{Driver: d, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, d, st
+	}
+	now := time.Now()
+	ttl := time.Minute
+	// 无行（崩溃窗口）→ 销毁；ready 未过期 → 保留；destroyed 行 → 销毁；过期 → 销毁
+	s, d, _ := mk(map[string]*store.SandboxRow{
+		"sb_ready":     {SandboxID: "sb_ready", Status: "ready", CreatedAt: now, TTL: &ttl},
+		"sb_destroyed": {SandboxID: "sb_destroyed", Status: "destroyed", CreatedAt: now, TTL: &ttl},
+		"sb_expired":   {SandboxID: "sb_expired", Status: "ready", CreatedAt: now.Add(-2 * time.Minute), TTL: &ttl},
+	}, []string{"sb_orphan", "sb_ready", "sb_destroyed", "sb_expired"})
+	n, err := s.Sweep(context.Background())
+	if err != nil || n != 3 {
+		t.Fatalf("sweep 应清 3: n=%d err=%v destroyed=%v", n, err, d.destroyed)
+	}
+	if !d.destroyed["sb_orphan"] || !d.destroyed["sb_destroyed"] || !d.destroyed["sb_expired"] || d.destroyed["sb_ready"] {
+		t.Fatalf("销毁集合不符: %v", d.destroyed)
+	}
+	// ps 失败 → 错误上抛（调用方降级不崩溃）
+	s2, _, _ := mk(nil, nil)
+	s2.Driver.(*fakeDriver).orphanErr = fmt.Errorf("docker down")
+	if _, err := s2.Sweep(context.Background()); err == nil {
+		t.Fatal("ps 失败应上抛")
 	}
 }

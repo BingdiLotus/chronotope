@@ -84,6 +84,45 @@ func (s *Server) GC(ctx context.Context) (int, error) {
 	return cleaned, nil
 }
 
+// Sweep 启动清理（生命周期闭环 D2）：按 label 扫孤儿容器 vs DB 行——
+// 无行/已 destroyed/TTL 过期 → 销毁（D1 连卷）；ready 未过期 → 保留交 GC。
+// 崩溃窗口（容器建了行没写/行删了容器没删成）在此闭环。返回清理数。
+func (s *Server) Sweep(ctx context.Context) (int, error) {
+	names, err := s.Driver.ListOrphanContainers(ctx)
+	if err != nil {
+		return 0, err
+	}
+	cleaned := 0
+	for _, id := range names {
+		row, err := s.Store.GetSandbox(ctx, id)
+		shouldDestroy := false
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			shouldDestroy = true // 孤儿容器无行（崩溃窗口）
+		case err != nil:
+			s.Logger.Warn("sweep: get row failed", "sandbox", id, "err", err)
+			continue
+		case row.Status == "destroyed":
+			shouldDestroy = true // 行已 destroyed 但容器未删成（历史尽力销毁）
+		case row.TTL != nil && time.Since(row.CreatedAt) > *row.TTL:
+			shouldDestroy = true // 已过期（GC 尚未轮到的残留）
+		}
+		if !shouldDestroy {
+			continue
+		}
+		if err := s.Driver.Destroy(ctx, id); err != nil {
+			s.Logger.Warn("sweep: destroy failed", "sandbox", id, "err", err)
+			continue
+		}
+		if err == nil && row != nil {
+			_ = s.Store.DeleteSandbox(ctx, id)
+		}
+		s.Logger.Info("sweep: removed orphan sandbox", "sandbox", id)
+		cleaned++
+	}
+	return cleaned, nil
+}
+
 // Router 挂载 executor 协议路由。
 func (s *Server) Router() chi.Router {
 	r := chi.NewRouter()

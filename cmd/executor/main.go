@@ -106,6 +106,12 @@ func main() {
 			gcInterval = d
 		}
 	}
+	// 启动 sweep（生命周期闭环 D2）：清崩溃窗口残留（失败仅告警——GC 兜底）
+	if n, err := server.Sweep(ctx); err != nil {
+		slog.Warn("boot sweep failed（GC 兜底）", "err", err)
+	} else if n > 0 {
+		slog.Info("boot sweep", "cleaned", n)
+	}
 	go func() {
 		ticker := time.NewTicker(gcInterval)
 		defer ticker.Stop()

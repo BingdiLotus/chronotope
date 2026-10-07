@@ -235,7 +235,14 @@ func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, 
 }
 
 func (d *DockerDriver) Destroy(ctx context.Context, sandboxID string) error {
-	return d.simple(ctx, "destroy", "rm", "-f", sandboxID)
+	// 生命周期闭环 D1：容器 + named volume 一并销毁（rm -f 的 -v 只删匿名卷，
+	// 命名卷 sb_* 需显式 volume rm——577 卷残留实证）；卷删除失败尽力
+	//（容器已删是硬条件，卷残留下轮 boot sweep 兜底）
+	if err := d.simple(ctx, "destroy", "rm", "-f", sandboxID); err != nil {
+		return err
+	}
+	_ = d.simple(ctx, "destroy-volume", "volume", "rm", "-f", sandboxID)
+	return nil
 }
 
 func (d *DockerDriver) simple(ctx context.Context, op string, args ...string) error {
@@ -243,6 +250,22 @@ func (d *DockerDriver) simple(ctx context.Context, op string, args ...string) er
 		return fmt.Errorf("docker %s: %w: %s", op, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// ListOrphanContainers 按 label 列全部沙箱容器名（生命周期闭环 D2：启动 sweep
+// 对比 DB 行的孤儿来源；ps 失败返回错误让调用方降级）。
+func (d *DockerDriver) ListOrphanContainers(ctx context.Context) ([]string, error) {
+	out, err := d.Runner.Run(ctx, "ps", "-a", "--filter", "label=chronotope.sandbox", "--format", "{{.Names}}")
+	if err != nil {
+		return nil, fmt.Errorf("docker ps sandboxes: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
 }
 
 // checkSandbox 沙箱存在性检查（docker inspect；防对已销毁容器操作）。
