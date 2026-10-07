@@ -96,7 +96,7 @@ func (s *Store) UpdateSandboxTier(ctx context.Context, sandboxID string, tier in
 }
 
 // ExecRow 是 sandbox_execs 表行（幂等缓存：exec 已执行但响应丢失 → 同键重发返回缓存结果，
-// 绝不复跑命令——契约规范 §4；TTL 24h；结果 >256KB 外置）。
+// 绝不复跑命令——契约规范 §4；TTL 30 天（008 跨周恢复意图；结果 >256KB 外置）。
 type ExecRow struct {
 	IdempotencyKey string
 	SandboxID      string
@@ -122,7 +122,7 @@ FROM sandbox_execs WHERE idempotency_key = $1`
 		return nil, fmt.Errorf("store: get exec: %w", err)
 	}
 	if time.Now().After(e.ExpiresAt) {
-		return nil, ErrNotFound // 缓存过期视为未执行（TTL 24h）
+		return nil, ErrNotFound // 缓存过期视为未执行（TTL 30 天）
 	}
 	return &e, nil
 }
@@ -132,7 +132,7 @@ FROM sandbox_execs WHERE idempotency_key = $1`
 func (s *Store) PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error {
 	const q = `
 INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state, input_digest, prepared_at)
-VALUES ($1, $2, NULL, now() + interval '24 hours', 'prepared', $3, now())
+VALUES ($1, $2, NULL, now() + interval '30 days', 'prepared', $3, now())
 ON CONFLICT (idempotency_key) DO NOTHING`
 	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, inputDigest); err != nil {
 		return fmt.Errorf("store: prepared exec: %w", err)
@@ -145,7 +145,7 @@ ON CONFLICT (idempotency_key) DO NOTHING`
 func (s *Store) PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
 	const q = `
 UPDATE sandbox_execs
-SET result = $3, state = 'done', expires_at = now() + interval '24 hours', sandbox_id = $2
+SET result = $3, state = 'done', expires_at = now() + interval '30 days', sandbox_id = $2
 WHERE idempotency_key = $1`
 	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result); err != nil {
 		return fmt.Errorf("store: done exec: %w", err)
@@ -153,7 +153,7 @@ WHERE idempotency_key = $1`
 	return nil
 }
 
-// PutExec 写入幂等缓存（TTL 24h，契约规范 §4）。
+// PutExec 写入幂等缓存（TTL 30 天，契约规范 §4）。
 // GetSandboxBySession 取会话最新沙箱行（快照恢复依据：ensureSandbox 重建时读
 // snapshot_ref——评审 #7 恢复路径）。
 func (s *Store) GetSandboxBySession(ctx context.Context, sessionID string) (*SandboxRow, error) {
@@ -187,9 +187,9 @@ FROM sandboxes WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`
 func (s *Store) PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
 	const q = `
 INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state)
-VALUES ($1, $2, $3, now() + interval '24 hours', 'done')
+VALUES ($1, $2, $3, now() + interval '30 days', 'done')
 ON CONFLICT (idempotency_key) DO UPDATE SET result = $3, state = 'done',
-  expires_at = now() + interval '24 hours'`
+  expires_at = now() + interval '30 days'`
 	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result); err != nil {
 		return fmt.Errorf("store: put exec: %w", err)
 	}
