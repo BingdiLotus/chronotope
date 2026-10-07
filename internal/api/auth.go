@@ -56,6 +56,7 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			org := ""
+			principal := ""
 			admin := false
 			key := bearerToken(r)
 			if key != "" {
@@ -72,9 +73,11 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 						return
 					}
 					org = row.OrgID
+					principal = row.UserID // 期 3 §A：key 绑定的技术主体
 				}
 			}
 			ctx := context.WithValue(r.Context(), orgKey, org)
+			ctx = context.WithValue(ctx, userKey, principal)
 			if mode == "on" {
 				// 匿名路径（healthz/webhooks）与 admin key 在 on 模式下放行
 				if !anonymousPath(r) && !admin && org == "" {
@@ -89,6 +92,19 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// userKey 是 principal 的上下文键（期 3 §A）。
+type userCtxKey struct{}
+
+var userKey = userCtxKey{}
+
+// PrincipalFrom 取上下文中的技术主体（空 = 租户级调用）。
+func PrincipalFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(userKey).(string); ok {
+		return v
+	}
+	return ""
 }
 
 // anonymousPath 匿名路径：无需 key（webhook 回调方/健康检查）。

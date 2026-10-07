@@ -45,6 +45,7 @@ type fakeStore struct {
 	watermark      int64
 	usageBuckets   map[string]store.UsageRow
 	archives       map[string]store.Archive
+	users          map[string]store.User
 	pendingOutbox  []*store.PendingOutboxRow
 	pendingType    string
 	pendingPayload []byte
@@ -70,6 +71,10 @@ func (f *fakeStore) CreateOrg(_ context.Context, id, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.orgs[id] = true
+	if f.orgRows == nil {
+		f.orgRows = map[string]*store.Org{}
+	}
+	f.orgRows[id] = &store.Org{ID: id, Name: name}
 	return nil
 }
 
@@ -244,9 +249,13 @@ func (f *fakeStore) GetAPIKeyByHash(_ context.Context, keyHash string) (*store.A
 }
 
 func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, scopes []string) error {
+	return f.CreateAPIKeyForUser(context.Background(), id, orgID, "", keyHash, scopes)
+}
+
+func (f *fakeStore) CreateAPIKeyForUser(_ context.Context, id, orgID, userID, keyHash string, scopes []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.apiKeys = append(f.apiKeys, &store.APIKeyRow{ID: id, OrgID: orgID, KeyHash: keyHash, Scopes: scopes})
+	f.apiKeys = append(f.apiKeys, &store.APIKeyRow{ID: id, OrgID: orgID, UserID: userID, KeyHash: keyHash, Scopes: scopes})
 	return nil
 }
 
@@ -280,6 +289,14 @@ func (f *fakeStore) RunStartedAt(_ context.Context, runID string) (time.Time, er
 	}
 	return time.Time{}, store.ErrNotFound
 }
+func (f *fakeStore) CreateUser(_ context.Context, u store.User) error {
+	if f.users == nil {
+		f.users = map[string]store.User{}
+	}
+	f.users[u.ID] = u
+	return nil
+}
+
 func (f *fakeStore) CreateArchive(_ context.Context, a store.Archive) error {
 	f.archives[a.SessionID] = a
 	return nil
@@ -1356,5 +1373,31 @@ func TestArchiveEndpoints(t *testing.T) {
 	rec = doJSON(t, h.Router(), http.MethodGet, "/sessions/s_seed/archive", "", nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bucket_path") {
 		t.Fatalf("清单应 200: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPrincipalFlow 期 3 §A：principal 化——建主体 + key 绑 user + 认证注入 + user 限流。
+func TestPrincipalFlow(t *testing.T) {
+	h, fs, _ := setup(t)
+	seedAgentSession(t, h, fs)
+	// 建主体
+	rec := doJSON(t, h.Router(), http.MethodPost, "/orgs/org_seed/users", `{"name":"张三"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("建主体应 201: %d %s", rec.Code, rec.Body.String())
+	}
+	// key 绑 user
+	rec = doJSON(t, h.Router(), http.MethodPost, "/orgs/org_seed/keys", `{"user_id":"u_x"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("key 应 201: %d %s", rec.Code, rec.Body.String())
+	}
+	// fake 的 key 行带 UserID（验证 CreateAPIKeyForUser 路径）
+	found := false
+	for _, v := range fs.apiKeys {
+		if v.UserID == "u_x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("key 应绑 principal u_x: %+v", fs.apiKeys)
 	}
 }

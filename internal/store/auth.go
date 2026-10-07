@@ -10,18 +10,44 @@ import (
 type APIKeyRow struct {
 	ID        string    `json:"id"`
 	OrgID     string    `json:"org_id"`
+	UserID    string    `json:"user_id"` // principal（期 3 §A；空 = 租户级 key，旧语义）
 	KeyHash   string    `json:"-"`
 	Scopes    []string  `json:"scopes"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// User 是技术主体（principal——归属/权限/限流；与计费解耦，期 3 §A）。
+type User struct {
+	ID        string    `json:"id"`
+	OrgID     string    `json:"org_id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// CreateUser 幂等建主体（同 id 冲突忽略）。
+func (s *Store) CreateUser(ctx context.Context, u User) error {
+	const q = `
+INSERT INTO users (id, tenant_id, name)
+VALUES ($1, $2, $3)
+ON CONFLICT (id) DO NOTHING`
+	if _, err := s.Pool.Exec(ctx, q, u.ID, u.OrgID, u.Name); err != nil {
+		return fmt.Errorf("store: create user: %w", err)
+	}
+	return nil
+}
+
 // CreateAPIKey 写入 key 哈希（幂等：hash 冲突返回已存在行）。
 func (s *Store) CreateAPIKey(ctx context.Context, id, orgID, keyHash string, scopes []string) error {
+	return s.CreateAPIKeyForUser(ctx, id, orgID, "", keyHash, scopes)
+}
+
+// CreateAPIKeyForUser 建 key 绑 principal（空 userID = 租户级 key）。
+func (s *Store) CreateAPIKeyForUser(ctx context.Context, id, orgID, userID, keyHash string, scopes []string) error {
 	const q = `
-INSERT INTO api_keys (id, org_id, key_hash, scopes)
-VALUES ($1, $2, $3, $4)
+INSERT INTO api_keys (id, org_id, user_id, key_hash, scopes)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (key_hash) DO NOTHING`
-	if _, err := s.Pool.Exec(ctx, q, id, orgID, keyHash, scopes); err != nil {
+	if _, err := s.Pool.Exec(ctx, q, id, orgID, userID, keyHash, scopes); err != nil {
 		return fmt.Errorf("store: create api key: %w", err)
 	}
 	return nil
@@ -30,10 +56,10 @@ ON CONFLICT (key_hash) DO NOTHING`
 // GetAPIKeyByHash 按 key 哈希查行（认证中间件）。
 func (s *Store) GetAPIKeyByHash(ctx context.Context, keyHash string) (*APIKeyRow, error) {
 	const q = `
-SELECT id, org_id, key_hash, scopes, created_at
+SELECT id, org_id, COALESCE(user_id, ''), key_hash, scopes, created_at
 FROM api_keys WHERE key_hash = $1`
 	var row APIKeyRow
-	if err := s.Pool.QueryRow(ctx, q, keyHash).Scan(&row.ID, &row.OrgID, &row.KeyHash, &row.Scopes, &row.CreatedAt); err != nil {
+	if err := s.Pool.QueryRow(ctx, q, keyHash).Scan(&row.ID, &row.OrgID, &row.UserID, &row.KeyHash, &row.Scopes, &row.CreatedAt); err != nil {
 		if isNoRowsErr(err) {
 			return nil, ErrNotFound
 		}

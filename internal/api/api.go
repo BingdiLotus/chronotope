@@ -51,6 +51,7 @@ type Store interface {
 	GetUsageWatermark(ctx context.Context) (int64, error)
 	ApplyUsageDelta(ctx context.Context, fromID, toID int64, deltas []store.UsageRow) error
 	RunStartedAt(ctx context.Context, runID string) (time.Time, error)
+	CreateUser(ctx context.Context, u store.User) error
 	CreateArchive(ctx context.Context, a store.Archive) error
 	GetArchive(ctx context.Context, sessionID string) (*store.Archive, error)
 	SessionLastEventAt(ctx context.Context, sessionID string) (time.Time, error)
@@ -73,6 +74,7 @@ type Store interface {
 	// 多租户认证（api_keys）
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (*store.APIKeyRow, error)
 	CreateAPIKey(ctx context.Context, id, orgID, keyHash string, scopes []string) error
+	CreateAPIKeyForUser(ctx context.Context, id, orgID, userID, keyHash string, scopes []string) error
 	ListSummaries(ctx context.Context, sessionID string) ([]store.Summary, error)
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 	GetOrg(ctx context.Context, orgID string) (*store.Org, error)
@@ -136,6 +138,7 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/sessions", h.listSessions)  // 会话列表（控制台最小页）
 		r.Put("/budget", h.updateOrgBudget) // org 预算（三级熔断 ②：充值入口）
 		r.Post("/keys", h.createAPIKey)     // 多租户认证：生成 key（明文仅此一次）
+		r.Post("/users", h.createUser)      // 技术主体（principal，期 3 §A）
 	})
 	r.Route("/agents/{agentID}", func(r chi.Router) {
 		r.Post("/sessions", h.createSession) // 创建 session → ready（沙箱懒创建）

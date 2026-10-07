@@ -118,8 +118,16 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	// 准入 ①：session 级限流（边界语义设计 §6：429 + Retry-After）
+	// 准入 ①：三层限流（边界语义设计 §6：429 + Retry-After）——
+	// principal 桶（期 3 §A：key 绑定的技术主体；空 = 租户级）+ session 桶
 	if h.Limiter != nil {
+		if principal := PrincipalFrom(r.Context()); principal != "" {
+			if ok, retry := h.Limiter.Take("user", principal); !ok {
+				w.Header().Set("Retry-After", retry.String())
+				writeError(w, http.StatusTooManyRequests, 429, "too many runs for this user, retry later")
+				return
+			}
+		}
 		if ok, retry := h.Limiter.Take("session", sessionID); !ok {
 			w.Header().Set("Retry-After", retry.String())
 			writeError(w, http.StatusTooManyRequests, 429, "too many runs for this session, retry later")
@@ -579,12 +587,16 @@ func (h *Handler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
+	var req struct {
+		UserID string `json:"user_id"` // 可选：绑 principal（期 3 §A）
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
 	plain, err := newAPIKey()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	if err := h.Store.CreateAPIKey(r.Context(), genID("k_"), orgID, sha256Hex(plain), []string{}); err != nil {
+	if err := h.Store.CreateAPIKeyForUser(r.Context(), genID("k_"), orgID, req.UserID, sha256Hex(plain), []string{}); err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
@@ -625,6 +637,25 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"channel": req.Channel, "target": req.Target, "subscribed": true,
 	})
+}
+
+// POST /orgs/{orgID}/users —— 建技术主体（principal；期 3 §A：归属/权限/限流，
+// 与计费解耦）。
+func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "name 必填")
+		return
+	}
+	user := store.User{ID: "u_" + genID(""), OrgID: orgID, Name: req.Name}
+	if err := h.Store.CreateUser(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, user)
 }
 
 // 时间旅行（正式版架构 期 2）：POST /sessions/{id}/checkpoints —— 经 session_ops
