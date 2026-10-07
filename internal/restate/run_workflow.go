@@ -361,7 +361,9 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				if maxCompute > 0 && accCompute > maxCompute {
 					return failBudget(step, budgetKeyCompute)
 				}
-				content, _ := json.Marshal(result)
+				// tool 消息带 tool_call_id（跨 run 重放时还原配对——Anthropic 硬校验
+				// 「No tool output found」：真实模型 e2e 实证的 fake 绿真实红缺口）
+				content, _ := json.Marshal(map[string]string{"tool_call_id": tc.ID, "content": result})
 				if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); err != nil {
 					return RunOutput{}, restate.ToTerminalError(err)
 				}
@@ -455,6 +457,23 @@ func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, cfg 
 		msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
 	}
 	for _, m := range history {
+		// tool 消息：还原 tool_call_id 配对（Anthropic 硬校验；历史旧数据无
+		// 该结构时降级为纯文本 tool 消息——研发期清库后不再出现）
+		if m.Role == "tool" {
+			var tr struct {
+				ToolCallID string `json:"tool_call_id"`
+				Content    string `json:"content"`
+			}
+			if err := json.Unmarshal(m.Content, &tr); err == nil && tr.ToolCallID != "" {
+				msgs = append(msgs, runs.Message{Role: "tool", Content: tr.Content, ToolCallID: tr.ToolCallID, Source: "trusted"})
+				continue
+			}
+			var text string
+			if err := json.Unmarshal(m.Content, &text); err == nil {
+				msgs = append(msgs, runs.Message{Role: "tool", Content: text, Source: "trusted"})
+			}
+			continue
+		}
 		var text string
 		if err := json.Unmarshal(m.Content, &text); err == nil {
 			msgs = append(msgs, runs.Message{Role: m.Role, Content: text, Source: "trusted"})
