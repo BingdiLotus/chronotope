@@ -16,31 +16,6 @@ type UsageRow struct {
 	ComputeSeconds float64
 }
 
-// ResetSessionUsage 清空会话全部用量桶（重建式聚合的第一步，幂等）。
-func (s *Store) ResetSessionUsage(ctx context.Context, sessionID string) error {
-	const q = `DELETE FROM usage WHERE session_id = $1`
-	if _, err := s.Pool.Exec(ctx, q, sessionID); err != nil {
-		return fmt.Errorf("store: reset usage: %w", err)
-	}
-	return nil
-}
-
-// UpsertUsage 累积 1min 桶（主键 session_id+bucket，冲突累加）。
-func (s *Store) UpsertUsage(ctx context.Context, u UsageRow) error {
-	const q = `
-INSERT INTO usage (session_id, bucket, active_seconds, tokens_in, tokens_out, compute_seconds)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (session_id, bucket) DO UPDATE SET
-  active_seconds  = usage.active_seconds  + EXCLUDED.active_seconds,
-  tokens_in       = usage.tokens_in       + EXCLUDED.tokens_in,
-  tokens_out      = usage.tokens_out      + EXCLUDED.tokens_out,
-  compute_seconds = usage.compute_seconds + EXCLUDED.compute_seconds`
-	if _, err := s.Pool.Exec(ctx, q, u.SessionID, u.Bucket, u.ActiveSeconds, u.TokensIn, u.TokensOut, u.ComputeSeconds); err != nil {
-		return fmt.Errorf("store: upsert usage: %w", err)
-	}
-	return nil
-}
-
 // ListUsage 按桶升序读会话用量。
 func (s *Store) ListUsage(ctx context.Context, sessionID string) ([]UsageRow, error) {
 	const q = `

@@ -232,29 +232,6 @@ func (f *fakeStore) ListSessionsByOrg(_ context.Context, orgID string, limit int
 	return out, nil
 }
 
-func (f *fakeStore) ResetSessionUsage(_ context.Context, sessionID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.usage = nil
-	return nil
-}
-
-func (f *fakeStore) UpsertUsage(_ context.Context, u store.UsageRow) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i, existing := range f.usage {
-		if existing.SessionID == u.SessionID && existing.Bucket.Equal(u.Bucket) {
-			f.usage[i].ActiveSeconds += u.ActiveSeconds
-			f.usage[i].TokensIn += u.TokensIn
-			f.usage[i].TokensOut += u.TokensOut
-			f.usage[i].ComputeSeconds += u.ComputeSeconds
-			return nil
-		}
-	}
-	f.usage = append(f.usage, u)
-	return nil
-}
-
 func (f *fakeStore) GetAPIKeyByHash(_ context.Context, keyHash string) (*store.APIKeyRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

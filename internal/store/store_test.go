@@ -33,6 +33,10 @@ func testStore(t *testing.T) *store.Store {
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// 水位跨测试残留（014 INSERT ON CONFLICT 不重置）——统一归零
+	if _, err := s.Pool.Exec(context.Background(), `UPDATE usage_watermark SET last_event_id = 0 WHERE id = 1`); err != nil {
+		t.Fatalf("reset watermark: %v", err)
+	}
 	t.Cleanup(s.Close)
 	// 每个测试独立 namespace：用随机后缀避免历史数据干扰
 	return s
@@ -290,12 +294,12 @@ func TestUsageUpsertAccumulates(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := s.UpsertUsage(ctx, store.UsageRow{SessionID: key, Bucket: bucket, ActiveSeconds: 10, TokensIn: 5, TokensOut: 3, ComputeSeconds: 1.5}); err != nil {
-		t.Fatalf("upsert: %v", err)
+	// 增量语义（期 2 §B）：delta 加算 + 水位推进
+	if err := s.ApplyUsageDelta(ctx, 0, 1, []store.UsageRow{{SessionID: key, Bucket: bucket, ActiveSeconds: 10, TokensIn: 5, TokensOut: 3, ComputeSeconds: 1.5}}); err != nil {
+		t.Fatalf("delta: %v", err)
 	}
-	// 同桶冲突 → 累加
-	if err := s.UpsertUsage(ctx, store.UsageRow{SessionID: key, Bucket: bucket, ActiveSeconds: 5, TokensIn: 2, TokensOut: 1, ComputeSeconds: 0.5}); err != nil {
-		t.Fatalf("upsert again: %v", err)
+	if err := s.ApplyUsageDelta(ctx, 1, 2, []store.UsageRow{{SessionID: key, Bucket: bucket, ActiveSeconds: 5, TokensIn: 2, TokensOut: 1, ComputeSeconds: 0.5}}); err != nil {
+		t.Fatalf("delta again: %v", err)
 	}
 	rows, err := s.ListUsage(ctx, key)
 	if err != nil {
@@ -307,13 +311,6 @@ func TestUsageUpsertAccumulates(t *testing.T) {
 	u := rows[0]
 	if u.ActiveSeconds != 15 || u.TokensIn != 7 || u.TokensOut != 4 || u.ComputeSeconds != 2.0 {
 		t.Fatalf("累加不符: %+v", u)
-	}
-	// 重建式聚合前置：清空
-	if err := s.ResetSessionUsage(ctx, key); err != nil {
-		t.Fatalf("reset: %v", err)
-	}
-	if rows, _ := s.ListUsage(ctx, key); len(rows) != 0 {
-		t.Fatalf("reset 后应为空: %+v", rows)
 	}
 }
 
@@ -447,8 +444,8 @@ func TestOrgBudgetAndDailyUsage(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	bucket := now.Truncate(time.Minute)
-	if err := s.UpsertUsage(ctx, store.UsageRow{SessionID: key, Bucket: bucket, TokensIn: 30, TokensOut: 20, ComputeSeconds: 1.5}); err != nil {
-		t.Fatalf("upsert usage: %v", err)
+	if err := s.ApplyUsageDelta(ctx, 0, 1, []store.UsageRow{{SessionID: key, Bucket: bucket, TokensIn: 30, TokensOut: 20, ComputeSeconds: 1.5}}); err != nil {
+		t.Fatalf("delta usage: %v", err)
 	}
 	tokens, compute, err := s.OrgDailyUsage(ctx, orgID, now.Truncate(24*time.Hour))
 	if err != nil || tokens != 50 || compute != 1.5 {

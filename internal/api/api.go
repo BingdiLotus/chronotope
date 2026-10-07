@@ -40,8 +40,6 @@ type Store interface {
 	ListEvents(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]store.EventRow, error)
 	ListEventsAfterID(ctx context.Context, afterID int64, limit int) ([]store.EventRow, error)
 	ListSessionsByOrg(ctx context.Context, orgID string, limit int) ([]store.Session, error)
-	ResetSessionUsage(ctx context.Context, sessionID string) error
-	UpsertUsage(ctx context.Context, u store.UsageRow) error
 	ListUsage(ctx context.Context, sessionID string) ([]store.UsageRow, error)
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
 	// 交付清单（outbox，W8 后置）
