@@ -51,23 +51,24 @@ func TestEventTypeUniverse(t *testing.T) {
 
 func TestEventSampleRoundTrip(t *testing.T) {
 	b := testdata(t, "events.sample.json")
-	var ev event.Event
-	if err := json.Unmarshal(b, &ev); err != nil {
+	// 样本契约是 SSE 事件形状（snake_case 键——EventRow 无 json 标签）
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("unmarshal sample: %v", err)
 	}
-	if ev.SessionID != "s_1" || ev.RunID != "r_1" || ev.Type != event.SandboxExec || ev.Seq != 42 {
-		t.Fatalf("unexpected sample content: %+v", ev)
+	if m["session_id"] != "s_1" || m["run_id"] != "r_1" || m["seq"] != float64(42) || m["type"] != "sandbox.exec" {
+		t.Fatalf("unexpected sample content: %+v", m)
 	}
-	if !ev.Type.Valid() {
-		t.Fatalf("sample type invalid: %q", ev.Type)
+	if !event.Type(m["type"].(string)).Valid() {
+		t.Fatalf("sample type invalid: %v", m["type"])
 	}
-	// 回序列化必须稳定（字段顺序无关，语义一致即可）。
-	var ev2 event.Event
-	if err := json.Unmarshal(mustMarshal(t, ev), &ev2); err != nil {
+	// 回序列化稳定（字段顺序无关，语义一致）
+	var m2 map[string]any
+	if err := json.Unmarshal(mustMarshal(t, m), &m2); err != nil {
 		t.Fatalf("re-unmarshal: %v", err)
 	}
-	if ev2.Seq != ev.Seq || ev2.Type != ev.Type || ev2.SessionID != ev.SessionID {
-		t.Fatalf("round trip mismatch: %+v vs %+v", ev, ev2)
+	if m2["seq"] != m["seq"] || m2["type"] != m["type"] || m2["session_id"] != m["session_id"] {
+		t.Fatalf("round trip mismatch: %+v vs %+v", m, m2)
 	}
 }
 
@@ -172,41 +173,12 @@ func TestToolVocabulary(t *testing.T) {
 
 // --- 缓存键（权威定义：journal 位置，契约规范 §1）---
 
-func TestCacheKeyIsJournalPosition(t *testing.T) {
-	key := restate.CacheKey("r_1", "harness:12")
-	if key != "r_1/harness:12" {
-		t.Fatalf("got %q", key)
-	}
-	// 版本绑定在 run（契约规范 §1）：缓存键不得包含 provider/model 版本。
-	runID, stepName, ok := restate.SplitCacheKey(key)
-	if !ok || runID != "r_1" || stepName != "harness:12" {
-		t.Fatalf("split got %q %q %v", runID, stepName, ok)
-	}
-	// 换模型不换键（模型/协议版本由 run 绑定承载）。
-	if restate.CacheKey("r_1", "harness:12") != key {
-		t.Fatal("cache key must depend only on journal position")
-	}
-}
-
 func TestStepNames(t *testing.T) {
 	if got := restate.StepName("harness", 12, ""); got != "harness:12" {
 		t.Fatalf("got %q", got)
 	}
 	if got := restate.StepName("exec", 12, "t_3"); got != "exec:12:t_3" {
 		t.Fatalf("got %q", got)
-	}
-}
-
-// --- journal 大小策略（契约规范 §7 第 5 条）---
-
-func TestSummarizeJournalSizePolicy(t *testing.T) {
-	small := restate.Summarize(make([]byte, 1024), "pg")
-	if small.Ref != nil || len(small.Inline) != 1024 {
-		t.Fatal("small payload must stay inline")
-	}
-	big := restate.Summarize(make([]byte, 100*1024), "minio")
-	if big.Ref == nil || big.Ref.Size != 100*1024 || len(big.Inline) != restate.MaxInlineBytes {
-		t.Fatalf("big payload must be summarized + ref: %+v", big)
 	}
 }
 

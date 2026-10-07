@@ -43,7 +43,6 @@ func (b *tokenBucket) take(now time.Time) (ok bool, retryAfter time.Duration) {
 // org/user 桶待身份体系落地后启用——组件已支持任意 scope 键）。
 type Limiter struct {
 	mu      sync.Mutex
-	bucket  func(scope string) *tokenBucket // 可注入（测试）
 	buckets map[string]*tokenBucket
 	rate    float64
 	burst   int

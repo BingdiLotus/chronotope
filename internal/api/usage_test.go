@@ -32,8 +32,11 @@ func TestComputeUsageThreeAxes(t *testing.T) {
 		row(5, "s_1", "r_1", event.RunCompleted, `{"v":1}`, base.Add(30*time.Second)),
 	}
 
-	usage := computeUsage("s_1", events)
-	if len(usage) != 2 {
+	fs := &fakeStore{}
+	fs.runStarted = map[string]time.Time{"r_1": base}
+	agg := &Aggregator{Store: fs}
+	usage, err := agg.computeDelta(context.Background(), events)
+	if err != nil || len(usage) != 2 {
 		t.Fatalf("应产出 2 个桶，得 %d: %+v", len(usage), usage)
 	}
 	byBucket := map[time.Time]store.UsageRow{}
@@ -65,7 +68,13 @@ func TestComputeUsageUnclosedRunAndClockSkew(t *testing.T) {
 		row(2, "s_1", "r_2", event.RunStarted, `{"v":1}`, base),
 		row(3, "s_1", "r_2", event.RunCompleted, `{"v":1}`, base.Add(-10*time.Second)),
 	}
-	usage := computeUsage("s_1", events)
+	fs := &fakeStore{}
+	fs.runStarted = map[string]time.Time{"r_1": base, "r_2": base}
+	agg := &Aggregator{Store: fs}
+	usage, err := agg.computeDelta(context.Background(), events)
+	if err != nil {
+		t.Fatalf("compute delta: %v", err)
+	}
 	var total float64
 	for _, u := range usage {
 		total += u.ActiveSeconds

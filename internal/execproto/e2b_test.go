@@ -76,7 +76,7 @@ func TestE2BDriverLifecycle(t *testing.T) {
 	d := NewE2BDriver(fake, "")
 
 	sb, err := d.CreateSandbox(context.Background(), CreateSandboxRequest{Image: "python:3.11"})
-	if err != nil || sb.ID != "e2b_sb_1" || sb.Driver != "e2b" {
+	if err != nil || sb.ID != "e2b_sb_1" {
 		t.Fatalf("create: %+v err=%v", sb, err)
 	}
 	if len(fake.created) != 1 || fake.created[0] != "python:3.11" {

@@ -18,25 +18,6 @@ ON CONFLICT DO NOTHING`
 	return nil
 }
 
-// ListSubscriptions 会话订阅（投递入队依据）。
-func (s *Store) ListSubscriptions(ctx context.Context, sessionID string) ([]Subscription, error) {
-	const q = `SELECT channel, target FROM subscriptions WHERE session_id = $1 ORDER BY id`
-	rows, err := s.Pool.Query(ctx, q, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("store: list subscriptions: %w", err)
-	}
-	defer rows.Close()
-	var out []Subscription
-	for rows.Next() {
-		var sub Subscription
-		if err := rows.Scan(&sub.Channel, &sub.Target); err != nil {
-			return nil, fmt.Errorf("store: scan subscription: %w", err)
-		}
-		out = append(out, sub)
-	}
-	return out, rows.Err()
-}
-
 // Subscription 是投递订阅。
 type Subscription struct {
 	Channel string `json:"channel"`

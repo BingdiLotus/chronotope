@@ -237,8 +237,12 @@ func TestSandboxAndExecCacheRoundtrip(t *testing.T) {
 	// 幂等缓存（防重试双执行）：写入 → 命中 → 过期视为未执行
 	result := json.RawMessage(`{"exit":0,"output":"42\n"}`)
 	execKey := "r_" + key + ":0:t_1"
-	if err := s.PutExec(ctx, execKey, key, result); err != nil {
-		t.Fatalf("put exec: %v", err)
+	// prepared（claim）→ done（落账）——PutExec 一步式已删（架构审计死方法）
+	if err := s.PutExecPrepared(ctx, execKey, key, "digest"); err != nil {
+		t.Fatalf("put exec prepared: %v", err)
+	}
+	if err := s.PutExecDone(ctx, execKey, key, result); err != nil {
+		t.Fatalf("put exec done: %v", err)
 	}
 	got, err := s.GetExec(ctx, execKey)
 	if err != nil {

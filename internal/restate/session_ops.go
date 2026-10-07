@@ -15,10 +15,6 @@ import (
 
 const SessionOpsName = "session_ops"
 
-type sessionOpsDeps struct {
-	Store Store
-}
-
 // Service（非 Workflow）：运维动作可重复调用（workflow 方法单次调用语义——
 // 重复安装 skill 会 409，w6 e2e 实证）。
 func sessionOpsDef(deps *Deps) restate.ServiceDefinition {

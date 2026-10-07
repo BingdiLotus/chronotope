@@ -70,7 +70,7 @@ func TestDockerDriverCreateSandboxArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if sb.ID == "" || sb.Driver != "docker" {
+	if sb.ID == "" {
 		t.Fatalf("沙箱引用不符: %+v", sb)
 	}
 	if len(r.calls) != 1 {

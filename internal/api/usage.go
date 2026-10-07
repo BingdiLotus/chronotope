@@ -136,67 +136,6 @@ func (a *Aggregator) computeDelta(ctx context.Context, rows []store.EventRow) ([
 	return out, nil
 }
 
-// computeUsage 纯函数：事件 → 1min 桶用量（可单测的聚合核心）。
-func computeUsage(sessionID string, events []store.EventRow) []store.UsageRow {
-	type runSpan struct {
-		started time.Time
-		closed  bool
-	}
-	spans := map[string]*runSpan{}
-	buckets := map[time.Time]*store.UsageRow{}
-
-	getBucket := func(at time.Time) *store.UsageRow {
-		key := at.Truncate(usageBucketDuration)
-		u, ok := buckets[key]
-		if !ok {
-			u = &store.UsageRow{SessionID: sessionID, Bucket: key}
-			buckets[key] = u
-		}
-		return u
-	}
-
-	for _, ev := range events {
-		switch ev.Type {
-		case event.RunStarted:
-			spans[ev.RunID] = &runSpan{started: ev.At}
-		case event.RunCompleted, event.RunFailed, event.RunCancelled:
-			if sp, ok := spans[ev.RunID]; ok && !sp.closed {
-				sp.closed = true
-				dur := ev.At.Sub(sp.started).Seconds()
-				if dur < 0 {
-					dur = 0 // 时钟回拨防御（边界语义 §5）
-				}
-				getBucket(sp.started).ActiveSeconds += dur
-			}
-		case event.LLMCall:
-			var p struct {
-				Usage struct {
-					TokensIn  int64 `json:"tokens_in"`
-					TokensOut int64 `json:"tokens_out"`
-				} `json:"usage"`
-			}
-			if err := json.Unmarshal(ev.Payload, &p); err == nil {
-				u := getBucket(ev.At)
-				u.TokensIn += p.Usage.TokensIn
-				u.TokensOut += p.Usage.TokensOut
-			}
-		case event.SandboxExec:
-			var p struct {
-				DurationMs int64 `json:"duration_ms"`
-			}
-			if err := json.Unmarshal(ev.Payload, &p); err == nil && p.DurationMs > 0 {
-				getBucket(ev.At).ComputeSeconds += float64(p.DurationMs) / 1000
-			}
-		}
-	}
-	out := make([]store.UsageRow, 0, len(buckets))
-	for _, u := range buckets {
-		out = append(out, *u)
-	}
-	sortUsageRows(out)
-	return out
-}
-
 func sortUsageRows(rows []store.UsageRow) {
 	for i := 1; i < len(rows); i++ {
 		for j := i; j > 0 && rows[j].Bucket.Before(rows[j-1].Bucket); j-- {

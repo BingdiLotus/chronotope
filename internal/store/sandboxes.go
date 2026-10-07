@@ -183,19 +183,6 @@ FROM sandboxes WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`
 	return &sb, nil
 }
 
-// PutExec 保留（兼容旧调用方语义 = prepared + done 一步）。
-func (s *Store) PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
-	const q = `
-INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state)
-VALUES ($1, $2, $3, now() + interval '30 days', 'done')
-ON CONFLICT (idempotency_key) DO UPDATE SET result = $3, state = 'done',
-  expires_at = now() + interval '30 days'`
-	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result); err != nil {
-		return fmt.Errorf("store: put exec: %w", err)
-	}
-	return nil
-}
-
 // ListExpiredSandboxes 孤儿 GC 扫描（W8）：ttl 过期且未删除的沙箱。
 func (s *Store) ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*SandboxRow, error) {
 	const q = `

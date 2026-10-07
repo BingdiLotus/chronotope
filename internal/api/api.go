@@ -78,7 +78,6 @@ type Store interface {
 	OutboxRetry(ctx context.Context, id, attempts int64) error
 	// 多租户认证（api_keys）
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (*store.APIKeyRow, error)
-	CreateAPIKey(ctx context.Context, id, orgID, keyHash string, scopes []string) error
 	CreateAPIKeyForUser(ctx context.Context, id, orgID, userID, keyHash string, scopes []string) error
 	ListSummaries(ctx context.Context, sessionID string) ([]store.Summary, error)
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)

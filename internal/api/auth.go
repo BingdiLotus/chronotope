@@ -26,11 +26,6 @@ type ctxKey string
 const orgKey ctxKey = "auth.org"
 
 // AuthOrg 取认证后的 org（off 模式为 ""——匿名，org 从路径取）。
-func AuthOrg(ctx context.Context) string {
-	v, _ := ctx.Value(orgKey).(string)
-	return v
-}
-
 // sha256Hex 哈希 key（认证查找 + 存储）。
 func sha256Hex(key string) string {
 	sum := sha256.Sum256([]byte(key))

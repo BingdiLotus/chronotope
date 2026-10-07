@@ -49,6 +49,7 @@ type fakeStore struct {
 	approvalPolicies map[string]store.ApprovalPolicy
 	mcpAllowlists    map[string][]string
 	knowledge        map[string]store.KnowledgeItem
+	runStarted       map[string]time.Time
 	pendingOutbox    []*store.PendingOutboxRow
 	pendingType      string
 	pendingPayload   []byte
@@ -251,10 +252,6 @@ func (f *fakeStore) GetAPIKeyByHash(_ context.Context, keyHash string) (*store.A
 	return nil, store.ErrNotFound
 }
 
-func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, scopes []string) error {
-	return f.CreateAPIKeyForUser(context.Background(), id, orgID, "", keyHash, scopes)
-}
-
 func (f *fakeStore) CreateAPIKeyForUser(_ context.Context, id, orgID, userID, keyHash string, scopes []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -285,6 +282,15 @@ func (f *fakeStore) ApplyUsageDelta(_ context.Context, fromID, toID int64, delta
 	return nil
 }
 func (f *fakeStore) RunStartedAt(_ context.Context, runID string) (time.Time, error) {
+	if f.runStarted != nil {
+		if t, ok := f.runStarted[runID]; ok {
+			return t, nil
+		}
+	}
+	return time.Time{}, nil
+}
+
+func (f *fakeStore) RunStartedAtOld(_ context.Context, runID string) (time.Time, error) {
 	for _, e := range f.events {
 		if e.RunID == runID && e.Type == event.RunStarted {
 			return e.At, nil

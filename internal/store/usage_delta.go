@@ -9,11 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// UsageWatermark 是增量 rollup 水位行（期 2 §B）。
-type UsageWatermark struct {
-	LastEventID int64     `json:"last_event_id"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
+// 用量水位以 int64 流转（表结构仅 SQL 维护）。
 
 // GetUsageWatermark 读水位（无行 → 0）。
 func (s *Store) GetUsageWatermark(ctx context.Context) (int64, error) {

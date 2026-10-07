@@ -22,7 +22,6 @@ const (
 type SessionState struct {
 	Phase               sessionapi.SessionPhase `json:"phase"`
 	AgentConfig         sessionapi.AgentConfig  `json:"agent_config"`
-	LastRunID           string                  `json:"last_run_id,omitempty"`
 	PendingAwakeable    string                  `json:"pending_awakeable,omitempty"`     // HITL 审批槽
 	PendingActionDigest string                  `json:"pending_action_digest,omitempty"` // 待审批动作摘要（精确绑定，评审 #5）
 	// PendingSince 挂起审批时刻（期 3 §B：TTL 过期自动拒绝的依据）

@@ -114,7 +114,7 @@ func (d *DockerDriver) CreateSandbox(ctx context.Context, req CreateSandboxReque
 		}
 		d.restoreID, d.restoreTar = "", ""
 	}
-	return &Sandbox{ID: id, Status: "creating", Image: req.Image, Driver: "docker"}, nil
+	return &Sandbox{ID: id}, nil
 }
 
 // limits 解析限额（契约允许 "512Mi"/"1"；空值走默认）。

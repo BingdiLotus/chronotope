@@ -31,7 +31,6 @@ type SandboxStore interface {
 	UpdateSandboxStatus(ctx context.Context, sandboxID, status string) error
 	UpdateSandboxTier(ctx context.Context, sandboxID string, tier int, snapshotRef *string) error
 	GetExec(ctx context.Context, idempotencyKey string) (*store.ExecRow, error)
-	PutExec(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
 	// 执行状态机（评审 #1：prepared claim → done 落账）
 	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error
 	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error

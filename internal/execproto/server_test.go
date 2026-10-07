@@ -38,7 +38,7 @@ func (f *fakeDriver) ListOrphanContainers(_ context.Context) ([]string, error) {
 func (f *fakeDriver) CreateSandbox(_ context.Context, req CreateSandboxRequest) (*Sandbox, error) {
 	f.created = req
 	f.sandboxID = "sb_fake"
-	return &Sandbox{ID: f.sandboxID, Status: "creating", Image: req.Image, Driver: "docker"}, nil
+	return &Sandbox{ID: f.sandboxID}, nil
 }
 
 func (f *fakeDriver) Execute(_ context.Context, req ExecuteRequest, log io.Writer) (*ExecuteResult, error) {
@@ -205,10 +205,6 @@ func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, resu
 	return nil
 }
 
-func (f *fakeSBStore) PutExec(_ context.Context, key, sandboxID string, result json.RawMessage) error {
-	f.execs[key] = result
-	return nil
-}
 func (f *fakeSBStore) ListExpiredSandboxes(context.Context, time.Time) ([]*store.SandboxRow, error) {
 	return f.expiredRows, nil
 }

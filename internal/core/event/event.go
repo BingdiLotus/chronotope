@@ -6,9 +6,7 @@
 package event
 
 import (
-	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // Type 是事件类型全集（契约规范 §5，只增不改）。
@@ -78,17 +76,6 @@ func (t Type) Valid() bool {
 		return true
 	}
 	return false
-}
-
-// Event 是 events 表的行模型（append-only，单一真相：审计/时间轴回放/计量三用）。
-type Event struct {
-	ID        int64           `json:"id,omitempty"`
-	SessionID string          `json:"session_id"`
-	RunID     string          `json:"run_id"`
-	Seq       int64           `json:"seq"` // 每 session 单调，允许 gap
-	Type      Type            `json:"type"`
-	Payload   json.RawMessage `json:"payload"` // 必须携带 v 字段（契约规范 §5）
-	At        time.Time       `json:"at"`
 }
 
 // DedupeKey 生成事件去重键：run_id:step:kind[:tool]（契约规范 §5）。
