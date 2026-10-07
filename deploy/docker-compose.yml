@@ -92,7 +92,7 @@ services:
       OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-5s}
       OUTBOX_ALLOW_PRIVATE: ${OUTBOX_ALLOW_PRIVATE:-false}
       # 冷层归档（期 2 §B）：RustFS S3 + 年龄闸门（0 = 立即可归档）
-      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
+      RUSTFS_ENDPOINT: rustfs:9000 # 容器内固定服务名（.env 的 localhost 是宿主观——见 503 实证）
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-workspaces}
@@ -149,7 +149,7 @@ services:
       EXECUTOR_ADDR: ":9082"
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       # 工作区 blob 合同（期 2 §A）：RustFS S3（内容寻址对象图）
-      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
+      RUSTFS_ENDPOINT: rustfs:9000 # 容器内固定服务名（.env 的 localhost 是宿主观——见 503 实证）
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-workspaces}
