@@ -27,7 +27,7 @@ W1 对话闭环（11 项断言）、W2 沙箱闭环（9 项）、W3 持久性三
 kill -9 崩溃恢复 6 项）、W4 计量三轴 + 控制台（会话列表/时间轴回放/用量）。
 
 已落地：store 数据访问层（幂等事件/消息/沙箱事实状态/exec 幂等缓存/schedules/usage）、
-worker 四个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 /
+worker 五个 Restate 服务（session_object / run_workflow agent 主循环 journal 缓存 /
 scheduler 定时唤醒 / webhook HITL）+ 四类工具分流、api Session API 网关（REST + SSE 时间轴
 after=seq 续读 + 审批回调 + actions + 计量）、executor docker driver（受限容器 + 幂等缓存）、
 harness agent 循环（LiteLLM 网关流式 + fake 脚本模式）、Next.js 控制台。
@@ -63,7 +63,7 @@ key 后可开 workflow_dispatch job）。真实模型调用待配
 
 ```bash
 # 前置：Go 1.25+（brew install go）、uv、docker compose
-make dev-up              # 启动基础设施：postgres / restate / minio / litellm
+make dev-up              # 启动基础设施：postgres / restate / rustfs / litellm
 make build               # 构建三个 Go 二进制到 bin/
 
 # 终端 A：worker（Restate 端点）
@@ -136,7 +136,7 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 | [mvp-技术选型.md](./mvp-技术选型.md) | 技术选型（**现行方案见 §8**：Go 平台 + 借 harness） |
 | [mvp-架构设计.md](./mvp-架构设计.md) | 容器图 + 三条关键流程时序图 + 部署视图 |
 | [mvp-落地方案.md](./mvp-落地方案.md) | 落地计划：W1–W8 里程碑 + 18 个设计附录 |
-| [worker-架构设计.md](./worker-架构设计.md) | worker 内部架构（四个 Restate 服务、状态模型、故障矩阵） |
+| [worker-架构设计.md](./worker-架构设计.md) | worker 内部架构（五个 Restate 服务、状态模型、故障矩阵） |
 | [契约规范.md](./契约规范.md) | 契约权威定义：三协议、事件全集、错误码、兼容性 |
 | [边界语义设计.md](./边界语义设计.md) | 熔断 / 权限 / 截断 / 删除 / 时钟 / 准入 + 分层记忆 |
 
@@ -157,7 +157,7 @@ Python 服务  chronotope-harness
                       │ journal 重放 · 输出缓存 · awakeable
                       ├─ POST /runs → SSE → harness(Python, 无状态) → LiteLLM → 模型
                       └─ execute 协议 → executor(Go) → 沙箱（Docker/E2B 自托管）
-事件 append-only → Postgres（时间轴/审计/计量）· 工件 → MinIO
+事件 append-only → Postgres（时间轴/审计/计量）· 工件 → RustFS
 ```
 
 **三条纪律**：harness 无状态；事件 append-only；重放不重调（缓存键 = journal 位置，版本绑定在 run）。

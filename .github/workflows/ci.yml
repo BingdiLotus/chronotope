@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 启动全栈（api/worker/harness/executor + postgres/restate/minio/litellm）
+      - name: 启动全栈（api/worker/harness/executor + postgres/restate/rustfs/litellm）
         run: |
           HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker executor api
       - name: 等待 api 就绪

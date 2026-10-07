@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Chronotope W1–W4 全场景演示：一条 compose up 复现全部闭环。
+# Chronotope 全场景演示：一条 compose up 复现 W1–W8 + 期 2/期 3 全部闭环。
 # 无模型密钥（fake 模型流）；真实模型在 .env 配 OPENAI/ANTHROPIC key 后同样一条命令。
 # 用法: bash scripts/demo.sh
 set -euo pipefail
@@ -80,7 +80,7 @@ bash test/e2e/w5-risk.sh "$API" > /tmp/demo-w5r.log 2>&1 && pass "W5 工具风�
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
 # 9. W6 子 Agent（父派发 → 子会话独立执行 → 结果回喂）
-CHILD_ID=$(curl -fsS -X POST "$API/orgs/org-demo-child/agents" -H 'content-type: application/json' \
+CHILD_ID=$(curl -fsS -X POST "$API/orgs/org-${RUN_ID}-child/agents" -H 'content-type: application/json' \
   -d '{"name":"demo-child","config":{"model":"chronotope-subagent","instructions":"子任务助手。","tools":[],"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"spawn_subagent","arguments":{"agent":"'"$CHILD_ID"'","input":"计算 2+2"}}},{"final":"子任务已完成，父任务收尾。"}]' \
   $DC up -d --force-recreate harness
@@ -120,7 +120,7 @@ HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/wo
 HARNESS_FAKE_SCRIPT_ALT='[{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/a.txt"}}},{"final":"读取完成。"}]' \
   $DC up -d --force-recreate harness
 for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
-bash test/e2e/w2-snapshot.sh "$API" > /tmp/demo-w2snap.log 2>&1 && pass "快照含卷恢复（5 项断言）" || { fail "快照含卷恢复"; tail -5 /tmp/demo-w2snap.log; }
+bash test/e2e/w2-snapshot.sh "$API" > /tmp/demo-w2snap.log 2>&1 && pass "快照含卷恢复（4 项断言）" || { fail "快照含卷恢复"; tail -5 /tmp/demo-w2snap.log; }
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= HARNESS_FAKE_SCRIPT_ALT= $DC up -d --force-recreate harness
 
 # 14. W8 后置：outbox 事件投递（webhook 通道，事件同事务入队 → 投递 worker）
@@ -137,14 +137,14 @@ HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/wo
 HARNESS_FAKE_SCRIPT_ALT='[{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/a.txt"}}},{"final":"读取完成。"}]' \
 HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
 for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
-bash test/e2e/w10-timetravel.sh "$API" > /tmp/demo-tt.log 2>&1 && pass "时间旅行 checkpoint/fork/diff/rollback（8 项断言）" || { fail "时间旅行 checkpoint/fork/diff/rollback"; tail -5 /tmp/demo-tt.log; }
+bash test/e2e/w10-timetravel.sh "$API" > /tmp/demo-tt.log 2>&1 && pass "时间旅行 checkpoint/fork/diff/rollback（9 项断言）" || { fail "时间旅行 checkpoint/fork/diff/rollback"; tail -5 /tmp/demo-tt.log; }
 
 # 16. 工作区 blob 合同（期 2 §A：内容寻址 + blob: 恢复——第二条恢复链）
 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/b.txt","content":"blob合同内容"}}},{"final":"已写入。"}]' \
 HARNESS_FAKE_SCRIPT_ALT='[{"tool_call":{"name":"bash","arguments":{"command":"cat /workspace/b.txt"}}},{"final":"读取完成。"}]' \
 HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
 for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
-bash test/e2e/w11-blob.sh "$API" > /tmp/demo-blob.log 2>&1 && pass "工作区 blob 合同（4 项断言）" || { fail "工作区 blob 合同"; tail -5 /tmp/demo-blob.log; }
+bash test/e2e/w11-blob.sh "$API" > /tmp/demo-blob.log 2>&1 && pass "工作区 blob 合同（5 项断言）" || { fail "工作区 blob 合同"; tail -5 /tmp/demo-blob.log; }
 
 # 17. 冷层归档（期 2 §B：老会话 → RustFS 冷层 + 清单 + archived_at）
 ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate api harness
