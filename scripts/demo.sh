@@ -123,6 +123,13 @@ HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
 for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
 bash test/e2e/w10-timetravel.sh "$API" > /tmp/demo-tt.log 2>&1 && pass "时间旅行 checkpoint/fork/diff/rollback（8 项断言）" || { fail "时间旅行 checkpoint/fork/diff/rollback"; tail -5 /tmp/demo-tt.log; }
 
+# 16. 工作区 blob 合同（期 2 §A：内容寻址 + blob: 恢复——第二条恢复链）
+HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/b.txt","content":"blob合同内容"}}},{"final":"已写入。"}]' \
+HARNESS_FAKE_SCRIPT_ALT='[{"tool_call":{"name":"bash","arguments":{"command":"cat /workspace/b.txt"}}},{"final":"读取完成。"}]' \
+HARNESS_FAKE_MODEL=1 $DC up -d --force-recreate harness
+for i in $(seq 1 30); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+bash test/e2e/w11-blob.sh "$API" > /tmp/demo-blob.log 2>&1 && pass "工作区 blob 合同（4 项断言）" || { fail "工作区 blob 合同"; tail -5 /tmp/demo-blob.log; }
+
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
 [[ "$FAIL" -eq 0 ]]

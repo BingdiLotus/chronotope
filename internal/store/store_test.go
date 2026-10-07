@@ -752,3 +752,32 @@ func TestTimeTravelStore(t *testing.T) {
 		t.Fatalf("应有 rollback 事件（真相不可变审计）: %v", evs)
 	}
 }
+
+// TestWorkspaceFileIndex 期 2 §A：目录索引 upsert 覆盖 + 列表。
+func TestWorkspaceFileIndex(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key := "t_ws_" + randSuffix()
+	if err := s.CreateOrg(ctx, "o_"+key, "org"); err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	if err := s.CreateAgent(ctx, "a_"+key, "o_"+key, "agent", &sessionapi.AgentConfig{Model: "m", Version: 1}); err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	if err := s.CreateSession(ctx, key, "o_"+key, "a_"+key); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	f1 := store.WorkspaceFile{SessionID: key, Path: "/workspace/a.txt", Hash: "h1", Size: 3}
+	if err := s.UpsertWorkspaceFile(ctx, f1); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// 同路径覆盖（内容寻址更新）
+	f2 := store.WorkspaceFile{SessionID: key, Path: "/workspace/a.txt", Hash: "h2", Size: 5}
+	if err := s.UpsertWorkspaceFile(ctx, f2); err != nil {
+		t.Fatalf("upsert overwrite: %v", err)
+	}
+	files, err := s.ListWorkspaceFiles(ctx, key, 100)
+	if err != nil || len(files) != 1 || files[0].Hash != "h2" || files[0].Size != 5 {
+		t.Fatalf("应单行且为最新 hash: %+v err=%v", files, err)
+	}
+}

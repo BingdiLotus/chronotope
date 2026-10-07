@@ -38,6 +38,9 @@ type SandboxStore interface {
 	AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*store.LeaseRow, error)
 	ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error)
 	HasActiveLease(ctx context.Context, sandboxID string) (bool, error)
+	// 工作区 blob 合同（期 2 §A）
+	UpsertWorkspaceFile(ctx context.Context, f store.WorkspaceFile) error
+	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]store.WorkspaceFile, error)
 	SessionOrg(ctx context.Context, sessionID string) (string, error)
 	// 孤儿 GC（W8）：过期沙箱扫描 + 行删除。
 	ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*store.SandboxRow, error)
@@ -48,6 +51,8 @@ type SandboxStore interface {
 type Server struct {
 	Driver Driver
 	Store  SandboxStore
+	// Blob 是工作区 blob 合同（期 2 §A）；nil = 禁用（无 S3 时回退纯卷语义）。
+	Blob *BlobStore
 	// WorkspaceRoot 与 docker driver 同源（大输出外置的宿主目录）。
 	WorkspaceRoot string
 	Logger        *slog.Logger
@@ -111,6 +116,15 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, 422, "invalid sandbox request（image 必填）")
 		return
 	}
+	// blob: 前缀（期 2 §A）：driver 不认该 ref——剥离后用普通镜像启动，
+	// 创建完成后从索引拉取对象写回（快照之外第二条恢复链）
+	blobRestore := false
+	if strings.HasPrefix(req.RestoreFrom, "blob:") {
+		blobRestore = true
+		req.RestoreFrom = ""
+	}
+	s.Logger.Info("createSandbox: 请求", "session", req.SessionID, "blob_restore", blobRestore, "restore", req.RestoreFrom)
+	s.Logger.Info("createSandbox: 请求", "session", req.SessionID, "blob_restore", blobRestore, "restore", req.RestoreFrom)
 	sb, err := s.Driver.CreateSandbox(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
@@ -119,6 +133,14 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	orgID, err := s.Store.SessionOrg(r.Context(), req.SessionID)
 	if err != nil {
 		orgID = "single-org" // MVP 单 org（worker 未传 session 时兜底）
+	}
+	if blobRestore {
+		if rErr := s.restoreFromBlob(r.Context(), &store.SandboxRow{
+			SandboxID: sb.ID, SessionID: req.SessionID,
+		}); rErr != nil {
+			writeError(w, http.StatusInternalServerError, 500, "blob restore failed: "+rErr.Error())
+			return
+		}
 	}
 	row := &store.SandboxRow{
 		SandboxID:     sb.ID,
@@ -374,12 +396,18 @@ func (s *Server) externalize(sandboxID, body string) (string, error) {
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	sandboxID := chi.URLParam(r, "sandboxID")
 	// 行级存在性先查（统一 404 契约文本——客户端哨兵据此触发重建，评审 #7）
-	if _, err := s.Store.GetSandbox(r.Context(), sandboxID); err != nil {
+	sb, err := s.Store.GetSandbox(r.Context(), sandboxID)
+	if err != nil || sb.Status == "destroyed" {
 		writeError(w, http.StatusNotFound, 404, "sandbox not found")
 		return
 	}
 	path := "/" + chi.URLParam(r, "*")
 	data, err := s.Driver.ReadFile(r.Context(), sandboxID, path)
+	if errors.Is(err, ErrSandboxNotFound) {
+		// 容器已不存在（行未同步）→ 404 哨兵（worker 恢复重建）
+		writeError(w, http.StatusNotFound, 404, "sandbox not found")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
@@ -390,7 +418,14 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 	sandboxID := chi.URLParam(r, "sandboxID")
-	if _, err := s.Store.GetSandbox(r.Context(), sandboxID); err != nil {
+	sb, err := s.Store.GetSandbox(r.Context(), sandboxID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, 404, "sandbox not found")
+		return
+	}
+	if sb.Status == "destroyed" {
+		// 已销毁 → 404 哨兵（worker 走恢复重建；blob 合同 e2e 实证 500 循环）
+		s.Logger.Info("writeFile: destroyed 哨兵", "sandbox", sandboxID)
 		writeError(w, http.StatusNotFound, 404, "sandbox not found")
 		return
 	}
@@ -401,10 +436,94 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Driver.WriteFile(r.Context(), sandboxID, path, body); err != nil {
+		if errors.Is(err, ErrSandboxNotFound) {
+			writeError(w, http.StatusNotFound, 404, "sandbox not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
+	// blob 合同（期 2 §A）：写后增量同步——本地暂存 → sha256 → PUT 对象
+	//（幂等）→ 索引行 upsert；失败不阻断写（标记 syncing 重试窗口）。
+	if s.Blob != nil {
+		s.syncBlob(r.Context(), sandboxID, path, body)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// syncBlob 写路径增量同步（期 2 §A）：内容寻址 PUT + 索引行；失败仅告警
+// （工具返回不阻断——state 标记 syncing，GC 周期重试是后置）。
+func (s *Server) syncBlob(ctx context.Context, sandboxID, path string, body []byte) {
+	sb, err := s.Store.GetSandbox(ctx, sandboxID)
+	if err != nil || sb.SessionID == "" {
+		return
+	}
+	orgID := "single-org"
+	if oid, oErr := s.Store.SessionOrg(ctx, sb.SessionID); oErr == nil && oid != "" {
+		orgID = oid
+	}
+	tmp, err := os.CreateTemp("", "chronotope-blob-*")
+	if err != nil {
+		s.Logger.Warn("blob: temp", "err", err)
+		return
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(body); err != nil || tmp.Close() != nil {
+		s.Logger.Warn("blob: temp write", "err", err)
+		return
+	}
+	hash, size, err := s.Blob.PutFile(ctx, orgID, sb.SessionID, tmp.Name())
+	if err != nil {
+		s.Logger.Warn("blob: put", "session", sb.SessionID, "path", path, "err", err)
+		_ = s.Store.UpdateSandboxStatus(ctx, sandboxID, "file_syncing")
+		return
+	}
+	if err := s.Store.UpsertWorkspaceFile(ctx, store.WorkspaceFile{
+		SessionID: sb.SessionID, Path: path, Hash: hash, Size: size,
+	}); err != nil {
+		s.Logger.Warn("blob: index", "err", err)
+		_ = s.Store.UpdateSandboxStatus(ctx, sandboxID, "file_syncing")
+		return
+	}
+	_ = s.Store.UpdateSandboxStatus(ctx, sandboxID, "file_synced")
+}
+
+// restoreFromBlob 从索引拉取全部文件写回沙箱（blob: 前缀恢复；快照之外
+// 第二条恢复链——销毁无快照也能重建工作区）。
+func (s *Server) restoreFromBlob(ctx context.Context, sb *store.SandboxRow) error {
+	if s.Blob == nil || sb == nil || sb.SessionID == "" {
+		return fmt.Errorf("blob restore 不可用")
+	}
+	orgID := "single-org"
+	if oid, err := s.Store.SessionOrg(ctx, sb.SessionID); err == nil && oid != "" {
+		orgID = oid
+	}
+	files, err := s.Store.ListWorkspaceFiles(ctx, sb.SessionID, 500)
+	if err != nil {
+		return fmt.Errorf("blob: list index: %w", err)
+	}
+	s.Logger.Info("restoreFromBlob: 索引行数", "session", sb.SessionID, "files", len(files), "org", orgID)
+	for _, f := range files {
+		s.Logger.Info("restoreFromBlob: 恢复文件", "path", f.Path, "hash", f.Hash, "size", f.Size)
+		tmp, err := os.CreateTemp("", "chronotope-blob-get-*")
+		if err != nil {
+			return err
+		}
+		func() { _ = tmp.Close() }()
+		if err := s.Blob.GetFile(ctx, orgID, sb.SessionID, f.Hash, tmp.Name()); err != nil {
+			os.Remove(tmp.Name())
+			return fmt.Errorf("blob: get %s: %w", f.Path, err)
+		}
+		data, err := os.ReadFile(tmp.Name())
+		os.Remove(tmp.Name())
+		if err != nil {
+			return err
+		}
+		if err := s.Driver.WriteFile(ctx, sb.SandboxID, f.Path, data); err != nil {
+			return fmt.Errorf("blob: write sandbox %s: %w", f.Path, err)
+		}
+	}
+	return nil
 }
 
 // Tier 1 冻结/解冻（docker pause/unpause，落地方案 §12）。

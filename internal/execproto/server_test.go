@@ -80,6 +80,7 @@ type fakeSBStore struct {
 	prepared      map[string]string
 	execsPrepared map[string]*store.ExecRow
 	leases        map[string]*store.LeaseRow
+	wsFiles       map[string]store.WorkspaceFile
 	expiredRows   []*store.SandboxRow
 	deletedIDs    []string
 }
@@ -159,6 +160,28 @@ func (f *fakeSBStore) HasActiveLease(_ context.Context, sandboxID string) (bool,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.leases != nil && f.leases[sandboxID] != nil, nil
+}
+
+func (f *fakeSBStore) UpsertWorkspaceFile(_ context.Context, f2 store.WorkspaceFile) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.wsFiles == nil {
+		f.wsFiles = map[string]store.WorkspaceFile{}
+	}
+	f.wsFiles[f2.SessionID+"|"+f2.Path] = f2
+	return nil
+}
+
+func (f *fakeSBStore) ListWorkspaceFiles(_ context.Context, sessionID string, _ int) ([]store.WorkspaceFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.WorkspaceFile
+	for k, v := range f.wsFiles {
+		if strings.HasPrefix(k, sessionID+"|") {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) error {

@@ -58,8 +58,10 @@ services:
     # 替换为 RustFS（Rust 实现、S3 兼容、MinIO 迁移/共存，https://github.com/rustfs/rustfs）
     image: ${MINIO_IMAGE:-rustfs/rustfs:1.0.1}
     environment:
-      # RustFS 默认凭证 rustfsadmin/rustfsadmin（admin 级）；接入 S3 客户端时
-      # 显式配置凭证（RUSTFS 运行时文件或环境）
+      # RustFS S3 凭证须经 RUSTFS_ACCESS_KEY/RUSTFS_SECRET_KEY（MINIO_ROOT_*
+      # 仅 admin 面板——容器日志实证「Access Key Id 不存在」）
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rustfsadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rustfsadmin}
     ports:
@@ -140,6 +142,11 @@ services:
       EXECUTOR_ADDR: ":9082"
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       MINIO_ENDPOINT: minio:9000
+      # 工作区 blob 合同（期 2 §A）：RustFS S3（内容寻址对象图）
+      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-minio:9000}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chronotope}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-chronotope_dev}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-workspaces}
     ports:
       - "9082:9082"
     volumes:

@@ -29,7 +29,11 @@ func NewHTTPIngress(restateURL string) RestateIngress {
 }
 
 // Call 调用 ingress 路径（Void 输入端点传 body=nil，不携带 content-type）。
-func (h *httpIngress) Call(ctx context.Context, path, method string, body any, out any) error {
+// 关键：请求生命周期独立于调用方 ctx——durable 语义要求「提交后 invocation
+// 不受 api 请求断开影响」。早期实现随 r.Context() 取消，客户端 60s 超时断开
+// 会把 Restate invocation 半死（journal 的 Run 条目 in-flight），后续同
+// run_id 恢复永久等待（blob e2e 实证 28 超时循环）。
+func (h *httpIngress) Call(_ context.Context, path, method string, body any, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -38,7 +42,7 @@ func (h *httpIngress) Call(ctx context.Context, path, method string, body any, o
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, h.baseURL+path, rd)
+	req, err := http.NewRequestWithContext(context.Background(), method, h.baseURL+path, rd)
 	if err != nil {
 		return fmt.Errorf("ingress: build request: %w", err)
 	}

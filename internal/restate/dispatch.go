@@ -32,7 +32,12 @@ func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg s
 		return err
 	}
 	if err := fn(sandboxID); err != nil {
-		if !errors.Is(err, execproto.ErrSandboxNotFound) {
+		// 哨兵识别：errors.Is 优先；文本兜底——Restate 的 ToTerminalError 只
+		// 复制消息不保留错误链（SDK 文档实证），journal 重放的错误经包装后
+		// errors.Is 失效——「sandbox not found」文本即 404 契约文本
+		if !errors.Is(err, execproto.ErrSandboxNotFound) &&
+			!strings.Contains(err.Error(), "sandbox not found") &&
+			!strings.Contains(err.Error(), "sandbox destroyed") {
 			return err
 		}
 		// 沙箱已被回收：清绑定 → 重建（带 snapshot_ref 恢复）→ 重试一次
@@ -59,26 +64,31 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 	switch {
 	case tc.Name == runs.ToolBash || tc.Name == runs.ToolRunPython || tc.Name == runs.ToolListFiles:
 		input := codeToolInput(tc)
-		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
-		if err != nil {
-			return "", 0, err
-		}
-		// 时长在 Run 闭包内测量并随结果 journal（重放回放同一时长）
-		outcome, err := restate.Run(ctx, func(rc restate.RunContext) (*execOutcome, error) {
-			started := time.Now()
-			res, err := deps.Executor.Execute(rc, sandboxID, tc.Name, input,
-				execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
-			if err != nil {
-				return nil, err
+		var outcome *execOutcome
+		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sandboxID string) error {
+			// 时长在 Run 闭包内测量并随结果 journal（重放回放同一时长）
+			out, e := restate.Run(ctx, func(rc restate.RunContext) (*execOutcome, error) {
+				started := time.Now()
+				res, err := deps.Executor.Execute(rc, sandboxID, tc.Name, input,
+					execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
+				if err != nil {
+					return nil, err
+				}
+				return &execOutcome{Result: res, Duration: time.Since(started)}, nil
+			}, restate.WithName(StepName("exec", step, tc.ID)))
+			if e != nil {
+				return e
 			}
-			return &execOutcome{Result: res, Duration: time.Since(started)}, nil
-		}, restate.WithName(StepName("exec", step, tc.ID)))
+			outcome = out
+			return nil
+		})
 		if err != nil {
 			return "", 0, err
 		}
 		res := outcome.Result
+		state, _ := deps.Sessions.GetState(ctx, in.SessionID)
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
-			"step": step, "tool": tc.Name, "exit": res.Exit, "sandbox_id": sandboxID,
+			"step": step, "tool": tc.Name, "exit": res.Exit, "sandbox_id": state.SandboxID,
 			"output": truncate(res.Output, 4096), "output_ref": res.OutputRef, "truncated": res.Truncated,
 			"duration_ms": outcome.Duration.Milliseconds(), // 计算秒计量依据（W4）+ 预算熔断
 		})
@@ -89,18 +99,20 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		if path == "" {
 			return "", 0, restate.ToTerminalError(fmt.Errorf("write_file 缺 path"))
 		}
-		sandboxID, err := ensureSandbox(ctx, deps, in.SessionID, cfg)
+		// 经恢复链（评审 #7 同款）：沙箱已销毁 → 404 哨兵 → 清绑定 → 重建
+		//（blob 合同 e2e 实证：不经恢复会 500 循环旧容器）
+		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sandboxID string) error {
+			_, wErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
+				return "", deps.Executor.WriteFile(rc, sandboxID, path, content)
+			}, restate.WithName(StepName("exec", step, tc.ID)))
+			return wErr
+		})
 		if err != nil {
 			return "", 0, err
 		}
-		_, err = restate.Run(ctx, func(rc restate.RunContext) (string, error) {
-			return "", deps.Executor.WriteFile(rc, sandboxID, path, content)
-		}, restate.WithName(StepName("exec", step, tc.ID)))
-		if err != nil {
-			return "", 0, err
-		}
+		state, _ := deps.Sessions.GetState(ctx, in.SessionID)
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
-			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": sandboxID,
+			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": state.SandboxID,
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"written":%q}}`, tc.Name, path), 0, nil
 
@@ -110,20 +122,22 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			return "", 0, restate.ToTerminalError(fmt.Errorf("read_file 缺 path"))
 		}
 		var content string
-		var sandboxID string
 		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sb string) error {
-			sandboxID = sb
-			var e error
-			content, e = restate.Run(ctx, func(rc restate.RunContext) (string, error) {
+			result, e := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 				return deps.Executor.ReadFile(rc, sb, path)
 			}, restate.WithName(StepName("exec", step, tc.ID)))
-			return e
+			if e != nil {
+				return e
+			}
+			content = result
+			return nil
 		})
 		if err != nil {
 			return "", 0, err
 		}
+		state, _ := deps.Sessions.GetState(ctx, in.SessionID)
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
-			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": sandboxID,
+			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": state.SandboxID,
 		})
 		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), 0, nil
 
@@ -205,6 +219,13 @@ func ensureSandbox(ctx restate.Context, deps *Deps, sessionID string, cfg sessio
 	restoreFrom := ""
 	if prev, err := deps.Store.GetSandboxBySession(ctx, sessionID); err == nil && prev.SnapshotRef != nil && *prev.SnapshotRef != "" {
 		restoreFrom = *prev.SnapshotRef
+	}
+	// blob 合同（期 2 §A）：无快照但有工作区索引 → blob: 恢复（快照之外
+	// 第二条恢复链——销毁无快照也能重建；fork 空间面懒恢复的基础）
+	if restoreFrom == "" {
+		if files, fErr := deps.Store.ListWorkspaceFiles(ctx, sessionID, 1); fErr == nil && len(files) > 0 {
+			restoreFrom = "blob:"
+		}
 	}
 	sandboxID, err := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 		return deps.Executor.CreateSandbox(rc, execproto.CreateSandboxRequest{

@@ -341,6 +341,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				if streak >= noProgressStreak {
 					return failNoProgress(step)
 				}
+				slog.Default().Info("runLoop: 工具分流", "run", runID, "step", step, "tool", tc.Name, "id", tc.ID)
 				result, computeSeconds, err := dispatchTool(ctx, deps, in, runID, step, cfg, tc, emit)
 				if err != nil {
 					return RunOutput{}, restate.ToTerminalError(

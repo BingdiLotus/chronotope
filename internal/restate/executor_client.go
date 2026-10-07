@@ -87,6 +87,10 @@ func (c *executorClient) Execute(ctx context.Context, sandboxID, name, input, id
 		if resp.StatusCode == http.StatusNotFound && strings.Contains(body, "sandbox not found") {
 			return nil, execproto.ErrSandboxNotFound
 		}
+		if resp.StatusCode == http.StatusConflict && strings.Contains(body, "sandbox destroyed") {
+			// 409 destroyed → 哨兵（执行面与文件面统一：沙箱已销毁 = 需重建）
+			return nil, execproto.ErrSandboxNotFound
+		}
 		return nil, fmt.Errorf("executor: POST /execute status %d: %s", resp.StatusCode, body)
 	}
 	return parseExecFrames(resp.Body)
@@ -259,6 +263,11 @@ func (c *executorClient) WriteFile(ctx context.Context, sandboxID, path, content
 		return fmt.Errorf("executor: PUT file: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// 404 哨兵 → ErrSandboxNotFound（评审 #7 恢复链；blob e2e 实证
+		// 缺此映射会 500 循环旧容器）
+		return execproto.ErrSandboxNotFound
+	}
 	if resp.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("executor: PUT file status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))

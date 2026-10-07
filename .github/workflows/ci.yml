@@ -239,6 +239,18 @@ jobs:
             sleep 1
           done
           bash test/e2e/w10-timetravel.sh http://localhost:8080
+      - name: 工作区 blob 合同 e2e（内容寻址 + 销毁后 blob: 恢复）
+        env:
+          HARNESS_FAKE_MODEL: "1"
+          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/b.txt","content":"blob合同内容"}}},{"final":"已写入。"}]'
+          HARNESS_FAKE_SCRIPT_ALT: '[{"tool_call":{"name":"bash","arguments":{"command":"cat /workspace/b.txt"}}},{"final":"读取完成。"}]'
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          bash test/e2e/w11-blob.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

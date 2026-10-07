@@ -92,6 +92,10 @@ func (f *fakeStore) DiffSessions(_ context.Context, _, _ string, _ int) (*store.
 	return &store.SessionDiff{}, nil
 }
 
+func (f *fakeStore) ListWorkspaceFiles(_ context.Context, _ string, _ int) ([]store.WorkspaceFile, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) GetSandboxBySession(_ context.Context, _ string) (*store.SandboxRow, error) {
 	if f.sandboxBySession == nil {
 		return nil, store.ErrNotFound
@@ -247,6 +251,7 @@ func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error
 type fakeSessions struct {
 	state         SessionState
 	onGetState    func(st *SessionState)
+	cleared       []string
 	attached      []string
 	pending       string
 	pendingDigest string
@@ -266,8 +271,9 @@ func (f *fakeSessions) Cancel(_ restate.Context, _ string) error {
 	return nil
 }
 
-func (f *fakeSessions) ClearSandbox(_ restate.Context, _ string) error {
+func (f *fakeSessions) ClearSandbox(_ restate.Context, sessionID string) error {
 	f.state.SandboxID = ""
+	f.cleared = append(f.cleared, sessionID)
 	return nil
 }
 
@@ -303,6 +309,7 @@ type fakeExecutor struct {
 	ops      []string // 全操作序（golden 轨迹）
 	files    map[string]string
 	created  int
+	writeErr func() error
 	leased   []string
 	leaseGen int64
 }
@@ -339,7 +346,10 @@ func (f *fakeExecutor) ReadFile(_ context.Context, sandboxID, path string) (stri
 	return f.files[path], nil
 }
 
-func (f *fakeExecutor) WriteFile(_ context.Context, sandboxID, path, content string) error {
+func (f *fakeExecutor) WriteFile(_ context.Context, _ string, path, content string) error {
+	if f.writeErr != nil {
+		return f.writeErr()
+	}
 	if f.files == nil {
 		f.files = map[string]string{}
 	}
@@ -907,5 +917,55 @@ func TestOutputSchemaContract(t *testing.T) {
 	st3, ha3, se3 := newLoop(cfgPlain, "纯文本答案")
 	if _, err := run(st3, ha3, se3); err != nil {
 		t.Fatalf("无契约不应校验: %v", err)
+	}
+}
+
+// TestWriteFileSandboxRecovery 期 2 §A：write_file 经恢复链——沙箱已销毁 →
+// ErrSandboxNotFound → ClearSandbox + 重建（blob 恢复）→ 重试成功。
+func TestWriteFileSandboxRecovery(t *testing.T) {
+	st := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
+	ha := &fakeHarness{script: []*Result{
+		{Done: false, ToolCalls: []ToolCall{{ID: "t_1", Name: "write_file", Arguments: json.RawMessage(`{"path":"/workspace/a.txt","content":"x"}`)}}},
+		{Done: true, Final: "完成。"},
+	}}
+	se := &fakeSessions{state: SessionState{
+		Phase: sessionapi.PhaseReady,
+		AgentConfig: sessionapi.AgentConfig{
+			Model: "m", Instructions: "i", Tools: []string{"write_file"}, Version: 1,
+		},
+		SandboxID: "sb_old",
+	}}
+	ex := &fakeExecutor{}
+	// 第一次 WriteFile（旧沙箱）→ ErrSandboxNotFound → 触发恢复
+	calls := 0
+	ex.writeErr = func() error {
+		calls++
+		if calls == 1 {
+			return execproto.ErrSandboxNotFound
+		}
+		return nil
+	}
+	mockCtx := mocks.NewMockContext(t)
+	// ToTerminalError 保文本（模拟 journal 重放的包装——SDK 只复制消息不保留
+	// 错误链；恢复识别靠文本兜底）
+	mockCtx.EXPECT().Run(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(f func(restate.RunContext) (any, error), output any, _ ...restate.RunOption) restate.TerminalError {
+			v, err := f(fakeRunContext{context.Background()})
+			if err != nil {
+				return restate.ToTerminalError(err)
+			}
+			reflect.ValueOf(output).Elem().Set(reflect.ValueOf(v))
+			return nil
+		}).Maybe()
+	ctx := restate.WithMockContext(mockCtx)
+	out, err := runLoop(ctx, deps(st, ha, se, ex), RunInput{SessionID: "s_1", Input: "x"}, "r_1")
+	if err != nil || out.Final != "完成。" {
+		t.Fatalf("恢复后应完成: %+v err=%v", out, err)
+	}
+	if len(se.cleared) != 1 || se.cleared[0] != "s_1" {
+		t.Fatalf("恢复应清绑定一次: %v", se.cleared)
+	}
+	if calls != 2 {
+		t.Fatalf("应重试一次（2 次 WriteFile）: %d", calls)
 	}
 }

@@ -248,7 +248,8 @@ func (d *DockerDriver) simple(ctx context.Context, op string, args ...string) er
 // checkSandbox 沙箱存在性检查（docker inspect；防对已销毁容器操作）。
 func (d *DockerDriver) checkSandbox(ctx context.Context, sandboxID string) error {
 	if _, err := d.Runner.Run(ctx, "inspect", sandboxID); err != nil {
-		return fmt.Errorf("sandbox %s 不存在或已销毁: %w", sandboxID, err)
+		// 归一为 ErrSandboxNotFound 哨兵（server 层 404 → worker 恢复重建）
+		return fmt.Errorf("sandbox %s 不存在或已销毁: %w: %w", sandboxID, ErrSandboxNotFound, err)
 	}
 	return nil
 }

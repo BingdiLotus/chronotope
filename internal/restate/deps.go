@@ -32,6 +32,8 @@ type Store interface {
 	ForkSession(ctx context.Context, newSessionID, parentSessionID string, atSeq int64, atCheckpoint string) error
 	RollbackSession(ctx context.Context, sessionID string, cp *store.Checkpoint) error
 	DiffSessions(ctx context.Context, a, b string, limit int) (*store.SessionDiff, error)
+	// 工作区 blob 合同（期 2 §A）
+	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]store.WorkspaceFile, error)
 	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
