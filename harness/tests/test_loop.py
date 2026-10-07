@@ -158,3 +158,28 @@ async def test_invalid_tool_arguments_json_fallback():
     frames = await collect(ScriptedProvider(script), base_request())
     assert frames[-1].type == "done"
     monkeypatch.undo()
+
+
+async def test_stream_error_yields_error_frame(monkeypatch):
+    """真实 e2e 缺陷回归：模型流异常 EOF → 僵尸 invocation 无限重试——
+    _safe_stream 转 error 帧，worker 显式失败而非 unexpected EOF。"""
+    from app import main as m
+    from app.llm import LLMProvider
+    from app import protocol as p
+
+    class BoomProvider(LLMProvider):
+        async def stream(self, req):
+            raise RuntimeError("model 400 stream broken")
+            yield  # pragma: no cover
+
+    async def fake_run_stream(req):
+        frames = []
+        async for frame in m._run(req, BoomProvider()):
+            frames.append(frame)
+        return frames
+
+    req = p.RunRequest(run_id="r_boom", session_id="s_1", step=0, model="m", messages=[])
+    frames = await fake_run_stream(req)
+    joined = "\n".join(f["data"] for f in frames)
+    assert "model_stream_failed" in joined
+    assert "model 400 stream broken" in joined
