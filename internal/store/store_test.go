@@ -989,3 +989,35 @@ func TestRunActiveUniqueAndCommand(t *testing.T) {
 		t.Fatalf("重投行应带 input/topic: %+v", found)
 	}
 }
+
+// TestLeaseGenerationMonotonic 审计 P0-2：Release 置过期不删行——generation
+// 单调（ABA 反例：旧 gen release 不得删除新租约）。
+func TestLeaseGenerationMonotonic(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	sid := fmt.Sprintf("sb_lease_aba_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, "org_lease_aba", "o")
+	_ = s.CreateAgent(ctx, "a_la", "org_lease_aba", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, "s_la", "org_lease_aba", "a_la")
+	// 沙箱行（FK 地基——sandbox_leases 引用 sandboxes）
+	_, _ = s.Pool.Exec(ctx, `INSERT INTO sandboxes (sandbox_id, org_id, session_id, driver, status, created_at, ttl, image)
+		VALUES ($1, 'org_lease_aba', 's_la', 'docker', 'ready', now(), interval '1 day', 'python:3.12-slim')`, sid)
+	l1, err := s.AcquireLease(ctx, sid, "run-a", time.Hour)
+	if err != nil || l1.Generation != 1 {
+		t.Fatalf("acquire1: %+v err=%v", l1, err)
+	}
+	if ok, err := s.ReleaseLease(ctx, sid, l1.Generation); err != nil || !ok {
+		t.Fatalf("release1: ok=%v err=%v", ok, err)
+	}
+	l2, err := s.AcquireLease(ctx, sid, "run-b", time.Hour)
+	if err != nil || l2.Generation != 2 {
+		t.Fatalf("acquire2 应 gen=2（行永存单调）: %+v err=%v", l2, err)
+	}
+	// ABA 反例：旧 gen=1 的 release 不得删除新 gen=2 的租约
+	if ok, err := s.ReleaseLease(ctx, sid, 1); err != nil || ok {
+		t.Fatalf("旧 gen=1 的 release 应无效（ABA 关闭）: ok=%v err=%v", ok, err)
+	}
+	if active, err := s.HasActiveLease(ctx, sid); err != nil || !active {
+		t.Fatalf("新租约应存活: active=%v err=%v", active, err)
+	}
+}

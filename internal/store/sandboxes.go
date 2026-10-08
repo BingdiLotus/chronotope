@@ -266,7 +266,9 @@ RETURNING sandbox_id, run_id, generation, expires_at`
 
 // ReleaseLease 释放（generation 校验：旧持有者携带过期代次不得误释放新租约）。
 func (s *Store) ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error) {
-	const q = `DELETE FROM sandbox_leases WHERE sandbox_id = $1 AND generation = $2`
+	// 置过期而非删行——行永存使 generation 单调（审计 P0-2：删行后下一
+	// Acquire 从 1 重启，旧 gen=1 的 release 会删除新 gen=1 的租约——ABA）
+	const q = `UPDATE sandbox_leases SET expires_at = now() WHERE sandbox_id = $1 AND generation = $2`
 	tag, err := s.Pool.Exec(ctx, q, sandboxID, generation)
 	if err != nil {
 		return false, fmt.Errorf("store: release lease: %w", err)
