@@ -113,6 +113,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.worker
+    extra_hosts:
+      # MCP fixture 跑在 runner 主机（Linux 无 host.docker.internal——
+      # GitHub w6 mcp.call lookup 失败实证）
+      - "host.docker.internal:host-gateway"
     environment:
       WORKER_ADDR: ":9080"
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
