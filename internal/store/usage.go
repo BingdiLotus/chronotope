@@ -85,3 +85,45 @@ ORDER BY COALESCE(last_active_at, created_at) DESC LIMIT $2`
 	}
 	return out, rows.Err()
 }
+
+// UsageAggregate 是 org 用量聚合行（期 5 §A：管理面用量端点）。
+type UsageAggregate struct {
+	Bucket         time.Time `json:"bucket"`
+	ActiveSeconds  float64   `json:"active_seconds"`
+	TokensIn       int64     `json:"tokens_in"`
+	TokensOut      int64     `json:"tokens_out"`
+	ComputeSeconds float64   `json:"compute_seconds"`
+}
+
+// AggregateOrgUsage 按粒度聚合 org 用量（usage 表经 sessions 关联 org；
+// 粒度 hour|day|month——bucket 截断）。
+func (s *Store) AggregateOrgUsage(ctx context.Context, orgID, granularity string) ([]UsageAggregate, error) {
+	trunc := map[string]string{
+		"hour":  "hour",
+		"day":   "day",
+		"month": "month",
+	}[granularity]
+	if trunc == "" {
+		trunc = "day"
+	}
+	q := fmt.Sprintf(`
+SELECT date_trunc('%s', u.bucket) AS bucket,
+       sum(u.active_seconds), sum(u.tokens_in), sum(u.tokens_out), sum(u.compute_seconds)
+FROM usage u JOIN sessions se ON se.id = u.session_id
+WHERE se.org_id = $1
+GROUP BY 1 ORDER BY 1`, trunc)
+	rows, err := s.Pool.Query(ctx, q, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("store: aggregate usage: %w", err)
+	}
+	defer rows.Close()
+	var out []UsageAggregate
+	for rows.Next() {
+		var a UsageAggregate
+		if err := rows.Scan(&a.Bucket, &a.ActiveSeconds, &a.TokensIn, &a.TokensOut, &a.ComputeSeconds); err != nil {
+			return nil, fmt.Errorf("store: scan usage aggregate: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

@@ -42,11 +42,13 @@ func main() {
 
 	st, err := store.Open(ctx, *databaseURL)
 	if err != nil {
-		if err := st.Migrate(ctx); err != nil {
-			slog.Error("migrate failed", "err", err)
-			os.Exit(1)
-		} // 迁移入口（存量卷升级缺口——此前仅测试调用；全幂等，compose initdb 首启兜底）
 		log.Fatalf("open store: %v", err)
+	}
+	// 迁移入口（存量卷升级缺口——此前仅测试调用；全幂等，compose initdb
+	// 首启兜底）。曾在 Open 失败分支内（缩进缺陷——021 未执行实证）。
+	if err := st.Migrate(ctx); err != nil {
+		slog.Error("migrate failed", "err", err)
+		os.Exit(1)
 	}
 	defer st.Close()
 

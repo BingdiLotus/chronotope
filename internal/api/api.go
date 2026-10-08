@@ -57,6 +57,11 @@ type Store interface {
 	UpsertMCPAllowlist(ctx context.Context, tenantID, server string, patterns []string) error
 	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
 	CreateKnowledge(ctx context.Context, k store.KnowledgeItem) error
+	// 期 5 §A：多租户管理面
+	AddMember(ctx context.Context, m store.Member) error
+	ListMembers(ctx context.Context, orgID string) ([]store.Member, error)
+	RemoveMember(ctx context.Context, orgID, userID string) error
+	AggregateOrgUsage(ctx context.Context, orgID, granularity string) ([]store.UsageAggregate, error)
 	CreateArchive(ctx context.Context, a store.Archive) error
 	GetArchive(ctx context.Context, sessionID string) (*store.Archive, error)
 	SessionLastEventAt(ctx context.Context, sessionID string) (time.Time, error)
@@ -145,6 +150,7 @@ func (h *Handler) Router() chi.Router {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	registerManagementRoutes(r, h) // 期 5 §A：管理面（成员/用量/配额/账单）
 	r.Route("/orgs/{orgID}", func(r chi.Router) {
 		r.Post("/agents", h.createAgent)                  // 创建/升级 agent（config 全量，version+1）
 		r.Get("/sessions", h.listSessions)                // 会话列表（控制台最小页）

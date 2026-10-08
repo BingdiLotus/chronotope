@@ -49,6 +49,7 @@ type fakeStore struct {
 	approvalPolicies map[string]store.ApprovalPolicy
 	mcpAllowlists    map[string][]string
 	knowledge        map[string]store.KnowledgeItem
+	members          map[string]store.Member
 	runStarted       map[string]time.Time
 	pendingOutbox    []*store.PendingOutboxRow
 	pendingType      string
@@ -302,6 +303,33 @@ func (f *fakeStore) RunStartedAtOld(_ context.Context, runID string) (time.Time,
 	}
 	return time.Time{}, store.ErrNotFound
 }
+func (f *fakeStore) AddMember(_ context.Context, m store.Member) error {
+	if f.members == nil {
+		f.members = map[string]store.Member{}
+	}
+	f.members[m.OrgID+"/"+m.UserID] = m
+	return nil
+}
+
+func (f *fakeStore) ListMembers(_ context.Context, orgID string) ([]store.Member, error) {
+	var out []store.Member
+	for _, m := range f.members {
+		if m.OrgID == orgID {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RemoveMember(_ context.Context, orgID, userID string) error {
+	delete(f.members, orgID+"/"+userID)
+	return nil
+}
+
+func (f *fakeStore) AggregateOrgUsage(context.Context, string, string) ([]store.UsageAggregate, error) {
+	return []store.UsageAggregate{{Bucket: time.Now().Truncate(time.Hour), TokensIn: 120, TokensOut: 80, ComputeSeconds: 2.5, ActiveSeconds: 30}}, nil
+}
+
 func (f *fakeStore) CreateKnowledge(_ context.Context, k store.KnowledgeItem) error {
 	if f.knowledge == nil {
 		f.knowledge = map[string]store.KnowledgeItem{}
