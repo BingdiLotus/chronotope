@@ -1,0 +1,35 @@
+name: DR 演练
+
+on:
+  workflow_dispatch: {}          # 手动触发
+  schedule:
+    - cron: '30 3 * * 1'        # 每周一 03:30 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  dr-drills:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 起 compose 栈
+        run: |
+          cp .env.example .env
+          echo "EXECUTOR_DRIVER=docker" >> .env
+          docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
+          sleep 15
+          curl -fsS -X POST http://localhost:9070/deployments \
+            -H 'content-type: application/json' \
+            -d '{"uri":"http://worker:9080","version":"dr-v1","use_http_11":true,"force":true}'
+
+      - name: D1 WAL PITR 演练（隔离容器）
+        run: bash test/dr/pitr.sh
+
+      - name: D2 RustFS 归档恢复演练
+        run: bash test/dr/rustfs-restore.sh
+
+      - name: D3 Restate 状态备份演练
+        run: bash test/dr/restate-backup.sh
