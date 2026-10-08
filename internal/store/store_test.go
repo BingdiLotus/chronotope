@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -926,4 +927,26 @@ func TestKnowledgeRetrieve(t *testing.T) {
 	if got[0].Content != "主题相近的内容" {
 		t.Fatalf("top1 应为近邻: %+v", got[0])
 	}
+}
+
+// TestArchiveEventsPartitionPruning 期 4 §A：归档表按月分区裁剪（仅扫单分区）。
+func TestArchiveEventsPartitionPruning(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	// 迁移重放后 archive_events 为分区表（019）——插入两条不同月路由
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO archive_events (session_id, run_id, seq, type, payload, at)
+		VALUES ('s_prune', 'r_1', 1, 'run.completed', '{"v":1}', '2026-10-15T00:00:00Z'),
+		       ('s_prune', 'r_2', 2, 'run.completed', '{"v":1}', '2026-11-15T00:00:00Z')`); err != nil {
+		t.Fatalf("insert archive: %v", err)
+	}
+	var plan string
+	if err := s.Pool.QueryRow(ctx,
+		`EXPLAIN (FORMAT JSON) SELECT count(*) FROM archive_events WHERE at >= '2026-10-01' AND at < '2026-11-01'`).Scan(&plan); err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	// 裁剪断言：计划含 2026_10 分区且不含 default 分区
+	if !strings.Contains(plan, "archive_events_2026_10") || strings.Contains(plan, "archive_events_default") {
+		t.Fatalf("分区裁剪失效: %s", plan)
+	}
+	_ = s.Pool.QueryRow(ctx, `DELETE FROM archive_events WHERE session_id = 's_prune'`).Scan()
 }
