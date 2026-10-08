@@ -101,7 +101,7 @@ func TestWebhookResolveApproval(t *testing.T) {
 	mockCtx.EXPECT().ResolveAwakeable("aw_9", "approve").Once()
 	ctx := restate.WithMockContext(mockCtx)
 
-	got, err := resolveApproval(ctx, deps, WebhookResolveInput{RunID: "r_1", Payload: "approve"})
+	got, err := resolveApproval(ctx, deps, WebhookResolveInput{RunID: "r_1", Payload: "approve", ActionDigest: "d1"})
 	if err != nil || got != "resolved" {
 		t.Fatalf("resolve 失败: %v %q", err, got)
 	}
@@ -159,21 +159,15 @@ func TestResolveApprovalDigestBinding(t *testing.T) {
 	}
 	mockCtx2.AssertExpectations(t)
 
-	// 旧客户端（无 digest）→ legacy 放行（后向兼容）+ 审计标记
+	// 空 digest → 拒绝（审计 #8：legacy 放行删除——授权链必须精确绑定）
 	st3 := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
 	sessions3 := &fakeSessions{state: SessionState{PendingAwakeable: "aw_9", PendingActionDigest: "aaaa1111"}}
-	mockCtx3 := mocks.NewMockContext(t)
-	mockCtx3.EXPECT().ResolveAwakeable("aw_9", "approve").Once()
-	got, err = resolveApproval(ctx2(mockCtx3), &Deps{Store: st3, Sessions: sessions3}, WebhookResolveInput{
+	_, err = resolveApproval(ctx2(mocks.NewMockContext(t)), &Deps{Store: st3, Sessions: sessions3}, WebhookResolveInput{
 		RunID: "r_1", Payload: "approve",
 	})
-	if err != nil || got != "resolved" {
-		t.Fatalf("legacy 应放行: %v %q", err, got)
+	if err == nil {
+		t.Fatal("空 digest 应拒绝（精确绑定）")
 	}
-	if audit := eventsOf(st3, event.AuditApproval); len(audit) != 1 || !strings.Contains(string(audit[0].payload), "\"legacy\":true") {
-		t.Fatalf("legacy 审计应标记: %+v", audit)
-	}
-	mockCtx3.AssertExpectations(t)
 }
 
 // ctx2 从 mock context 构造 restate 上下文（测试内联）。

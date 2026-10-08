@@ -68,7 +68,7 @@ type SessionSource interface {
 	ClearSandbox(ctx restate.Context, sessionID string) error
 	Cancel(ctx restate.Context, sessionID string) error
 	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
-	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest string) error
+	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest, tool string) error
 	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
 	Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error
 	// SetFrozenAwakeable 记录欠费冻结的 awakeable id（与审批槽独立，避免互踩）。
@@ -129,10 +129,11 @@ func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandbo
 	return err
 }
 
-// SetPendingAwakeable 记录挂起的审批 awakeable（HITL）。
-func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest string) error {
+// SetPendingAwakeable 记录挂起的审批 awakeable（HITL；tool 供审批路由
+// 的 tool_patterns 匹配——审计 #8）。
+func (RestateSessionSource) SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest, tool string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "SetPendingAwakeable").
-		Request(SetPendingApprovalInput{AwakeableID: awakeableID, ActionDigest: actionDigest})
+		Request(SetPendingApprovalInput{AwakeableID: awakeableID, ActionDigest: actionDigest, Tool: tool})
 	return err
 }
 

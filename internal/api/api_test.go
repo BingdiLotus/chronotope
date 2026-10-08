@@ -868,7 +868,7 @@ func TestSessionActionUnknown(t *testing.T) {
 
 func TestApprovalWebhook(t *testing.T) {
 	h, _, ing := setup(t)
-	rec := doJSON(t, h.Router(), http.MethodPost, "/webhooks/approval/r_1", `{"payload":"approve"}`, nil)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/webhooks/approval/r_1", `{"payload":"approve","approver":"alice","action_digest":"d1"}`, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("审批回调应 200，得 %d: %s", rec.Code, rec.Body.String())
 	}

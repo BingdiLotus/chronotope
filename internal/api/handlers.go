@@ -309,6 +309,14 @@ func (h *Handler) approvalWebhook(w http.ResponseWriter, r *http.Request) {
 		Approver     string `json:"approver"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	// 审计 #8：approver 从认证 principal 导出（auth on 时自报不可信）；
+	// auth off（dev/e2e）保留自报——生产 API_AUTH_MODE=on 必配
+	if p := PrincipalFrom(r.Context()); p != "" {
+		req.Approver = p
+	} else if r.Header.Get("Authorization") == "" && req.Approver == "" {
+		writeError(w, http.StatusUnauthorized, 401, "approver 必填（auth off 自报；auth on 经认证导出）")
+		return
+	}
 
 	var out string // webhook 服务返回 JSON 字符串 "resolved"
 	err := h.Ingress.Call(r.Context(), "/webhook/Resolve", http.MethodPost,

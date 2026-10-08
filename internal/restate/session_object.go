@@ -24,6 +24,7 @@ type SessionState struct {
 	AgentConfig         sessionapi.AgentConfig  `json:"agent_config"`
 	PendingAwakeable    string                  `json:"pending_awakeable,omitempty"`     // HITL 审批槽
 	PendingActionDigest string                  `json:"pending_action_digest,omitempty"` // 待审批动作摘要（精确绑定，评审 #5）
+	PendingTool         string                  `json:"pending_tool,omitempty"`          // 待审批工具名（审计 #8：Route 需 Tool——tool_patterns 适用）
 	// PendingSince 挂起审批时刻（期 3 §B：TTL 过期自动拒绝的依据）
 	PendingSince    *time.Time               `json:"pending_since,omitempty"`
 	FrozenAwakeable string                   `json:"frozen_awakeable,omitempty"` // 欠费冻结槽（与审批独立）
@@ -99,6 +100,7 @@ func clearSandbox(ctx restate.ObjectContext, _ restate.Void) (SessionState, erro
 // setPendingAwakeable 记录挂起的审批 awakeable（HITL；webhook resolve 前可查）。
 // SetPendingApprovalInput 是挂起审批的槽与动作摘要（评审 #5：精确绑定动作）。
 type SetPendingApprovalInput struct {
+	Tool         string `json:"tool,omitempty"`
 	AwakeableID  string `json:"awakeable_id"`
 	ActionDigest string `json:"action_digest"`
 }
@@ -111,6 +113,7 @@ func setPendingAwakeable(ctx restate.ObjectContext, in SetPendingApprovalInput) 
 	if state.PendingAwakeable != in.AwakeableID || state.PendingActionDigest != in.ActionDigest {
 		state.PendingAwakeable = in.AwakeableID
 		state.PendingActionDigest = in.ActionDigest
+		state.PendingTool = in.Tool // 审计 #8：审批路由需 Tool（tool_patterns 适用）
 		now := time.Now()
 		state.PendingSince = &now // 期 3 §B：TTL 过期自动拒绝的依据
 		restate.Set(ctx, sessionStateKey, state)

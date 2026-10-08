@@ -62,9 +62,12 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 	if state.PendingAwakeable == "" {
 		return "", restate.ToTerminalError(fmt.Errorf("run %s 无挂起审批", in.RunID))
 	}
-	// 动作精确绑定（评审 #5）：digest 非空且不匹配 → 拒绝（run 保持挂起）
-	legacy := in.ActionDigest == ""
-	if !legacy && state.PendingActionDigest != "" && in.ActionDigest != state.PendingActionDigest {
+	// 动作精确绑定（评审 #5 + 审计 #8）：空 digest 拒绝——legacy 放行删除
+	// （自报 approver + 空 digest 曾绕过授权链）
+	if in.ActionDigest == "" {
+		return "", restate.ToTerminalError(fmt.Errorf("action_digest 必填（精确绑定）"))
+	}
+	if state.PendingActionDigest != "" && in.ActionDigest != state.PendingActionDigest {
 		return "", restate.ToTerminalError(fmt.Errorf("审批摘要不匹配：请求 %s ≠ 挂起 %s", in.ActionDigest, state.PendingActionDigest))
 	}
 	// 审批策略路由（期 3 §B）：ApprovalRouter 策略缝——approver 集合校验 +
@@ -72,7 +75,7 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 	// OrgApprovalPolicy（org 策略）。审计事件留痕。
 	if sess, sErr := deps.Store.GetSession(ctx, run.SessionID); sErr == nil && deps.ApprovalRouter != nil {
 		approvers, ttl, rErr := deps.ApprovalRouter.Route(ctx, policy.ApprovalRequest{
-			TenantID: sess.OrgID, Tool: "", Class: 2, SessionID: run.SessionID, RunID: in.RunID,
+			TenantID: sess.OrgID, Tool: state.PendingTool, Class: 2, SessionID: run.SessionID, RunID: in.RunID,
 		})
 		if rErr == nil && len(approvers) > 0 {
 
@@ -101,7 +104,7 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 	// 审计事件：审批者与决议留痕（幂等 dedupe 按 run）
 	audit, _ := json.Marshal(map[string]any{
 		"run_id": in.RunID, "approver": in.Approver,
-		"action_digest": in.ActionDigest, "legacy": legacy,
+		"action_digest": in.ActionDigest, "legacy": false,
 		"decision": approvalGranted(in.Payload),
 	})
 	if _, err := deps.Store.AppendEvent(ctx, run.SessionID, in.RunID, event.AuditApproval, audit, run.SessionID+":audit:approval:"+in.RunID); err != nil {

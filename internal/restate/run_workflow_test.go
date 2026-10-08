@@ -278,6 +278,7 @@ func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error
 }
 
 type fakeSessions struct {
+	pendingTool   string
 	state         SessionState
 	onGetState    func(st *SessionState)
 	cleared       []string
@@ -311,9 +312,10 @@ func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) err
 	return nil
 }
 
-func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID, actionDigest string) error {
+func (f *fakeSessions) SetPendingAwakeable(_ restate.Context, _, awakeableID, actionDigest, tool string) error {
 	f.pending = awakeableID
 	f.pendingDigest = actionDigest
+	f.pendingTool = tool
 	return nil
 }
 

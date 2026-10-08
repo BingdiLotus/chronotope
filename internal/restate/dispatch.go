@@ -214,7 +214,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall, emit *Emitter, riskClass int) (string, error) {
 	awakeable := restate.Awakeable[string](ctx)
 	digest := approvalDigest(runID, step, tc)
-	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest); err != nil {
+	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest, tc.Name); err != nil {
 		return "", err
 	}
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunAwaitingApproval, "await", "", map[string]any{
