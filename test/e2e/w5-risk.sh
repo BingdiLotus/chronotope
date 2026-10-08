@@ -48,8 +48,9 @@ done
 assert "class 2 强制挂起（run.awaiting_approval + risk_class=2）" \
   python3 -c 'import sys,json; data=[json.loads(l[6:]) for l in open("/tmp/risk-approve-sse.out") if l.startswith("data: ")]; ev=[e for e in data if e["type"]=="run.awaiting_approval"]; assert ev and ev[0]["payload"]["risk_class"]==2' <<< '{}'
 RID1=$(grep -a -B2 "awakeable_id" /tmp/risk-approve-sse.out | grep -a -o '"run_id":"[^"]*"' | head -1 | cut -d'"' -f4)
+DIGEST1=$(grep -a -B2 "awakeable_id" /tmp/risk-approve-sse.out | grep -a -o '"action_digest":"[^"]*"' | head -1 | cut -d'"' -f4)
 curl -fsS -X POST "$API/webhooks/approval/$RID1" -H 'content-type: application/json' \
-  -d '{"payload":"已批准"}' > /dev/null
+  -d "{\"payload\":\"已批准\",\"approver\":\"e2e-approver\",\"action_digest\":\"$DIGEST1\"}" > /dev/null
 wait "$RUN1" || true
 sleep 1 # 事件经 poller 送达（与提交 curl 竞态）
 assert "批准后 bash 执行（sandbox.exec exit 0 + run.completed）" \
@@ -70,8 +71,9 @@ for i in $(seq 1 30); do
   sleep 1
 done
 RID2=$(grep -a -B2 "awakeable_id" /tmp/risk-deny-sse.out | grep -a -o '"run_id":"[^"]*"' | head -1 | cut -d'"' -f4)
+DIGEST2=$(grep -a -B2 "awakeable_id" /tmp/risk-deny-sse.out | grep -a -o '"action_digest":"[^"]*"' | head -1 | cut -d'"' -f4)
 curl -fsS -X POST "$API/webhooks/approval/$RID2" -H 'content-type: application/json' \
-  -d '{"payload":"{\"approved\":false,\"note\":\"拒绝危险操作\"}"}' > /dev/null
+  -d "{\"payload\":\"{\\\"approved\\\":false,\\\"note\\\":\\\"拒绝危险操作\\\"}\",\"approver\":\"e2e-approver\",\"action_digest\":\"$DIGEST2\"}" > /dev/null
 wait "$RUN2" || true
 sleep 1 # 事件经 poller 送达（提交 curl 与事件流竞态）
 assert "拒绝 → audit.tool_denied + run.failed{tool_denied}" \

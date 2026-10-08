@@ -44,7 +44,9 @@ assert "run 挂起并发出 run.awaiting_approval 事件" \
 
 # 4. 审批回调（webhook resolve awakeable，幂等）
 RID=$(grep -o '"run_id":"[^"]*"' /tmp/hitl-sse.out | head -1 | cut -d'"' -f4)
-RESOLVE=$(curl -fsS -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' -d '{"payload":"approve"}')
+# 审计 #8 后：approver 必填（auth off 自报）+ action_digest 必填（精确绑定）
+DIGEST=$(grep -o '"action_digest":"[^"]*"' /tmp/hitl-sse.out | head -1 | cut -d'"' -f4)
+RESOLVE=$(curl -fsS -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' -d "{\"payload\":\"approve\",\"approver\":\"e2e-approver\",\"action_digest\":\"$DIGEST\"}")
 assert "webhook resolve 返回 resolved" python3 -c 'import sys,json; assert json.load(sys.stdin)["status"]=="resolved"' <<< "$RESOLVE"
 
 # 5. run 恢复并完成

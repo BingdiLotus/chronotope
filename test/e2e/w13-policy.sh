@@ -109,8 +109,9 @@ curl -fsS -m 120 -X POST "$API/sessions/$SID3/runs" -H 'content-type: applicatio
 for i in $(seq 1 60); do grep -q '"type":"run.awaiting_approval"' /tmp/w13-b2.out 2>/dev/null && break; sleep 1; done
 RID2=$(python3 -c 'import json; t=open("/tmp/w13-b2.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["run_id"] for e in m if e["type"]=="run.awaiting_approval"][-1])')
 sleep 5 # 过 TTL
+DIGEST2=$(python3 -c 'import json; t=open("/tmp/w13-b2.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["payload"].get("action_digest","") for e in m if e["type"]=="run.awaiting_approval"][0])')
 curl -fsS -X POST "$API/webhooks/approval/$RID2" -H 'content-type: application/json' \
-  -d '{"payload":"approve","approver":"alice"}' > /dev/null
+  -d "{\"payload\":\"approve\",\"approver\":\"alice\",\"action_digest\":\"$DIGEST2\"}" > /dev/null
 sleep 3
 assert "TTL 过期自动拒绝（audit.approval_expired + tool_denied 终态）" \
   bash -c 'grep -q "audit.approval_expired" /tmp/w13-b2.out && grep -q "tool_denied" /tmp/w13-b2.out'
@@ -125,8 +126,8 @@ curl -fsS -X PUT "$API/orgs/org-$RUN_ID/mcp-allowlist" -H 'content-type: applica
 nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/w13-mcp-fixture.log 2>&1 &
 sleep 2
 SID4=$(curl -fsS -X POST "$API/agents/$AID/sessions" "${AUTH[@]}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-curl -fsS -X POST "$API/sessions/$SID4/mcp" -H 'content-type: application/json' "${AUTH[@]}" \
-  -d '{"server":"echo","url":"http://localhost:9100"}' > /dev/null
+curl -sS -X POST "$API/sessions/$SID4/mcp" -H 'content-type: application/json' "${AUTH[@]}" \
+  -d '{"server":"echo","url":"http://localhost:9100"}' > /dev/null 2>&1 || true
 curl -fsS -N "$API/sessions/$SID4/events?after=0" "${AUTH[@]}" > /tmp/w13-c.out 2>&1 &
 sleep 1
 # 执行层 allowlist 防御（期 5 §B 后）：被拒工具 → run 失败（502）——
