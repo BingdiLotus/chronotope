@@ -54,7 +54,7 @@ func main() {
 	deps := &restate.Deps{
 		Store:                st,
 		Harness:              restate.NewHarnessClient(*harnessURL),
-		Executor:             restate.NewExecutorClient(*executorURL),
+		Executor:             executorPoolOf(st, *executorURL),
 		MCP:                  restate.NewHTTPMCPClient(),
 		Sessions:             restate.RestateSessionSource{},
 		ConsolidateThreshold: consolidateThreshold,
@@ -106,6 +106,18 @@ func approvalRouterOf(st *store.Store) policy.ApprovalRouter {
 			return p.ToolPatterns, p.Approvers, p.TTLSeconds, nil
 		},
 	}
+}
+
+// executorPoolOf 装配多宿主池（期 4 §B）：注册表候选 + SchedulerPolicy 缝 +
+// 单点 EXECUTOR_URL 兜底（无注册行时现有部署无感）。
+func executorPoolOf(st *store.Store, executorURL string) restate.Executor {
+	pool := restate.NewExecutorPool(restate.NewExecutorClient(executorURL), nil)
+	pool.ListExecutors = func(ctx context.Context) ([]store.ExecutorRow, error) {
+		return st.ListHealthyExecutors(ctx, 2*time.Minute)
+	}
+	pool.SandboxOwner = st.GetSandboxOwner
+	pool.SetSandboxOwner = st.SetSandboxOwner
+	return pool
 }
 
 // budgetPolicyOf 装配预算策略缝（期 3 §A：env 选择；默认参考实现）。

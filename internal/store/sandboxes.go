@@ -277,3 +277,22 @@ func (s *Store) HasActiveLease(ctx context.Context, sandboxID string) (bool, err
 	}
 	return ok, nil
 }
+
+// GetSandboxOwner 取沙箱归属 executor_id（期 4 §B 池路由；无 → 空串）。
+func (s *Store) GetSandboxOwner(ctx context.Context, sandboxID string) (string, error) {
+	const q = `SELECT COALESCE(executor_id, '') FROM sandboxes WHERE sandbox_id = $1`
+	var owner string
+	if err := s.Pool.QueryRow(ctx, q, sandboxID).Scan(&owner); err != nil {
+		return "", fmt.Errorf("store: sandbox owner: %w", err)
+	}
+	return owner, nil
+}
+
+// SetSandboxOwner 落沙箱归属（池选择后写回）。
+func (s *Store) SetSandboxOwner(ctx context.Context, sandboxID, executorID string) error {
+	const q = `UPDATE sandboxes SET executor_id = $2 WHERE sandbox_id = $1`
+	if _, err := s.Pool.Exec(ctx, q, sandboxID, executorID); err != nil {
+		return fmt.Errorf("store: set sandbox owner: %w", err)
+	}
+	return nil
+}

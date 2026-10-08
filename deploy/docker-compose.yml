@@ -147,6 +147,7 @@ services:
       E2B_API_KEY: ${E2B_API_KEY:-}
       E2B_TEMPLATE: ${E2B_TEMPLATE:-}
       EXECUTOR_ADDR: ":9082"
+      EXECUTOR_ENDPOINT: http://executor:9082 # 注册表 endpoint（容器内 localhost=自己——refused 实证）
       DATABASE_URL: postgres://${POSTGRES_USER:-chronotope}:${POSTGRES_PASSWORD:-chronotope_dev}@postgres:5432/${POSTGRES_DB:-chronotope}?sslmode=disable
       # 工作区 blob 合同（期 2 §A）：RustFS S3（内容寻址对象图）
       RUSTFS_ENDPOINT: rustfs:9000 # 容器内固定服务名（.env 的 localhost 是宿主观——见 503 实证）

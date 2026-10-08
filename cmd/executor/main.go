@@ -65,6 +65,25 @@ func main() {
 		WorkspaceRoot: workspace,
 		Logger:        slog.Default(),
 	}
+	// 期 4 §B：注册表心跳（多宿主池的候选源——worker 按新鲜心跳选 executor）
+	go func() {
+		executorID := envOr("EXECUTOR_ID", "executor-"+*addr)
+		endpoint := envOr("EXECUTOR_ENDPOINT", "http://localhost"+*addr)
+		heartbeat := func() {
+			if err := st.UpsertExecutor(context.Background(), store.ExecutorRow{
+				ID: executorID, Kind: "docker", Endpoint: endpoint,
+				Capabilities: []byte(`{"network":true}`),
+			}); err != nil {
+				slog.Warn("executor register failed", "err", err)
+			}
+		}
+		heartbeat()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			heartbeat()
+		}
+	}()
 	// 工作区 blob 合同（期 2 §A）：RUSTFS_ENDPOINT 未配置时禁用（纯卷语义回退）
 	if endpoint := envOr("RUSTFS_ENDPOINT", ""); endpoint != "" {
 		blob, err := blobstore.NewBlobStore(endpoint,
