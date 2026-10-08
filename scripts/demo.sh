@@ -25,6 +25,10 @@ cd "$(dirname "$0")/.."
 ENV_ARGS=()
 [ -f .env ] && ENV_ARGS=(--env-file .env)
 DC="docker compose ${ENV_ARGS[*]} -f deploy/docker-compose.yml"
+# fake CI 固定 docker 档（快照含卷/blob 断言是 docker 语义——.env 的
+# EXECUTOR_DRIVER=e2b_selfhosted 泄漏会在云沙箱跑失败实证；真实 e2e 另行
+# 按档重建）
+export EXECUTOR_DRIVER=docker
 API=http://localhost:8080
 RUN_ID="demo-$(date +%s)"
 ADMIN=http://localhost:9070

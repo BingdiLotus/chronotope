@@ -66,9 +66,9 @@ func (f *fakeE2BAPI) Resume(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeE2BAPI) CreateSnapshot(_ context.Context, _, snapshotID string) error {
+func (f *fakeE2BAPI) CreateSnapshot(_ context.Context, _, snapshotID string) (string, error) {
 	f.snapshotID = snapshotID
-	return nil
+	return snapshotID, nil
 }
 
 func (f *fakeE2BAPI) Delete(_ context.Context, id string) error {
@@ -108,7 +108,8 @@ func TestE2BDriverLifecycle(t *testing.T) {
 		t.Fatalf("unfreeze: paused=%v err=%v", fake.paused, err)
 	}
 	ref, err := d.Snapshot(context.Background(), "e2b_sb_1")
-	if err != nil || ref == "" || fake.snapshotID != ref {
+	// ref = "snap_" + 官方 snapshotID（恢复时剥壳直通——待办 1 语义）
+	if err != nil || ref != "snap_"+fake.snapshotID {
 		t.Fatalf("snapshot: ref=%q err=%v", ref, err)
 	}
 	if err := d.Destroy(context.Background(), "e2b_sb_1"); err != nil || fake.deleted != "e2b_sb_1" {
@@ -168,7 +169,7 @@ func TestHTTPE2BAPIWire(t *testing.T) {
 	if err := c.Pause(context.Background(), "sb_1"); err != nil || gotPath != "/v2/sandboxes/sb_1/pause" {
 		t.Fatalf("pause: err=%v path=%q", err, gotPath)
 	}
-	if err := c.CreateSnapshot(context.Background(), "sb_1", "snap_1"); err != nil || gotPath != "/v2/sandboxes/sb_1/snapshots" {
+	if snap, err := c.CreateSnapshot(context.Background(), "sb_1", "snap_1"); err != nil || snap != "snap_1" || gotPath != "/v2/sandboxes/sb_1/snapshots" {
 		t.Fatalf("snapshot: err=%v path=%q", err, gotPath)
 	}
 	if err := c.Delete(context.Background(), "sb_1"); err != nil || gotMethod != http.MethodDelete {

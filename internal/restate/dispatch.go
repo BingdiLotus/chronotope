@@ -72,7 +72,10 @@ func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg s
 func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, cfg sessionapi.AgentConfig, tc ToolCall, emit *Emitter) (string, float64, error) {
 	switch {
 	case tc.Name == runs.ToolBash || tc.Name == runs.ToolRunPython || tc.Name == runs.ToolListFiles:
-		input := codeToolInput(tc)
+		input, inputErr := codeToolInput(tc)
+		if inputErr != nil {
+			return "", 0, restate.ToTerminalError(inputErr, restate.WithErrorCode(400))
+		}
 		var outcome *execOutcome
 		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sandboxID string) error {
 			// 时长在 Run 闭包内测量并随结果 journal（重放回放同一时长）
@@ -298,23 +301,36 @@ func approvalDigest(runID string, step int, tc ToolCall) string {
 
 // codeToolInput 从 tool_call.arguments 提取执行输入（bash→command、run_python→code、
 // list_files→path）。
-func codeToolInput(tc ToolCall) string {
+// codeToolInput 提取代码类工具输入；参数缺失返回明确错误——真实模型偶发
+// 空参调用（arguments={}）曾把 "{}" 当命令执行（127 实证——生产形态基准）。
+func codeToolInput(tc ToolCall) (string, error) {
 	args := parseToolArguments(tc)
 	switch tc.Name {
 	case runs.ToolBash:
-		if v, ok := args["command"].(string); ok {
-			return v
+		if v, ok := args["command"].(string); ok && strings.TrimSpace(v) != "" {
+			return v, nil
 		}
+		return "", fmt.Errorf("工具 %s 参数缺失：需要非空 command（收到 %s）", tc.Name, compactArgs(args))
 	case runs.ToolRunPython:
-		if v, ok := args["code"].(string); ok {
-			return v
+		if v, ok := args["code"].(string); ok && strings.TrimSpace(v) != "" {
+			return v, nil
 		}
+		return "", fmt.Errorf("工具 %s 参数缺失：需要非空 code（收到 %s）", tc.Name, compactArgs(args))
 	case runs.ToolListFiles:
-		if v, ok := args["path"].(string); ok {
-			return v
+		if v, ok := args["path"].(string); ok && strings.TrimSpace(v) != "" {
+			return v, nil
 		}
+		return "", fmt.Errorf("工具 %s 参数缺失：需要非空 path（收到 %s）", tc.Name, compactArgs(args))
 	}
+	return "", fmt.Errorf("未知代码工具 %s", tc.Name)
+}
+
+// compactArgs 参数缺失错误里的短形（诊断上下文）。
+func compactArgs(args map[string]any) string {
 	raw, _ := json.Marshal(args)
+	if len(raw) > 200 {
+		raw = raw[:200]
+	}
 	return string(raw)
 }
 

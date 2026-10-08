@@ -3,7 +3,6 @@ package execproto
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +29,7 @@ type E2BAPI interface {
 	WriteFile(ctx context.Context, sandboxID, path string, data []byte) error
 	Pause(ctx context.Context, sandboxID string) error
 	Resume(ctx context.Context, sandboxID string) error
-	CreateSnapshot(ctx context.Context, sandboxID, snapshotID string) error
+	CreateSnapshot(ctx context.Context, sandboxID, snapshotID string) (string, error)
 	Delete(ctx context.Context, sandboxID string) error
 }
 
@@ -49,7 +48,13 @@ func NewE2BDriver(api E2BAPI, template string) *E2BDriver {
 }
 
 // resolveTemplate 镜像名 → 模板（映射表 → 全局 E2B_TEMPLATE → 镜像名原样）。
+// 快照 ref（snap_ 前缀）直通：官方云快照 ID 直接作 templateID（snapshots
+// 文档实证「snapshot ID can be used directly with Sandbox.create」）——
+// 映射表的 "*" 兜底不得吞快照 ref。
 func (d *E2BDriver) resolveTemplate(image string) string {
+	if strings.HasPrefix(image, "snap_") {
+		return strings.TrimPrefix(image, "snap_") // 剥壳为官方 snapshot template ID
+	}
 	if d.TemplateMap != nil {
 		if tpl, ok := d.TemplateMap[image]; ok && tpl != "" {
 			return tpl
@@ -97,29 +102,13 @@ func (d *E2BDriver) Execute(ctx context.Context, req ExecuteRequest, log io.Writ
 }
 
 func (d *E2BDriver) ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error) {
-	if !d.API.IsOfficial() {
-		return d.API.ReadFile(ctx, sandboxID, path)
-	}
-	// 官方云：文件走命令（cat——文件 API 是 ConnectRPC filesystem 服务，后置）
-	stdout, stderr, exit, err := d.API.StartProcess(ctx, sandboxID, "cat "+shellQuote(path))
-	if err != nil || exit != 0 {
-		return nil, fmt.Errorf("e2b: read file (exit %d): %s%s", exit, stderr, err)
-	}
-	return []byte(stdout), nil
+	// 官方云/自托管统一走 API（官方云 envd REST 文件端点已对接——待办 3 落地）
+	return d.API.ReadFile(ctx, sandboxID, path)
 }
 
 func (d *E2BDriver) WriteFile(ctx context.Context, sandboxID, path string, data []byte) error {
-	if !d.API.IsOfficial() {
-		return d.API.WriteFile(ctx, sandboxID, path, data)
-	}
-	// 官方云：文件走命令（base64 管道防转义——heredoc 转义风险实证纪律）
-	encoded := base64.StdEncoding.EncodeToString(data)
-	cmd := "mkdir -p " + shellQuote(dirOf(path)) + " && echo " + encoded + " | base64 -d > " + shellQuote(path)
-	_, stderr, exit, err := d.API.StartProcess(ctx, sandboxID, cmd)
-	if err != nil || exit != 0 {
-		return fmt.Errorf("e2b: write file (exit %d): %s%s", exit, stderr, err)
-	}
-	return nil
+	// 官方云/自托管统一走 API（官方云 envd REST 文件端点已对接——待办 3 落地）
+	return d.API.WriteFile(ctx, sandboxID, path, data)
 }
 
 // Freeze/Unfreeze → E2B pause/resume（Tier 1 冻结：暂停计费与 CPU）。
@@ -132,11 +121,12 @@ func (d *E2BDriver) Unfreeze(ctx context.Context, sandboxID string) error {
 
 // Snapshot → E2B 快照（Tier 2；ref = 快照 id，恢复时作模板重建）。
 func (d *E2BDriver) Snapshot(ctx context.Context, sandboxID string) (string, error) {
-	ref := "snap_" + sandboxID + "_" + time.Now().UTC().Format("20060102150405")
-	if err := d.API.CreateSnapshot(ctx, sandboxID, ref); err != nil {
+	snapshotID, err := d.API.CreateSnapshot(ctx, sandboxID, "snap_"+sandboxID+"_"+time.Now().UTC().Format("20060102150405"))
+	if err != nil {
 		return "", err
 	}
-	return ref, nil
+	// ref 包裹官方 snapshot template ID（恢复时剥壳直通建沙箱）
+	return "snap_" + snapshotID, nil
 }
 
 // Destroy → E2B 删除（Tier 3）。
@@ -222,16 +212,77 @@ func (c *HTTPE2BAPI) RunCommand(ctx context.Context, sandboxID, cmd, cwd string,
 }
 
 func (c *HTTPE2BAPI) ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error) {
-	raw, err := c.do(ctx, http.MethodGet, "/v2/sandboxes/"+url.PathEscape(sandboxID)+"/files?path="+url.QueryEscape(path), nil, nil)
+	if !c.IsOfficial() {
+		raw, err := c.do(ctx, http.MethodGet, "/v2/sandboxes/"+url.PathEscape(sandboxID)+"/files?path="+url.QueryEscape(path), nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
+	// 官方云：envd REST 文件下载（sandbox.e2b.app + 路由头——openapi 实证）
+	env, err := c.connectV2(ctx, sandboxID)
 	if err != nil {
 		return nil, err
+	}
+	host := "https://sandbox.e2b.app"
+	if env.Domain != "" {
+		host = "https://" + env.Domain
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, host+"/files?path="+url.QueryEscape(path), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("E2b-Sandbox-Id", sandboxID)
+	req.Header.Set("E2b-Sandbox-Port", fmt.Sprint(env.Port))
+	req.Header.Set("X-Access-Token", env.AccessToken)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("e2b: read file: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("e2b: read file body: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("e2b: read file status %d: %s", resp.StatusCode, truncateStr(string(raw), 200))
 	}
 	return raw, nil
 }
 
 func (c *HTTPE2BAPI) WriteFile(ctx context.Context, sandboxID, path string, data []byte) error {
-	_, err := c.do(ctx, http.MethodPost, "/v2/sandboxes/"+url.PathEscape(sandboxID)+"/files?path="+url.QueryEscape(path), data, nil)
-	return err
+	if !c.IsOfficial() {
+		_, err := c.do(ctx, http.MethodPost, "/v2/sandboxes/"+url.PathEscape(sandboxID)+"/files?path="+url.QueryEscape(path), data, nil)
+		return err
+	}
+	// 官方云：envd REST 文件上传（openapi「Upload a file and ensure the parent
+	// directories exist」——POST /files?path= + 路由头）
+	env, err := c.connectV2(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	host := "https://sandbox.e2b.app"
+	if env.Domain != "" {
+		host = "https://" + env.Domain
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, host+"/files?path="+url.QueryEscape(path), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("E2b-Sandbox-Id", sandboxID)
+	req.Header.Set("E2b-Sandbox-Port", fmt.Sprint(env.Port))
+	req.Header.Set("X-Access-Token", env.AccessToken)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("e2b: write file: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		return fmt.Errorf("e2b: write file status %d: %s", resp.StatusCode, truncateStr(string(raw), 200))
+	}
+	return nil
 }
 
 func (c *HTTPE2BAPI) Pause(ctx context.Context, sandboxID string) error {
@@ -244,10 +295,27 @@ func (c *HTTPE2BAPI) Resume(ctx context.Context, sandboxID string) error {
 	return err
 }
 
-func (c *HTTPE2BAPI) CreateSnapshot(ctx context.Context, sandboxID, snapshotID string) error {
-	body, _ := json.Marshal(map[string]any{"snapshotId": snapshotID})
-	_, err := c.do(ctx, http.MethodPost, "/v2/sandboxes/"+url.PathEscape(sandboxID)+"/snapshots", body, nil)
-	return err
+// CreateSnapshot 官方云：POST /sandboxes/{id}/snapshots（无 v2 前缀——404 实证）；
+// 响应含官方 snapshotID（snapshot template ID——恢复时直接作 templateID）。
+// 自托管：保持客户端指定 snapshotId 的旧协议。
+func (c *HTTPE2BAPI) CreateSnapshot(ctx context.Context, sandboxID, snapshotID string) (string, error) {
+	if !c.IsOfficial() {
+		body, _ := json.Marshal(map[string]any{"snapshotId": snapshotID})
+		_, err := c.do(ctx, http.MethodPost, "/v2/sandboxes/"+url.PathEscape(sandboxID)+"/snapshots", body, nil)
+		return snapshotID, err
+	}
+	body, _ := json.Marshal(map[string]any{})
+	raw, err := c.do(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(sandboxID)+"/snapshots", body, nil)
+	if err != nil {
+		return "", err
+	}
+	var info struct {
+		SnapshotID string `json:"snapshotID"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil || info.SnapshotID == "" {
+		return "", fmt.Errorf("e2b: snapshot response: %s", truncateStr(string(raw), 200))
+	}
+	return info.SnapshotID, nil
 }
 
 func (c *HTTPE2BAPI) Delete(ctx context.Context, sandboxID string) error {
