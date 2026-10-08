@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -953,4 +954,38 @@ func TestArchiveEventsPartitionPruning(t *testing.T) {
 		t.Fatalf("分区裁剪失效: %s", plan)
 	}
 	_ = s.Pool.QueryRow(ctx, `DELETE FROM archive_events WHERE session_id = 's_prune'`).Scan()
+}
+
+// TestRunActiveUniqueAndCommand 审计 #4/#3：active 唯一约束（并发双 Run 兜底）
+// + 不可变 command 落库（重投不丢输入）。
+func TestRunActiveUniqueAndCommand(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	rid := fmt.Sprintf("r_ru_%d", time.Now().UnixNano())
+	sid := fmt.Sprintf("s_ru_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, "org_run_uniq", "o")
+	_ = s.CreateAgent(ctx, "a_ru", "org_run_uniq", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, sid, "org_run_uniq", "a_ru")
+	// 首 run（queued）——input 落库
+	if created, err := s.CreateRunWithCommand(ctx, rid, sid, "原始输入", "话题", nil, map[string]any{}); err != nil || !created {
+		t.Fatalf("create run1: created=%v err=%v", created, err)
+	}
+	// 并发第二 run（不同 key）——active 唯一约束拒绝（审计 #4 双 Run 反例）
+	if _, err := s.CreateRun(ctx, "r_ru_2", sid, nil, map[string]any{}); err == nil {
+		t.Fatal("active 唯一约束应拒绝第二 run")
+	}
+	// 幂等重投的 command 读回
+	rows, err := s.ListStaleQueuedRuns(ctx, time.Now().Add(time.Minute), 100)
+	if err != nil {
+		t.Fatalf("list stale: %v", err)
+	}
+	var found *store.Run
+	for i := range rows {
+		if rows[i].ID == rid {
+			found = rows[i]
+		}
+	}
+	if found == nil || found.Input != "原始输入" || found.Topic != "话题" {
+		t.Fatalf("重投行应带 input/topic: %+v", found)
+	}
 }

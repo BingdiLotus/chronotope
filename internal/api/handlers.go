@@ -165,7 +165,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		"model":                agent.Config.Model,
 	}
 	trigger, _ := json.Marshal(req.Trigger)
-	created, err := h.Store.CreateRun(r.Context(), runID, sessionID, trigger, bound)
+	created, err := h.Store.CreateRunWithCommand(r.Context(), runID, sessionID, req.Input, req.Topic, trigger, bound)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
@@ -175,6 +175,11 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		run, err := h.Store.GetRun(r.Context(), runID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, 500, err.Error())
+			return
+		}
+		// 审计 #3：同幂等 key 不同 input 曾返回 200——必须 409（command 不可变）
+		if run.Input != "" && run.Input != req.Input {
+			writeError(w, http.StatusConflict, 409, "idempotency key 与输入不匹配")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "status": run.Status, "idempotent": true})

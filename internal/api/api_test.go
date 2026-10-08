@@ -140,6 +140,10 @@ func (f *fakeStore) SoftDeleteSession(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeStore) CreateRunWithCommand(_ context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (bool, error) {
+	return f.CreateRun(context.Background(), id, sessionID, trigger, bound)
+}
+
 func (f *fakeStore) CreateRun(_ context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

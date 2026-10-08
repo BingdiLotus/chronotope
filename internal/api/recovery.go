@@ -44,8 +44,9 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 		var out struct {
 			RunID string `json:"run_id"`
 		}
+		// 审计 #3：重投带不可变 command（input/topic 落 Run 行——丢输入反例关闭）
 		if err := a.Ingress.Call(ctx, "/run_workflow/"+run.ID+"/run", "POST",
-			map[string]any{"session_id": run.SessionID}, &out); err != nil {
+			map[string]any{"session_id": run.SessionID, "input": run.Input, "topic": run.Topic}, &out); err != nil {
 			if a.Logger != nil {
 				a.Logger.Warn("admission recovery redeliver failed", "run_id", run.ID, "err", err)
 			}

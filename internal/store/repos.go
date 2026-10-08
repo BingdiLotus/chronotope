@@ -169,6 +169,8 @@ VALUES ($1, $2, $3, '', now() + ($4::text || ' milliseconds')::interval, $5)`
 // Run 是 runs 表行；Bound 是 run 启动绑定的 {agent_config_version, protocol_version, model}。
 type Run struct {
 	ID        string
+	Input     string // 不可变 command（审计 #3 修复——重投按行重放）
+	Topic     string
 	SessionID string
 	Status    sessionapi.RunStatus
 	Bound     map[string]any
@@ -177,17 +179,23 @@ type Run struct {
 // CreateRun 幂等创建 run 行（Idempotency-Key → run_id 去重）。
 // 已存在时返回 false，不覆盖。
 func (s *Store) CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (created bool, err error) {
+	return s.CreateRunWithCommand(ctx, id, sessionID, "", "", trigger, bound)
+}
+
+// CreateRunWithCommand 存不可变 command（审计 #3：重投丢输入的反例——input/
+// topic 落 Run 行；重投按行重放原始提交）。
+func (s *Store) CreateRunWithCommand(ctx context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (created bool, err error) {
 	boundJSON, err := json.Marshal(bound)
 	if err != nil {
 		return false, fmt.Errorf("store: marshal run bound: %w", err)
 	}
 	const q = `
-INSERT INTO runs (id, session_id, trigger, status, bound)
-VALUES ($1, $2, $3, 'queued', $4)
+INSERT INTO runs (id, session_id, trigger, status, bound, input, topic)
+VALUES ($1, $2, $3, 'queued', $4, $5, $6)
 ON CONFLICT (id) DO NOTHING
 RETURNING id`
 	var got string
-	err = s.Pool.QueryRow(ctx, q, id, sessionID, nullableRaw(trigger), boundJSON).Scan(&got)
+	err = s.Pool.QueryRow(ctx, q, id, sessionID, nullableRaw(trigger), boundJSON, nullIfEmpty(input), nullIfEmpty(topic)).Scan(&got)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil // 已存在（幂等）
 	}
@@ -283,6 +291,13 @@ ORDER BY id ASC`
 	return out, rows.Err()
 }
 
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func nullableRaw(b json.RawMessage) any {
 	if len(b) == 0 || string(b) == "null" {
 		return nil
@@ -312,15 +327,18 @@ ORDER BY created_at DESC LIMIT 1`
 
 // ListStaleQueuedRuns 接纳屏障扫描（评审 #6）：api 崩溃窗口遗留的 queued run
 // （行已建但 ingress 未达/已失）——恢复扫描重投（worker run_workflow 幂等键
-// = run_id，重投安全）。
+// = run_id，重投安全）。含 running 孤儿（审计 #3：running 在 ingress 前写——
+// predispatch 崩溃的 running 不在 queued 扫描内 → 丢派发；running 超时视为
+// 孤儿重投——ingress 侧 run_id 幂等，真在跑的 run 重投无害）。
 func (s *Store) ListStaleQueuedRuns(ctx context.Context, olderThan time.Time, limit int) ([]*Run, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
 	const q = `
-SELECT id, session_id, status, bound
+SELECT id, session_id, status, bound, COALESCE(input, ''), COALESCE(topic, '')
 FROM runs
-WHERE status = 'queued' AND created_at < $1
+WHERE (status = 'queued' AND created_at < $1)
+   OR (status = 'running' AND created_at < $1 - interval '10 minutes')
 ORDER BY created_at
 LIMIT $2`
 	rows, err := s.Pool.Query(ctx, q, olderThan, limit)
@@ -332,7 +350,7 @@ LIMIT $2`
 	for rows.Next() {
 		var r Run
 		var boundJSON json.RawMessage
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON); err != nil {
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON, &r.Input, &r.Topic); err != nil {
 			return nil, fmt.Errorf("store: scan stale run: %w", err)
 		}
 		out = append(out, &r)
