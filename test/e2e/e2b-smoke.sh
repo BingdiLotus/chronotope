@@ -2,6 +2,12 @@
 # E2B driver 真实实例 smoke（env 门控，非 CI 常规步骤——与 real-model.sh 同策略）。
 # 前置：E2B_API_KEY（+ 可选 E2B_API_URL 自托管 / E2B_TEMPLATE）；
 #        executor 以 EXECUTOR_DRIVER=e2b 运行；api/worker/harness 运行中。
+#
+# 官方云诊断（2026-10 实证）：官方云平台 API 只有沙箱生命周期 REST
+# （创建/列表/暂停/恢复/删除）；命令执行与文件走 envd 的 ConnectRPC
+# （protobuf 流式——POST /v2/sandboxes/{id}/commands 不存在：
+#  "no matching operation was found"）。HTTPE2BAPI 的 /commands 协议是
+# 自托管 E2B 网关的形状——官方云命令执行需 ConnectRPC 对接（后置子任务）。
 # 场景：W2 沙箱闭环（bash 执行 + 文件写入/读取）在 E2B 沙箱上全链路跑通。
 # 用法: E2B_API_KEY=... E2B_TEMPLATE=... bash test/e2e/e2b-smoke.sh [API_URL]
 set -euo pipefail
