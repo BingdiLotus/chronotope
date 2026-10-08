@@ -43,7 +43,7 @@ type SandboxStore interface {
 	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]store.WorkspaceFile, error)
 	SessionOrg(ctx context.Context, sessionID string) (string, error)
 	// 孤儿 GC（W8）：过期沙箱扫描 + 行删除。
-	ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*store.SandboxRow, error)
+	ListExpiredSandboxes(ctx context.Context, now time.Time, executorID string) ([]*store.SandboxRow, error)
 	DeleteSandbox(ctx context.Context, sandboxID string) error
 }
 
@@ -56,17 +56,25 @@ type Server struct {
 	// WorkspaceRoot 与 docker driver 同源（大输出外置的宿主目录）。
 	WorkspaceRoot string
 	Logger        *slog.Logger
+	// ExecutorID 本 executor 的注册 id（审计 P0-3：GC 扫描按归属过滤；空 = 全库）
+	ExecutorID string
 }
 
 // GC 执行一轮孤儿清理（W8）：扫描 ttl 过期沙箱 → 销毁容器（尽力）→ 删行。
 // 返回清理数；单沙箱失败不阻断其余。
 func (s *Server) GC(ctx context.Context) (int, error) {
-	expired, err := s.Store.ListExpiredSandboxes(ctx, time.Now())
+	expired, err := s.Store.ListExpiredSandboxes(ctx, time.Now(), s.ExecutorID)
 	if err != nil {
 		return 0, err
 	}
 	cleaned := 0
 	for _, sb := range expired {
+		// 审计 P0-3：销毁前二次 lease 校验（扫描与销毁间的窗口——扫描后新建
+		// 的 lease 被拦下；无 quiesce 曾杀活跃执行）
+		if active, lErr := s.Store.HasActiveLease(ctx, sb.SandboxID); lErr == nil && active {
+			s.Logger.Warn("gc: 沙箱有活跃租约，跳过本轮", "sandbox", sb.SandboxID)
+			continue
+		}
 		// 容器名 = 沙箱 id（docker driver 约定）：无条件销毁（container_ref 缺失的
 		// 历史行同样按 id 清理——否则孤儿容器永久残留，w8 e2e 实证）
 		if err := s.Driver.Destroy(ctx, sb.SandboxID); err != nil {
@@ -104,6 +112,10 @@ func (s *Server) Sweep(ctx context.Context) (int, error) {
 		case row.Status == "destroyed":
 			shouldDestroy = true // 行已 destroyed 但容器未删成（历史尽力销毁）
 		case row.TTL != nil && time.Since(row.CreatedAt) > *row.TTL:
+			// 审计 P0-3：Sweep 的 TTL 分支查 lease（此前完全不查——可杀活跃执行）
+			if active, lErr := s.Store.HasActiveLease(ctx, id); lErr == nil && active {
+				continue
+			}
 			shouldDestroy = true // 已过期（GC 尚未轮到的残留）
 		}
 		if !shouldDestroy {

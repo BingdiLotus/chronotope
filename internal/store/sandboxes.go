@@ -190,17 +190,24 @@ FROM sandboxes WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`
 }
 
 // ListExpiredSandboxes 孤儿 GC 扫描（W8）：ttl 过期且未删除的沙箱。
-func (s *Store) ListExpiredSandboxes(ctx context.Context, now time.Time) ([]*SandboxRow, error) {
-	const q = `
+// executorID 非空时只扫归属该 executor 的行（审计 P0-3：多宿主按 owner 过滤）。
+func (s *Store) ListExpiredSandboxes(ctx context.Context, now time.Time, executorID string) ([]*SandboxRow, error) {
+	q := `
 SELECT s.sandbox_id, s.org_id, s.session_id, s.driver, s.container_ref, s.image, s.limits, s.tier,
        s.snapshot_ref, s.file_sync_state, s.ttl, s.status, s.created_at
 FROM sandboxes s
 LEFT JOIN sandbox_leases l ON l.sandbox_id = s.sandbox_id AND l.expires_at > now()
 WHERE s.ttl IS NOT NULL AND s.created_at + s.ttl < $1
   AND s.status <> 'deleted'
-  AND l.sandbox_id IS NULL
+  AND l.sandbox_id IS NULL`
+	args := []any{now}
+	if executorID != "" {
+		q += ` AND COALESCE(s.executor_id, '') = $2`
+		args = append(args, executorID)
+	}
+	q += `
 ORDER BY s.created_at`
-	rows, err := s.Pool.Query(ctx, q, now)
+	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list expired sandboxes: %w", err)
 	}

@@ -70,8 +70,16 @@ func (d *E2BDriver) resolveTemplate(image string) string {
 }
 
 // CreateSandbox → E2B 沙箱（id 即 sandbox id）。
+// 审计 P1-6：RestoreFrom（snap_ 前缀 = 官方快照 template ID）优先于 Image
+// ——此前只 resolveTemplate(req.Image) 忽略 RestoreFrom，快照恢复在 E2B 档
+// 从未生效（会创建新 base 沙箱）。
 func (d *E2BDriver) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
-	tpl := d.resolveTemplate(req.Image)
+	tpl := ""
+	if strings.HasPrefix(req.RestoreFrom, "snap_") {
+		tpl = d.resolveTemplate(req.RestoreFrom)
+	} else {
+		tpl = d.resolveTemplate(req.Image)
+	}
 	id, err := d.API.CreateSandbox(ctx, tpl, d.Timeout.Milliseconds())
 	if err != nil {
 		return nil, err

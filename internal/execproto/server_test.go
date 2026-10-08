@@ -205,7 +205,7 @@ func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, resu
 	return nil
 }
 
-func (f *fakeSBStore) ListExpiredSandboxes(context.Context, time.Time) ([]*store.SandboxRow, error) {
+func (f *fakeSBStore) ListExpiredSandboxes(context.Context, time.Time, string) ([]*store.SandboxRow, error) {
 	return f.expiredRows, nil
 }
 
@@ -346,7 +346,7 @@ func TestServerGC(t *testing.T) {
 	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_1", SessionID: "s_1", Status: "ready", ContainerRef: ptrStr("ctr_1")})
 	_ = st.UpsertSandbox(context.Background(), &store.SandboxRow{SandboxID: "sb_2", SessionID: "s_2", Status: "ready"})
 	// 扫描返回预置行（经 fakeSBStore 的 expired 通道）
-	expired, _ := st.ListExpiredSandboxes(context.Background(), time.Now())
+	expired, _ := st.ListExpiredSandboxes(context.Background(), time.Now(), "")
 	_ = expired // fake 默认空；直接测试 GC 的销毁/删行逻辑——注入过期行
 	st.expiredRows = []*store.SandboxRow{
 		{SandboxID: "sb_1", SessionID: "s_1", Status: "ready", ContainerRef: ptrStr("ctr_1")},

@@ -502,7 +502,7 @@ func TestSandboxGCScanAndDelete(t *testing.T) {
 		t.Fatalf("upsert live sandbox: %v", err)
 	}
 	time.Sleep(1500 * time.Millisecond)
-	expired, err := s.ListExpiredSandboxes(ctx, time.Now())
+	expired, err := s.ListExpiredSandboxes(ctx, time.Now(), "")
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestSandboxLease(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond) // TTL 过期
-	expired, err := s.ListExpiredSandboxes(ctx, time.Now())
+	expired, err := s.ListExpiredSandboxes(ctx, time.Now(), "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestSandboxLease(t *testing.T) {
 	if _, err := s.ReleaseLease(ctx, "sb_"+key, l3.Generation); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	expired, _ = s.ListExpiredSandboxes(ctx, time.Now())
+	expired, _ = s.ListExpiredSandboxes(ctx, time.Now(), "")
 	found := false
 	for _, sb := range expired {
 		if sb.SandboxID == "sb_"+key {

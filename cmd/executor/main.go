@@ -73,6 +73,7 @@ func main() {
 		Store:         st,
 		WorkspaceRoot: workspace,
 		Logger:        slog.Default(),
+		ExecutorID:    envOr("EXECUTOR_ID", "executor-"+*addr),
 	}
 	// 期 4 §B：注册表心跳（多宿主池的候选源——worker 按新鲜心跳选 executor）
 	go func() {

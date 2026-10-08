@@ -189,3 +189,17 @@ func TestHTTPE2BAPIError(t *testing.T) {
 		t.Fatalf("应报 401 错误: %v", err)
 	}
 }
+
+// TestE2BCreateSandboxRestoreFrom 审计 P1-6：RestoreFrom（snap_）优先于
+// Image——快照恢复真接线（此前忽略 RestoreFrom 建新 base 沙箱）。
+func TestE2BCreateSandboxRestoreFrom(t *testing.T) {
+	fake := &fakeE2BAPI{}
+	d := NewE2BDriver(fake, "")
+	req := CreateSandboxRequest{Image: "python:3.12-slim", RestoreFrom: "snap_abc123:default"}
+	if _, err := d.CreateSandbox(context.Background(), req); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(fake.created) != 1 || fake.created[0] != "abc123:default" {
+		t.Fatalf("应使用快照模板（剥 snap_ 前缀）而非镜像: %+v", fake.created)
+	}
+}
