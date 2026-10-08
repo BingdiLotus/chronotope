@@ -78,6 +78,14 @@ type SessionSource interface {
 
 // Deps 是 worker 服务层的依赖集（worker-架构设计 §1：HC 客户端 / EC 客户端 /
 // EM+ST 经 Store / MO 后置）。
+//
+// 边界决策（复审记录）：五个服务（run_workflow/scheduler/webhook/session_ops/
+// session_object）共享 *Deps 而非每服务窄接口——依赖面事实上高度重叠
+// （run_workflow 用 Store/Harness/Executor/Sessions/MCP/BudgetPolicy/
+// ApprovalRouter；session_ops 用 Store/Sessions/Executor）。曾存在的
+// sessionOpsDeps{Store} 窄结构是「接口隔离模式」的半启动标记（未接线，
+// 已删）——若未来某服务需要独立测试隔离或拆分为独立部署单元，届时引入
+// 窄接口（interface segregation），模式在此留档。
 type Deps struct {
 	// BudgetPolicy 预算策略缝（期 3 §A；nil = AllowAll）
 	BudgetPolicy BudgetPolicy
