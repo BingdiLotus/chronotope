@@ -3,6 +3,7 @@ package execproto
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,10 @@ import (
 // E2BAPI 是 E2B API 的最小客户端面（driver 依赖，测试替身注入）。
 type E2BAPI interface {
 	CreateSandbox(ctx context.Context, templateID string, timeoutMs int64) (string, error)
+	// StartProcess 官方云 ConnectRPC 命令执行（自托管实现返回不支持错误）
+	StartProcess(ctx context.Context, sandboxID, cmd string) (stdout, stderr string, exitCode int, err error)
+	// IsOfficial 官方云判定（驱动命令/文件的路由分支）
+	IsOfficial() bool
 	RunCommand(ctx context.Context, sandboxID, cmd, cwd string, timeoutMs int64) (stdout, stderr string, exitCode int, err error)
 	ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error)
 	WriteFile(ctx context.Context, sandboxID, path string, data []byte) error
@@ -57,7 +62,15 @@ func (d *E2BDriver) CreateSandbox(ctx context.Context, req CreateSandboxRequest)
 // Execute 命令执行：E2B 无流式通道，收集完成后写入 log（执行期间无帧；
 // 长命令依赖 timeoutMs 上限——真实实例 smoke 验证）。
 func (d *E2BDriver) Execute(ctx context.Context, req ExecuteRequest, log io.Writer) (*ExecuteResult, error) {
-	stdout, stderr, exit, err := d.API.RunCommand(ctx, req.SandboxID, req.Input, "", d.Timeout.Milliseconds())
+	var stdout, stderr string
+	var exit int
+	var err error
+	if d.API.IsOfficial() {
+		// 官方云：命令执行走 envd ConnectRPC（REST 无 commands 端点——诊断实证）
+		stdout, stderr, exit, err = d.API.StartProcess(ctx, req.SandboxID, req.Input)
+	} else {
+		stdout, stderr, exit, err = d.API.RunCommand(ctx, req.SandboxID, req.Input, "", d.Timeout.Milliseconds())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -66,11 +79,29 @@ func (d *E2BDriver) Execute(ctx context.Context, req ExecuteRequest, log io.Writ
 }
 
 func (d *E2BDriver) ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error) {
-	return d.API.ReadFile(ctx, sandboxID, path)
+	if !d.API.IsOfficial() {
+		return d.API.ReadFile(ctx, sandboxID, path)
+	}
+	// 官方云：文件走命令（cat——文件 API 是 ConnectRPC filesystem 服务，后置）
+	stdout, stderr, exit, err := d.API.StartProcess(ctx, sandboxID, "cat "+shellQuote(path))
+	if err != nil || exit != 0 {
+		return nil, fmt.Errorf("e2b: read file (exit %d): %s%s", exit, stderr, err)
+	}
+	return []byte(stdout), nil
 }
 
 func (d *E2BDriver) WriteFile(ctx context.Context, sandboxID, path string, data []byte) error {
-	return d.API.WriteFile(ctx, sandboxID, path, data)
+	if !d.API.IsOfficial() {
+		return d.API.WriteFile(ctx, sandboxID, path, data)
+	}
+	// 官方云：文件走命令（base64 管道防转义——heredoc 转义风险实证纪律）
+	encoded := base64.StdEncoding.EncodeToString(data)
+	cmd := "mkdir -p " + shellQuote(dirOf(path)) + " && echo " + encoded + " | base64 -d > " + shellQuote(path)
+	_, stderr, exit, err := d.API.StartProcess(ctx, sandboxID, cmd)
+	if err != nil || exit != 0 {
+		return fmt.Errorf("e2b: write file (exit %d): %s%s", exit, stderr, err)
+	}
+	return nil
 }
 
 // Freeze/Unfreeze → E2B pause/resume（Tier 1 冻结：暂停计费与 CPU）。
@@ -204,6 +235,20 @@ func (c *HTTPE2BAPI) CreateSnapshot(ctx context.Context, sandboxID, snapshotID s
 func (c *HTTPE2BAPI) Delete(ctx context.Context, sandboxID string) error {
 	_, err := c.do(ctx, http.MethodDelete, "/v2/sandboxes/"+url.PathEscape(sandboxID), nil, nil)
 	return err
+}
+
+// IsOfficial 官方云判定（无自托管 E2B_API_URL——Base 为官方平台域）。
+func (c *HTTPE2BAPI) IsOfficial() bool {
+	return strings.Contains(c.Base, "api.e2b") || c.Base == ""
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+func dirOf(p string) string {
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[:i]
+	}
+	return "."
 }
 
 func truncateStr(s string, n int) string {

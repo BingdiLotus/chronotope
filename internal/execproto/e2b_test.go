@@ -2,6 +2,7 @@ package execproto
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,12 @@ type fakeE2BAPI struct {
 	runErr     error
 	createErr  error
 }
+
+func (f *fakeE2BAPI) StartProcess(context.Context, string, string) (string, string, int, error) {
+	return "", "", 0, errors.New("not official")
+}
+
+func (f *fakeE2BAPI) IsOfficial() bool { return false }
 
 func (f *fakeE2BAPI) CreateSandbox(_ context.Context, templateID string, _ int64) (string, error) {
 	if f.createErr != nil {
