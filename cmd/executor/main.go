@@ -46,7 +46,7 @@ func main() {
 	var driver execproto.Driver
 	workspace := ""
 	switch os.Getenv("EXECUTOR_DRIVER") {
-	case "e2b":
+	case "e2b_selfhosted", "e2b": // 契约 §4 正式名 + 旧别名兼容
 		// prod 档（落地方案 §12）：E2B 沙箱；E2B_API_URL 指向自托管网关（同协议）
 		driver = execproto.NewE2BDriver(
 			execproto.NewHTTPE2BAPI(os.Getenv("E2B_API_URL"), os.Getenv("E2B_API_KEY")),

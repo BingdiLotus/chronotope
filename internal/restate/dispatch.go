@@ -78,8 +78,21 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			// 时长在 Run 闭包内测量并随结果 journal（重放回放同一时长）
 			out, e := restate.Run(ctx, func(rc restate.RunContext) (*execOutcome, error) {
 				started := time.Now()
-				res, err := deps.Executor.Execute(rc, sandboxID, tc.Name, input,
-					execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
+				var res *ExecResult
+				var err error
+				for attempt := 0; attempt < 30; attempt++ {
+					res, err = deps.Executor.Execute(rc, sandboxID, tc.Name, input,
+						execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
+					if err != nil && strings.Contains(err.Error(), "in-flight") {
+						// 同键执行进行中（E2B 慢沙箱实证：执行窗口分钟级——
+						// 3×2s 覆盖不住，terminal 失败）——10s 间隔等待后重试
+						// （done 后回缓存——幂等无重复执行；总窗口 300s 对齐
+						// E2B 命令超时 5 分钟）
+						time.Sleep(10 * time.Second)
+						continue
+					}
+					break
+				}
 				if err != nil {
 					return nil, restate.ToTerminalError(err, restate.WithErrorCode(404))
 				}
