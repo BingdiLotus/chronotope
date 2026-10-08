@@ -86,7 +86,11 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 	if url == "" {
 		return "", 0, restate.ToTerminalError(fmt.Errorf("MCP server %q 未连接", server))
 	}
-	result, callErr := deps.MCP.Call(ctx, url, tool, json.RawMessage(tc.Arguments))
+	// 审计 #10：MCP 调用 journaled（restate.Run 缓存结果——重放不重调外部
+	// 工具；「效果已发生、确认未存」的 receipt ledger 窗口后置标注）
+	result, callErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
+		return deps.MCP.Call(rc, url, tool, json.RawMessage(tc.Arguments))
+	}, restate.WithName(StepName("mcp", step, tc.Name)))
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.MCPCall, "mcp", tc.Name, map[string]any{
 		"step": step, "server": server, "tool": tool,
 		"arguments": json.RawMessage(tc.Arguments), "error": callErr != nil,

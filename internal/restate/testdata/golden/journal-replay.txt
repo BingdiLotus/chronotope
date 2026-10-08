@@ -1,16 +1,20 @@
 event run.started r_g:0:run.started
+event llm.call r_g:0:harness
 event llm.call r_g:0:llm
 event tool.call r_g:0:tool:write_file
 event sandbox.exec r_g:0:sandbox:write_file
 event step.journaled r_g:0:step
+event llm.call r_g:1:harness
 event llm.call r_g:1:llm
 event tool.call r_g:1:tool:bash
 event sandbox.exec r_g:1:sandbox:bash
 event step.journaled r_g:1:step
+event llm.call r_g:2:harness
 event llm.call r_g:2:llm
 event tool.call r_g:2:tool:read_file
 event sandbox.exec r_g:2:sandbox:read_file
 event step.journaled r_g:2:step
+event llm.call r_g:3:harness
 event llm.call r_g:3:llm
 event run.completed r_g:3:run.completed
 message user

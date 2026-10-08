@@ -235,7 +235,16 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, 409, "同键执行进行中（in-flight）")
 			return
 		case err == nil:
-			s.Logger.Warn("exec prepared 过期视为 unknown，重跑覆盖", "key", req.IdempotencyKey)
+			// 审计 #2：prepared 过期重跑曾无条件执行（同 key 不同 input 的
+			// 外部效果重复窗口）——safe replay 显式分类：同输入摘要且同沙箱
+			// = 幂等重建场景（快照恢复后的重放）；否则 unknown 停派发 409
+			sameInput := cached.InputDigest == "" || cached.InputDigest == inputDigest(req)
+			if !sameInput || cached.SandboxID != req.SandboxID {
+				s.Logger.Warn("exec prepared 过期且输入/沙箱不符——unknown 停派发", "key", req.IdempotencyKey)
+				writeError(w, http.StatusConflict, 409, "执行状态 unknown（输入或沙箱与在途执行不符——请对账后重试）")
+				return
+			}
+			s.Logger.Warn("exec prepared 过期视为 unknown，同输入同沙箱重跑（幂等重建）", "key", req.IdempotencyKey)
 		case !errors.Is(err, store.ErrNotFound):
 			writeError(w, http.StatusInternalServerError, 500, err.Error())
 			return

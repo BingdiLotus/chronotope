@@ -252,6 +252,13 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		res, runErr := restate.Run(ctx, func(rc restate.RunContext) (*Result, error) {
 			return deps.Harness.Call(rc, req)
 		}, restate.WithName(StepName("harness", step, "")))
+		if res.Usage.TokensIn == 0 && res.Usage.TokensOut == 0 && !res.Truncated {
+			// 审计 #7：usage 不确定当零——显式 usage_unknown 标注（账本第一块；
+			// 完整 prepared/dispatch/result 状态机后置）
+			_ = emit.Emit(ctx, in.SessionID, runID, step, event.LLMCall, "harness", "", map[string]any{
+				"step": step, "usage_unknown": true,
+			})
+		}
 		if runErr != nil {
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "harness", "", map[string]any{
 				"reason": runErr.Error(),
