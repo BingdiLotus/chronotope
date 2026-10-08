@@ -74,6 +74,29 @@ async def _misconfigured(message: str) -> AsyncIterator[dict[str, str]]:
     yield _sse(p.error("harness_misconfigured", message))
 
 
+async def _stream_frames(stream_iter, p, beat_interval: float):
+    """流帧循环（beat 保任务——wait_for 取消语义修复，审计 #6）：
+    产出 delta/tool_call/beat 帧；错误帧产出后由调用方处理。"""
+    next_task = None
+    while True:
+        if next_task is None:
+            next_task = asyncio.create_task(anext(stream_iter))
+        heartbeat = asyncio.create_task(asyncio.sleep(beat_interval))
+        done, _ = await asyncio.wait({next_task, heartbeat}, return_when=asyncio.FIRST_COMPLETED)
+        if next_task in done:
+            heartbeat.cancel()
+            try:
+                chunk = next_task.result()
+            except StopAsyncIteration:
+                break
+            next_task = None
+        else:
+            heartbeat.cancel()  # sleep 已到点——anext 任务保持（模型挂起恢复后继续）
+            yield _sse(p.frame("beat", 0, {}))
+            continue
+        yield chunk
+
+
 async def _safe_stream(req: p.RunRequest, llm: LLMProvider):
     """流异常捕获（真实 e2e 实证：模型 400 时流中断 EOF 而非 error 帧——
     worker 收到 unexpected EOF → restate 僵尸 invocation 无限重试；此处转
@@ -115,15 +138,7 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
         usage = p.LLMUsage()
 
         stream_iter = _safe_stream(req, llm)
-        while True:
-            # 并发等下一帧或 30s 超时（超时发 beat 帧继续等——契约每 ≥30s 一发）
-            try:
-                chunk = await asyncio.wait_for(anext(stream_iter), timeout=30)
-            except StopAsyncIteration:
-                break
-            except asyncio.TimeoutError:
-                yield _sse(p.frame("beat", 0, {}))
-                continue
+        async for chunk in _stream_frames(stream_iter, p, 30.0):
             if getattr(chunk, "error", None):
                 yield _sse(p.error("model_stream_failed", str(chunk.error)))
                 return
