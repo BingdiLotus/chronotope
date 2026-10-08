@@ -26,6 +26,7 @@ bash scripts/ci.sh --e2e                          # 本地 CI 门禁（与 GitHu
 | **MVP（W1–W8）** | 对话闭环、沙箱、持久三件套（HITL/定时唤醒/崩溃恢复）、计量/控制台、分层记忆/风险分级/预算冻结、子 Agent、群聊多 Agent、outbox 交付/投递 | demo 阶段 1–14 |
 | **期 1 正确性治理** | 结果重放协议、执行后写窗口（prepared/done 状态机）、审批摘要精确绑定+审计、快照含卷恢复、接纳屏障重投、⑧冻结快照、⑨ComputeLease、⑩spec digest+config 快照、journal 审计导出 | 单测 + chaos + e2e + CI |
 | **期 2 时空深化** | 时间旅行（checkpoint 树/fork/diff/rollback + 血缘）、工作区 blob 合同（RustFS 内容寻址 + 第二条恢复链）、冷层归档 + usage 增量 rollup、控制台时空视图（checkpoint 标记/fork/rollback/diff/血缘面包屑/run 树） | w10–w12 + Playwright |
+| **期 4 规模化** | 事件分区+千万级规模验证（019 归档分区表）、多宿主 executor 池（SchedulerPolicy 策略缝 + 归属路由 + 冷却降级）、BYOC 档路由（driver 矩阵 + 镜像流水线，真机后置凭证）、灾备三演练（WAL PITR/RustFS 归档回放/Restate 状态备份——dr.yml 每周 dispatch） | w15 + dr 演练 + 千万级 4 断言 |
 | **期 3 治理与生态** | 三层分离（层 0 原语/层 1 策略缝/层 2 参考业务层）：BudgetPolicy + principal 化、ApprovalRouter + 审批策略（TTL 过期自动拒绝）、MCP 网关 allowlist（默认全拒）、tenant 级共享知识库（pgvector 嵌入检索+跨会话挂载） | w13 7 断言 + 单测矩阵 |
 
 **基础设施底座三层分离**（`docs/期3-细化落地方案.md` §0）：
