@@ -142,7 +142,7 @@ func (c *HTTPE2BAPI) StartProcess(ctx context.Context, sandboxID, cmd string) (s
 				}
 				if msg.Event.End.Status != "" || msg.Event.End.ExitCode != 0 {
 					if msg.Event.End.Error != "" {
-						return "", "", 0, fmt.Errorf("e2b: process end: %s", msg.Event.End.Error)
+						return string(stdout), string(stderr), 0, fmt.Errorf("e2b: process end: %s（out=%s err=%s）", msg.Event.End.Error, truncateStr(string(stdout), 200), truncateStr(string(stderr), 200))
 					}
 					exit = msg.Event.End.ExitCode
 				}

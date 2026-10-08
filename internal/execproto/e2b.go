@@ -68,6 +68,9 @@ func (d *E2BDriver) Execute(ctx context.Context, req ExecuteRequest, log io.Writ
 	if d.API.IsOfficial() {
 		// 官方云：命令执行走 envd ConnectRPC（REST 无 commands 端点——诊断实证）
 		stdout, stderr, exit, err = d.API.StartProcess(ctx, req.SandboxID, req.Input)
+		if exit != 0 && err == nil {
+			err = fmt.Errorf("e2b: process exit %d: %s%s", exit, stdout, truncateStr(stderr, 500))
+		}
 	} else {
 		stdout, stderr, exit, err = d.API.RunCommand(ctx, req.SandboxID, req.Input, "", d.Timeout.Milliseconds())
 	}
