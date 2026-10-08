@@ -72,6 +72,7 @@ else
   fail "审批 run_id 缺失（run 未挂起或响应形状变化）"
 fi
 
-rm -f /tmp/dr3-restate.tar.gz /tmp/dr3-run.out /tmp/dr3-sse.out /tmp/dr3-sse2.out /tmp/dr3-resolve.out
+docker run --rm -v /tmp:/out alpine sh -c "rm -f /out/dr3-restate.tar.gz /out/dr3-run.out /out/dr3-sse.out /out/dr3-sse2.out /out/dr3-resolve.out" > /dev/null 2>&1 || true
+rm -f /tmp/dr3-run.out /tmp/dr3-sse.out /tmp/dr3-sse2.out /tmp/dr3-resolve.out 2>/dev/null || true
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
 [ "$FAIL" = "0" ]
