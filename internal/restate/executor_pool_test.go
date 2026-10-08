@@ -120,3 +120,45 @@ func TestSchedulerPolicyRoundRobinAndAffinity(t *testing.T) {
 		t.Fatalf("Affinity 应选归属: %s", got.ID)
 	}
 }
+
+// TestExecutorPoolDriverFilter 期 4 §C：按沙箱档过滤候选（byoc 租户只选
+// 自己的 executor——docker 档请求不得选中 e2b/byoc 候选）。
+func TestExecutorPoolDriverFilter(t *testing.T) {
+	execA := &poolFakeExec{id: "docker-exec"}
+	execB := &poolFakeExec{id: "byoc-exec"}
+	pool := NewExecutorPool(&poolFakeExec{id: "fallback"}, policy.RoundRobin{})
+	pool.ListExecutors = func(context.Context) ([]store.ExecutorRow, error) {
+		return []store.ExecutorRow{
+			{ID: "docker-exec", Kind: "docker", Endpoint: "http://a", HeartbeatAt: time.Now()},
+			{ID: "byoc-exec", Kind: "byoc", Endpoint: "http://b", HeartbeatAt: time.Now()},
+		}, nil
+	}
+	owned := map[string]string{}
+	pool.SandboxOwner = func(_ context.Context, sandboxID string) (string, error) { return owned[sandboxID], nil }
+	pool.SetSandboxOwner = func(_ context.Context, sandboxID, owner string) error {
+		owned[sandboxID] = owner
+		return nil
+	}
+	pool.setClient("docker-exec", execA)
+	pool.setClient("byoc-exec", execB)
+
+	// byoc 档请求 → 只选 byoc 候选
+	id, err := pool.CreateSandbox(context.Background(), execproto.CreateSandboxRequest{SessionID: "s_b", Driver: "byoc"})
+	if err != nil || id == "" {
+		t.Fatalf("byoc create: %v", err)
+	}
+	if owned[id] != "byoc-exec" {
+		t.Fatalf("byoc 档应归属 byoc-exec，得 %q", owned[id])
+	}
+	if execA.created != 0 {
+		t.Fatalf("docker 候选不应被选中: created=%d", execA.created)
+	}
+	// docker 档请求 → 只选 docker 候选
+	id2, err := pool.CreateSandbox(context.Background(), execproto.CreateSandboxRequest{SessionID: "s_d", Driver: "docker"})
+	if err != nil || owned[id2] != "docker-exec" {
+		t.Fatalf("docker 档应归属 docker-exec，得 %q err=%v", owned[id2], err)
+	}
+	if execB.created == 0 {
+		t.Fatal("byoc 候选此前应已被选中 1 次")
+	}
+}

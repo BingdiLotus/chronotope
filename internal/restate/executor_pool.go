@@ -39,6 +39,12 @@ func NewExecutorPool(fallback Executor, pol policy.SchedulerPolicy) *ExecutorPoo
 
 // clientFor 解析沙箱归属或策略选新——返回 (客户端, executorID)。
 func (p *ExecutorPool) clientFor(ctx context.Context, sandboxID, sessionID string) (Executor, string) {
+	return p.clientForDriver(ctx, sandboxID, sessionID, "")
+}
+
+// clientForDriver 按沙箱档过滤候选（期 4 §C：byoc 租户路由到自己的
+// executor 池——driver 空 = 全候选默认档）。
+func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID, driver string) (Executor, string) {
 	if p.SandboxOwner != nil {
 		if owner, err := p.SandboxOwner(ctx, sandboxID); err == nil && owner != "" {
 			if c, ok := p.client(owner); ok {
@@ -53,6 +59,9 @@ func (p *ExecutorPool) clientFor(ctx context.Context, sandboxID, sessionID strin
 			for _, r := range rows {
 				if p.isCooling(r.ID) {
 					continue // 冷却期：连接失败剔除后 30s 内不选中
+				}
+				if driver != "" && r.Kind != driver {
+					continue // 档过滤（byoc 租户只选自己的 executor）
 				}
 				candidates = append(candidates, policy.ExecutorCandidate{ID: r.ID, Endpoint: r.Endpoint, Kind: r.Kind})
 				if _, ok := p.client(r.ID); !ok {
@@ -86,7 +95,7 @@ func (p *ExecutorPool) setClient(id string, c Executor) {
 }
 
 func (p *ExecutorPool) CreateSandbox(ctx context.Context, req execproto.CreateSandboxRequest) (string, error) {
-	c, owner := p.clientFor(ctx, req.SessionID, req.SessionID)
+	c, owner := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver)
 	id, err := c.CreateSandbox(ctx, req)
 	// 连接失败降级（期 4 §B 演练实证：心跳窗口内死节点仍被选中——connection
 	// refused）→ 标记冷却 + 剔除客户端 + 重选一次
@@ -95,7 +104,7 @@ func (p *ExecutorPool) CreateSandbox(ctx context.Context, req execproto.CreateSa
 		delete(p.clients, owner)
 		p.deadUntil[owner] = time.Now().Add(30 * time.Second)
 		p.mu.Unlock()
-		if c2, owner2 := p.clientFor(ctx, req.SessionID, req.SessionID); c2 != nil && owner2 != owner {
+		if c2, owner2 := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver); c2 != nil && owner2 != owner {
 			id, err = c2.CreateSandbox(ctx, req)
 			owner = owner2
 		}

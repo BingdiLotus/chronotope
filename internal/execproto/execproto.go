@@ -40,6 +40,7 @@ type CreateSandboxRequest struct {
 	Capabilities Capabilities `json:"capabilities"`
 	RestoreFrom  string       `json:"restore_from,omitempty"` // snapshot_ref（Tier 2 恢复）
 	SessionID    string       `json:"session_id,omitempty"`
+	Driver       string       `json:"driver,omitempty"` // 沙箱档（期 4 §C：docker|e2b|byoc——空 = 池默认）
 }
 
 // Sandbox 是沙箱引用。

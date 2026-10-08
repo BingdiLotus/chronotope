@@ -76,11 +76,14 @@ type Environment struct {
 	Sandbox SandboxSpec `json:"sandbox,omitempty"`
 }
 
-// SandboxSpec 是 agent.config.environment.sandbox（image/limits/ttl）。
+// SandboxSpec 是 agent.config.environment.sandbox（image/limits/ttl/driver）。
 type SandboxSpec struct {
 	Image  string            `json:"image"`
 	Limits map[string]string `json:"limits,omitempty"` // cpu/mem/disk
 	TTL    string            `json:"ttl,omitempty"`
+	// Driver 沙箱档选择（期 4 §C）：docker | e2b | byoc——空 = 默认档
+	// （EXECUTOR_DRIVER）；worker 按档过滤 executor 池候选。
+	Driver string `json:"driver,omitempty"`
 }
 
 // SubmitRunRequest 是 POST /sessions/:id/runs 的请求体（幂等键必带）。

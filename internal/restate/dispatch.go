@@ -267,6 +267,7 @@ func ensureSandbox(ctx restate.Context, deps *Deps, sessionID string, cfg sessio
 			TTL:         spec.TTL,
 			SessionID:   sessionID,
 			RestoreFrom: restoreFrom,
+			Driver:      spec.Driver, // 期 4 §C：租户档路由
 		})
 	}, restate.WithName("sandbox-create"))
 	if err != nil {
