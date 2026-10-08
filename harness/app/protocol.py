@@ -92,15 +92,31 @@ def delta(text: str, seq: int) -> Frame:
     return frame("delta", seq, {"text": text})
 
 
+class DonePayload(BaseModel):
+    """done 帧载荷类型化形状（契约完整性——帧构造走类型而非手拼 dict；
+    曾误删：手拼 dict 使帧形状脱离类型检查）。"""
+
+    final: str
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+    truncated: bool | None = None
+    usage_partial: bool | None = None
+
+
+class ErrorPayload(BaseModel):
+    """error 帧载荷类型化形状。"""
+
+    code: str
+    message: str
+
+
 def done(final: str, usage: LLMUsage, *, truncated: bool | None = None, seq: int = 0) -> Frame:
-    payload: dict[str, Any] = {"final": final, "usage": usage.model_dump()}
-    if truncated is not None:
-        payload["truncated"] = truncated
-    return frame("done", seq, payload)
+    payload = DonePayload(final=final, usage=usage, truncated=truncated,
+                          usage_partial=usage.usage_partial or None)
+    return frame("done", seq, payload.model_dump(exclude_none=True))
 
 
 def error(code: str, message: str, seq: int = 0) -> Frame:
-    return frame("error", seq, {"code": code, "message": message})
+    return frame("error", seq, ErrorPayload(code=code, message=message).model_dump())
 
 
 def is_vocabulary_name(name: str) -> bool:

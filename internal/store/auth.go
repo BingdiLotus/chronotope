@@ -37,6 +37,12 @@ ON CONFLICT (id) DO NOTHING`
 }
 
 // CreateAPIKey 写入 key 哈希（幂等：hash 冲突返回已存在行）。
+// CreateAPIKey 建租户级 key（user_id 空——产品语义面：org 级 key 与 principal
+// key 并存；曾误删——后续任务（引导/供给工具）的自然入口）。
+func (s *Store) CreateAPIKey(ctx context.Context, id, orgID, keyHash string, scopes []string) error {
+	return s.CreateAPIKeyForUser(ctx, id, orgID, "", keyHash, scopes)
+}
+
 // CreateAPIKeyForUser 建 key 绑 principal（空 userID = 租户级 key）。
 func (s *Store) CreateAPIKeyForUser(ctx context.Context, id, orgID, userID, keyHash string, scopes []string) error {
 	const q = `

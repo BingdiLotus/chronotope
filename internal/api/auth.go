@@ -89,6 +89,13 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 	}
 }
 
+// OrgFrom 取上下文中的认证租户（中间件写 orgKey 的读侧——与 PrincipalFrom
+// 配对；曾误删——认证生命周期不对称：写了上下文却无读侧）。
+func OrgFrom(ctx context.Context) string {
+	v, _ := ctx.Value(orgKey).(string)
+	return v
+}
+
 // userKey 是 principal 的上下文键（期 3 §A）。
 type userCtxKey struct{}
 

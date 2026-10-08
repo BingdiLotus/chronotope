@@ -252,6 +252,10 @@ func (f *fakeStore) GetAPIKeyByHash(_ context.Context, keyHash string) (*store.A
 	return nil, store.ErrNotFound
 }
 
+func (f *fakeStore) CreateAPIKey(_ context.Context, id, orgID, keyHash string, scopes []string) error {
+	return f.CreateAPIKeyForUser(context.Background(), id, orgID, "", keyHash, scopes)
+}
+
 func (f *fakeStore) CreateAPIKeyForUser(_ context.Context, id, orgID, userID, keyHash string, scopes []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
