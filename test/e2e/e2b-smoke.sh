@@ -9,6 +9,8 @@
 #  "no matching operation was found"）。HTTPE2BAPI 的 /commands 协议是
 # 自托管 E2B 网关的形状——官方云命令执行需 ConnectRPC 对接（后置子任务）。
 # 场景：W2 沙箱闭环（bash 执行 + 文件写入/读取）在 E2B 沙箱上全链路跑通。
+# 模型模式：fake 脚本（真实模型非确定性——127 实证；E2B 指标基准需确定性；
+# 真实模型全链路在 real-e2e.sh 覆盖）。
 # 用法: E2B_API_KEY=... E2B_TEMPLATE=... bash test/e2e/e2b-smoke.sh [API_URL]
 set -euo pipefail
 
@@ -28,6 +30,13 @@ assert() {
 }
 
 echo "== E2B driver 真实实例 smoke（API=${API}，RUN_ID=${RUN_ID}，E2B_API_URL=${E2B_API_URL:-https://api.e2b.dev}）=="
+
+# fake 脚本 harness（bash + write_file + read_file 确定性工具链）——compose
+# 重建（demo.sh 同法：worker 容器经 harness 服务名连，本地进程不在容器网络）
+DC="docker compose --env-file .env -f deploy/docker-compose.yml"
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"bash","arguments":{"command":"echo e2b-ok"}}},{"tool_call":{"name":"write_file","arguments":{"path":"/tmp/e2b.txt","content":"from-e2b"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/tmp/e2b.txt"}}},{"final":"E2B 沙箱工具链完成。"}]' $DC up -d --force-recreate harness > /dev/null 2>&1
+sleep 5
+curl -fsS localhost:8000/healthz > /dev/null && echo "harness fake 脚本就绪"
 
 AGENT=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
   -d '{"name":"e2b","config":{"model":"claude-sonnet-4-6","instructions":"i","tools":["bash","write_file","read_file"],"environment":{"sandbox":{"image":"base","limits":{"cpu":"2","mem":"512m"}}},"version":1}}')
