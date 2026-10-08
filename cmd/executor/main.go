@@ -48,10 +48,19 @@ func main() {
 	switch os.Getenv("EXECUTOR_DRIVER") {
 	case "e2b_selfhosted", "e2b": // 契约 §4 正式名 + 旧别名兼容
 		// prod 档（落地方案 §12）：E2B 沙箱；E2B_API_URL 指向自托管网关（同协议）
-		driver = execproto.NewE2BDriver(
+		d := execproto.NewE2BDriver(
 			execproto.NewHTTPE2BAPI(os.Getenv("E2B_API_URL"), os.Getenv("E2B_API_KEY")),
 			os.Getenv("E2B_TEMPLATE"),
 		)
+		if raw := os.Getenv("E2B_TEMPLATE_MAP"); raw != "" {
+			var m map[string]string
+			if err := json.Unmarshal([]byte(raw), &m); err == nil {
+				d.TemplateMap = m
+			} else {
+				log.Printf("E2B_TEMPLATE_MAP 解析失败（忽略）: %v", err)
+			}
+		}
+		driver = d
 		log.Printf("chronotope-executor（e2b driver）listening on %s", *addr)
 	default:
 		d := execproto.NewDockerDriver(nil, *workspaceRoot)

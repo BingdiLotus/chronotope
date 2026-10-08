@@ -35,23 +35,38 @@ type E2BAPI interface {
 }
 
 // E2BDriver 以镜像名作 templateID（部署方把镜像映射为 E2B 模板；
-// E2B_TEMPLATE 环境变量可全局覆盖）。
+// E2B_TEMPLATE 环境变量可全局覆盖；E2B_TEMPLATE_MAP 按镜像名映射——
+// 官方云无 python/golang 等模板，template 'python' not found 实证）。
 type E2BDriver struct {
-	API      E2BAPI
-	Template string
-	Timeout  time.Duration // 命令/创建默认超时（默认 5min）
+	API         E2BAPI
+	Template    string
+	TemplateMap map[string]string // image → 模板 ID（E2B_TEMPLATE_MAP JSON）
+	Timeout     time.Duration     // 命令/创建默认超时（默认 5min）
 }
 
 func NewE2BDriver(api E2BAPI, template string) *E2BDriver {
 	return &E2BDriver{API: api, Template: template, Timeout: 5 * time.Minute}
 }
 
+// resolveTemplate 镜像名 → 模板（映射表 → 全局 E2B_TEMPLATE → 镜像名原样）。
+func (d *E2BDriver) resolveTemplate(image string) string {
+	if d.TemplateMap != nil {
+		if tpl, ok := d.TemplateMap[image]; ok && tpl != "" {
+			return tpl
+		}
+		if tpl, ok := d.TemplateMap["*"]; ok && tpl != "" {
+			return tpl
+		}
+	}
+	if d.Template != "" {
+		return d.Template
+	}
+	return image
+}
+
 // CreateSandbox → E2B 沙箱（id 即 sandbox id）。
 func (d *E2BDriver) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
-	tpl := d.Template
-	if tpl == "" {
-		tpl = req.Image // 镜像名即模板（部署契约）
-	}
+	tpl := d.resolveTemplate(req.Image)
 	id, err := d.API.CreateSandbox(ctx, tpl, d.Timeout.Milliseconds())
 	if err != nil {
 		return nil, err
