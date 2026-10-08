@@ -2,6 +2,7 @@ package restate
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ type ExecutorPool struct {
 	Freshness time.Duration // 心跳新鲜窗口（默认 2 分钟）
 
 	// 依赖注入（worker 装配）
+	OrgOf           func(ctx context.Context, sessionID string) (string, error) // 会话 org（审计 P0-4：候选 org 过滤）
 	ListExecutors   func(ctx context.Context) ([]store.ExecutorRow, error)
 	SandboxOwner    func(ctx context.Context, sandboxID string) (string, error) // 沙箱归属 executor_id（无 → ""）
 	SetSandboxOwner func(ctx context.Context, sandboxID, executorID string) error
@@ -53,6 +55,12 @@ func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID
 		}
 	}
 	// 候选 = 注册表新鲜行
+	orgID := ""
+	if p.OrgOf != nil {
+		if oid, err := p.OrgOf(ctx, sessionID); err == nil {
+			orgID = oid
+		}
+	}
 	var candidates []policy.ExecutorCandidate
 	if p.ListExecutors != nil {
 		if rows, err := p.ListExecutors(ctx); err == nil {
@@ -62,6 +70,11 @@ func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID
 				}
 				if driver != "" && r.Kind != driver {
 					continue // 档过滤（byoc 租户只选自己的 executor）
+				}
+				// 审计 P0-4：租户边界——org 匹配或平台级（空 org）；byoc
+				// 租户的 executor 有 org 归属，不得跨租户可选
+				if r.OrgID != "" && orgID != "" && r.OrgID != orgID {
+					continue
 				}
 				candidates = append(candidates, policy.ExecutorCandidate{ID: r.ID, Endpoint: r.Endpoint, Kind: r.Kind})
 				if _, ok := p.client(r.ID); !ok {
@@ -78,7 +91,12 @@ func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID
 			}
 		}
 	}
-	return p.fallback, "" // 单点兜底（无归属 id）
+	if driver != "" {
+		// 审计 P0-4：指定档无候选 → 不得落默认 docker（跨租户边界）——返回
+		// nil 由调用方报错
+		return nil, ""
+	}
+	return p.fallback, "" // 单点兜底（driver 空——现有部署无感）
 }
 
 func (p *ExecutorPool) client(id string) (Executor, bool) {
@@ -96,6 +114,9 @@ func (p *ExecutorPool) setClient(id string, c Executor) {
 
 func (p *ExecutorPool) CreateSandbox(ctx context.Context, req execproto.CreateSandboxRequest) (string, error) {
 	c, owner := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver)
+	if c == nil {
+		return "", fmt.Errorf("executor 池无可用候选（driver=%s session=%s——租户档未注册）", req.Driver, req.SessionID)
+	}
 	id, err := c.CreateSandbox(ctx, req)
 	// 连接失败降级（期 4 §B 演练实证：心跳窗口内死节点仍被选中——connection
 	// refused）→ 标记冷却 + 剔除客户端 + 重选一次

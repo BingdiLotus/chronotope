@@ -162,3 +162,37 @@ func TestExecutorPoolDriverFilter(t *testing.T) {
 		t.Fatal("byoc 候选此前应已被选中 1 次")
 	}
 }
+
+// TestExecutorPoolTenantBoundary 审计 P0-4：org 过滤 + 指定档无候选不落
+// fallback（跨租户边界的反例固化）。
+func TestExecutorPoolTenantBoundary(t *testing.T) {
+	pool := NewExecutorPool(&poolFakeExec{id: "fallback"}, policy.RoundRobin{})
+	pool.OrgOf = func(_ context.Context, sessionID string) (string, error) {
+		return "org-a", nil
+	}
+	pool.ListExecutors = func(context.Context) ([]store.ExecutorRow, error) {
+		return []store.ExecutorRow{
+			{ID: "byoc-a", Kind: "byoc", OrgID: "org-a", Endpoint: "http://a", HeartbeatAt: time.Now()},
+			{ID: "byoc-b", Kind: "byoc", OrgID: "org-b", Endpoint: "http://b", HeartbeatAt: time.Now()},
+		}, nil
+	}
+	owned := map[string]string{}
+	pool.SandboxOwner = func(_ context.Context, sandboxID string) (string, error) { return owned[sandboxID], nil }
+	pool.SetSandboxOwner = func(_ context.Context, sandboxID, owner string) error {
+		owned[sandboxID] = owner
+		return nil
+	}
+	pool.setClient("byoc-a", &poolFakeExec{id: "a"})
+	pool.setClient("byoc-b", &poolFakeExec{id: "b"})
+
+	// org-a 的 byoc 请求只选 byoc-a（org-b 的 executor 不可选——跨租户反例）
+	id, err := pool.CreateSandbox(context.Background(), execproto.CreateSandboxRequest{SessionID: "s_a", Driver: "byoc"})
+	if err != nil || owned[id] != "byoc-a" {
+		t.Fatalf("org-a 应选 byoc-a: owner=%q err=%v", owned[id], err)
+	}
+	// 指定档无候选 → 不落 fallback（错误返回）
+	pool.ListExecutors = func(context.Context) ([]store.ExecutorRow, error) { return nil, nil }
+	if _, err := pool.CreateSandbox(context.Background(), execproto.CreateSandboxRequest{SessionID: "s_x", Driver: "byoc"}); err == nil {
+		t.Fatal("byoc 无候选应报错而非落 docker fallback")
+	}
+}

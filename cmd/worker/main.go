@@ -112,6 +112,12 @@ func approvalRouterOf(st *store.Store) policy.ApprovalRouter {
 // 单点 EXECUTOR_URL 兜底（无注册行时现有部署无感）。
 func executorPoolOf(st *store.Store, executorURL string) restate.Executor {
 	pool := restate.NewExecutorPool(restate.NewExecutorClient(executorURL), nil)
+	pool.OrgOf = func(ctx context.Context, sessionID string) (string, error) {
+		if row, err := st.GetSession(ctx, sessionID); err == nil {
+			return row.OrgID, nil
+		}
+		return "", nil
+	}
 	pool.ListExecutors = func(ctx context.Context) ([]store.ExecutorRow, error) {
 		return st.ListHealthyExecutors(ctx, 2*time.Minute)
 	}

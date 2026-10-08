@@ -78,9 +78,18 @@ func main() {
 	go func() {
 		executorID := envOr("EXECUTOR_ID", "executor-"+*addr)
 		endpoint := envOr("EXECUTOR_ENDPOINT", "http://localhost"+*addr)
+		// kind 映射（期 4 §C 修复落盘——此前 patch 静默未匹配，审计 P0-4 实证：
+		// e2b/byoc 档的 registry 身份从注册起就错为 docker）
+		kind := os.Getenv("EXECUTOR_DRIVER")
+		switch kind {
+		case "":
+			kind = "docker"
+		case "e2b_selfhosted", "e2b":
+			kind = "e2b"
+		}
 		heartbeat := func() {
 			if err := st.UpsertExecutor(context.Background(), store.ExecutorRow{
-				ID: executorID, Kind: "docker", Endpoint: endpoint,
+				ID: executorID, Kind: kind, Endpoint: endpoint,
 				Capabilities: []byte(`{"network":true}`),
 			}); err != nil {
 				slog.Warn("executor register failed", "err", err)
