@@ -38,6 +38,7 @@ type SandboxStore interface {
 	AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*store.LeaseRow, error)
 	ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error)
 	HasActiveLease(ctx context.Context, sandboxID string) (bool, error)
+	GetLease(ctx context.Context, sandboxID string) (*store.LeaseRow, error)
 	// 工作区 blob 合同（期 2 §A）
 	UpsertWorkspaceFile(ctx context.Context, f store.WorkspaceFile) error
 	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]store.WorkspaceFile, error)
@@ -277,10 +278,16 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ComputeLease（正确性二期 ⑨）：TTL 过期且无有效租约 → 409 lease expired
-	//（worker 走重建路径）；有租约（挂起/等待的 run 持有）→ 放行——依赖安全
+	//（worker 走重建路径）。审计 P0-1：RunID 非空时 lease 持有者必须匹配
+	//（旧 owner 在 holder 换代后仍可 dispatch 的反例关闭）。
 	if sb.TTL != nil && time.Since(sb.CreatedAt) > *sb.TTL {
-		if active, err := s.Store.HasActiveLease(r.Context(), req.SandboxID); err != nil || !active {
+		lease, err := s.Store.GetLease(r.Context(), req.SandboxID)
+		if err != nil || lease == nil || time.Now().After(lease.ExpiresAt) {
 			writeError(w, http.StatusConflict, 409, "sandbox lease expired")
+			return
+		}
+		if req.RunID != "" && lease.RunID != req.RunID {
+			writeError(w, http.StatusConflict, 409, "lease holder 不匹配（旧 owner 的 dispatch 被拒）")
 			return
 		}
 	}

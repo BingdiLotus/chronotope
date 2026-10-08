@@ -149,9 +149,9 @@ func (p *ExecutorPool) isConnErr(err error) bool {
 	return strings.Contains(s, "connection refused") || strings.Contains(s, "no such host")
 }
 
-func (p *ExecutorPool) Execute(ctx context.Context, sandboxID, name, input, idempotencyKey string) (*ExecResult, error) {
+func (p *ExecutorPool) Execute(ctx context.Context, sandboxID, name, input, idempotencyKey, runID string) (*ExecResult, error) {
 	c, _ := p.clientFor(ctx, sandboxID, "")
-	return c.Execute(ctx, sandboxID, name, input, idempotencyKey)
+	return c.Execute(ctx, sandboxID, name, input, idempotencyKey, runID)
 }
 
 func (p *ExecutorPool) ReadFile(ctx context.Context, sandboxID, path string) (string, error) {

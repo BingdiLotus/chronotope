@@ -85,7 +85,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 				var err error
 				for attempt := 0; attempt < 30; attempt++ {
 					res, err = deps.Executor.Execute(rc, sandboxID, tc.Name, input,
-						execproto.ExecuteIdempotencyKey(runID, step, tc.ID))
+						execproto.ExecuteIdempotencyKey(runID, step, tc.ID), runID)
 					if err != nil && strings.Contains(err.Error(), "in-flight") {
 						// 同键执行进行中（E2B 慢沙箱实证：执行窗口分钟级——
 						// 3×2s 覆盖不住，terminal 失败）——10s 间隔等待后重试

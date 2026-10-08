@@ -1,6 +1,7 @@
 package execproto
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -160,6 +161,15 @@ func (f *fakeSBStore) ReleaseLease(_ context.Context, sandboxID string, generati
 	}
 	delete(f.leases, sandboxID)
 	return true, nil
+}
+
+func (f *fakeSBStore) GetLease(_ context.Context, sandboxID string) (*store.LeaseRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.leases == nil {
+		return nil, nil
+	}
+	return f.leases[sandboxID], nil
 }
 
 func (f *fakeSBStore) HasActiveLease(_ context.Context, sandboxID string) (bool, error) {
@@ -489,5 +499,43 @@ func TestServerSweep(t *testing.T) {
 	s2.Driver.(*fakeDriver).orphanErr = fmt.Errorf("docker down")
 	if _, err := s2.Sweep(context.Background()); err == nil {
 		t.Fatal("ps 失败应上抛")
+	}
+}
+
+// TestExecuteLeaseHolderEnforced 审计 P0-1：RunID 非空时 lease 持有者必须
+// 匹配——旧 owner 在 holder 换代后仍可 dispatch 的反例关闭。
+func TestExecuteLeaseHolderEnforced(t *testing.T) {
+	sbID := "sb_owner_claim"
+	past := time.Now().Add(-time.Hour)
+	st := newFakeSBStore()
+	if st.leases == nil {
+		st.leases = map[string]*store.LeaseRow{}
+	}
+	st.sandboxes[sbID] = &store.SandboxRow{
+		SandboxID: sbID, Status: "ready", TTL: func() *time.Duration { d := 2 * time.Hour; return &d }(),
+		CreatedAt: past.Add(-2 * time.Hour), // 已超 TTL 窗口
+	}
+	st.leases[sbID] = &store.LeaseRow{
+		SandboxID: sbID, RunID: "run-b", Generation: 2, ExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+	srv := &Server{Driver: &fakeDriver{}, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	req := ExecuteRequest{SandboxID: sbID, Name: "bash", Input: "ls",
+		IdempotencyKey: "k-owner-1", RunID: "run-a"} // 旧 owner
+	body, _ := json.Marshal(req)
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/execute", bytes.NewReader(body))
+	srv.execute(rec, r)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("旧 owner 的 dispatch 应 409（holder 不匹配），得 %d: %s", rec.Code, rec.Body.String())
+	}
+	// 当前 holder（run-b）放行（fakeDriver 执行 → exit 帧 200）
+	req.RunID = "run-b"
+	req.IdempotencyKey = "k-owner-2"
+	body2, _ := json.Marshal(req)
+	rec2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPost, "/execute", bytes.NewReader(body2))
+	srv.execute(rec2, r2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("当前 holder 应执行，得 %d: %s", rec2.Code, rec2.Body.String())
 	}
 }

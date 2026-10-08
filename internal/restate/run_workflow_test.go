@@ -375,7 +375,7 @@ func (f *fakeExecutor) CreateSandbox(context.Context, execproto.CreateSandboxReq
 	return "sb_test", nil
 }
 
-func (f *fakeExecutor) Execute(_ context.Context, sandboxID, name, input, idempotencyKey string) (*ExecResult, error) {
+func (f *fakeExecutor) Execute(_ context.Context, sandboxID, name, input, idempotencyKey, _ string) (*ExecResult, error) {
 	f.execs = append(f.execs, name+":"+input)
 	f.ops = append(f.ops, "exec:"+name)
 	return &ExecResult{Exit: 0, Output: "ok\n"}, nil

@@ -58,6 +58,9 @@ type ExecuteRequest struct {
 	Input          string `json:"input"`
 	TTL            string `json:"ttl,omitempty"`
 	IdempotencyKey string `json:"idempotency_key"`
+	// RunID 执行持有者（审计 P0-1：lease 校验请求者——旧 owner 在 holder
+	// 换代后仍可 dispatch 的反例关闭；空 = 只验存在（兼容旧调用方））
+	RunID string `json:"run_id,omitempty"`
 }
 
 // ExecuteResult 是 execute 的结果（大输出外置 RustFS，此处只回引用）。

@@ -17,7 +17,7 @@ import (
 // 代码/命令类工具一律经 executor，harness 从不直连）。
 type Executor interface {
 	CreateSandbox(ctx context.Context, req execproto.CreateSandboxRequest) (string, error)
-	Execute(ctx context.Context, sandboxID, name, input, idempotencyKey string) (*ExecResult, error)
+	Execute(ctx context.Context, sandboxID, name, input, idempotencyKey, runID string) (*ExecResult, error)
 	ReadFile(ctx context.Context, sandboxID, path string) (string, error)
 	WriteFile(ctx context.Context, sandboxID, path, content string) error
 	// ComputeLease（正确性二期 ⑨）：续约返回代次（终态释放用）；释放幂等。
@@ -62,7 +62,7 @@ func (c *executorClient) CreateSandbox(ctx context.Context, req execproto.Create
 }
 
 // Execute 消费 SSE 流：log 帧聚合为 Output，exit 帧为结果（幂等键防重试双执行）。
-func (c *executorClient) Execute(ctx context.Context, sandboxID, name, input, idempotencyKey string) (*ExecResult, error) {
+func (c *executorClient) Execute(ctx context.Context, sandboxID, name, input, idempotencyKey, runID string) (*ExecResult, error) {
 	body, err := json.Marshal(execproto.ExecuteRequest{
 		SandboxID: sandboxID, Name: name, Input: input, IdempotencyKey: idempotencyKey,
 	})

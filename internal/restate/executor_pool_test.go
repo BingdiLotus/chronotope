@@ -20,7 +20,7 @@ func (f *poolFakeExec) CreateSandbox(context.Context, execproto.CreateSandboxReq
 	f.created++
 	return "sb_" + f.id + "_" + itoa(f.created), nil
 }
-func (f *poolFakeExec) Execute(context.Context, string, string, string, string) (*ExecResult, error) {
+func (f *poolFakeExec) Execute(context.Context, string, string, string, string, string) (*ExecResult, error) {
 	f.executed++
 	return &ExecResult{Exit: 0}, nil
 }
@@ -73,7 +73,7 @@ func TestExecutorPoolRouting(t *testing.T) {
 		t.Fatal("沙箱应落归属")
 	}
 	// 归属路由：Execute 走属主
-	if _, err := pool.Execute(context.Background(), id1, "bash", "ls", "k1"); err != nil {
+	if _, err := pool.Execute(context.Background(), id1, "bash", "ls", "k1", "r_1"); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	ownerExec := execA

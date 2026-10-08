@@ -246,6 +246,9 @@ func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	return nil
 }
 
+// ErrLeaseOwnerMismatch 租约持有者不匹配（审计 P0-1 的 owner CAS 拒绝）。
+var ErrLeaseOwnerMismatch = errors.New("lease owner mismatch")
+
 // LeaseRow 是沙箱租约行。
 type LeaseRow struct {
 	SandboxID  string    `json:"sandbox_id"`
@@ -262,10 +265,16 @@ VALUES ($1, $2, 1, now() + $3)
 ON CONFLICT (sandbox_id) DO UPDATE
 SET run_id = EXCLUDED.run_id, generation = sandbox_leases.generation + 1,
     expires_at = now() + $3
+WHERE sandbox_leases.run_id = EXCLUDED.run_id
+   OR sandbox_leases.expires_at < now()
 RETURNING sandbox_id, run_id, generation, expires_at`
 	var row LeaseRow
 	if err := s.Pool.QueryRow(ctx, q, sandboxID, runID, ttl).Scan(
 		&row.SandboxID, &row.RunID, &row.Generation, &row.ExpiresAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// owner CAS 失败（审计 P0-1：旧 owner 的续约不得夺走新 holder 的租约）
+			return nil, fmt.Errorf("store: acquire lease: %w", ErrLeaseOwnerMismatch)
+		}
 		return nil, fmt.Errorf("store: acquire lease: %w", err)
 	}
 	return &row, nil
@@ -310,4 +319,18 @@ func (s *Store) SetSandboxOwner(ctx context.Context, sandboxID, executorID strin
 		return fmt.Errorf("store: set sandbox owner: %w", err)
 	}
 	return nil
+}
+
+// GetLease 读沙箱租约行（审计 P0-1：Execute 的 holder 校验；无行 → nil）。
+func (s *Store) GetLease(ctx context.Context, sandboxID string) (*LeaseRow, error) {
+	const q = `SELECT sandbox_id, run_id, generation, expires_at FROM sandbox_leases WHERE sandbox_id = $1`
+	var row LeaseRow
+	if err := s.Pool.QueryRow(ctx, q, sandboxID).Scan(
+		&row.SandboxID, &row.RunID, &row.Generation, &row.ExpiresAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: get lease: %w", err)
+	}
+	return &row, nil
 }
