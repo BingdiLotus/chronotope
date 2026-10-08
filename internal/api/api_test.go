@@ -1497,3 +1497,23 @@ func TestApprovalPolicyAndAuditEndpoints(t *testing.T) {
 		t.Fatalf("审计导出应 200: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestSubmitRunCanceledCanonical 审计 #9：workflow canceled 的返回写 canonical
+// canceled（此前无条件 completed——HTTP 返回覆盖 workflow 权威状态的反例关闭）。
+func TestSubmitRunCanceledCanonical(t *testing.T) {
+	h, fs, ing := setup(t)
+	_, sessionID := seedAgentSession(t, h, fs)
+	ing.runOut.Canceled = true
+	ing.runOut.Final = "已取消"
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs",
+		`{"input":"hi"}`, map[string]string{"Idempotency-Key": "k-cancel", "Content-Type": "application/json"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("提交应 201，得 %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Status != "canceled" {
+		t.Fatalf("canceled workflow 应返回 canceled 状态: %+v err=%v", resp, err)
+	}
+}

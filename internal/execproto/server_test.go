@@ -539,3 +539,70 @@ func TestExecuteLeaseHolderEnforced(t *testing.T) {
 		t.Fatalf("当前 holder 应执行，得 %d: %s", rec2.Code, rec2.Body.String())
 	}
 }
+
+// TestExecuteUnknownStalePreparedClassified 审计 #2：prepared 过期重跑的
+// safe replay 显式分类——同输入同沙箱 = 幂等重建重跑；否则 409 停派发
+// （同 key 不同 input 的外部效果重复窗口关闭）。
+func TestExecuteUnknownStalePreparedClassified(t *testing.T) {
+	sbID := "sb_unknown"
+	old := time.Now().Add(-10 * time.Minute) // prepared 已超 2 分钟窗口
+	st := newFakeSBStore()
+	st.sandboxes[sbID] = &store.SandboxRow{SandboxID: sbID, Status: "ready", CreatedAt: time.Now()}
+	st.execsPrepared["k-unk"] = &store.ExecRow{
+		IdempotencyKey: "k-unk", SandboxID: sbID, State: "prepared",
+		InputDigest: "digest-a", PreparedAt: &old,
+	}
+	srv := &Server{Driver: &fakeDriver{}, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	// 不同输入 → 409 unknown 停派发
+	req := ExecuteRequest{SandboxID: sbID, Name: "bash", Input: "rm -rf /", IdempotencyKey: "k-unk"}
+	body, _ := json.Marshal(req)
+	rec := httptest.NewRecorder()
+	srv.execute(rec, httptest.NewRequest(http.MethodPost, "/execute", bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("输入不符应 409 unknown 停派发，得 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 同输入同沙箱 → 幂等重建重跑（claim 获胜 → fakeDriver 执行 200）
+	req.Input = "同输入"
+	req.IdempotencyKey = "k-unk2"
+	st.execsPrepared["k-unk2"] = &store.ExecRow{
+		IdempotencyKey: "k-unk2", SandboxID: sbID, State: "prepared",
+		InputDigest: inputDigest(req), PreparedAt: &old,
+	}
+	body2, _ := json.Marshal(req)
+	rec2 := httptest.NewRecorder()
+	srv.execute(rec2, httptest.NewRequest(http.MethodPost, "/execute", bytes.NewReader(body2)))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("同输入同沙箱应重跑，得 %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestGCQuiesceActiveLeaseSkipped 审计 P0-3：Destroy 前二次 lease 校验——
+// 扫描后新建的活跃租约被拦下（无 quiesce 曾杀活跃执行的反例关闭）。
+func TestGCQuiesceActiveLeaseSkipped(t *testing.T) {
+	st := newFakeSBStore()
+	if st.leases == nil {
+		st.leases = map[string]*store.LeaseRow{}
+	}
+	st.expiredRows = []*store.SandboxRow{{SandboxID: "sb_gc1", Status: "ready"}}
+	st.leases["sb_gc1"] = &store.LeaseRow{SandboxID: "sb_gc1", RunID: "r_live", Generation: 1, ExpiresAt: time.Now().Add(time.Hour)}
+	d := &fakeDriver{destroyed: map[string]bool{}}
+	srv := &Server{Driver: d, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	if _, err := srv.GC(context.Background()); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	if d.destroyed["sb_gc1"] {
+		t.Fatal("有活跃租约的过期沙箱不得被 GC 销毁（quiesce 校验）")
+	}
+	// 无租约的行正常销毁
+	st.leases = map[string]*store.LeaseRow{}
+	st.expiredRows = []*store.SandboxRow{{SandboxID: "sb_gc2", Status: "ready"}}
+	if _, err := srv.GC(context.Background()); err != nil {
+		t.Fatalf("gc2: %v", err)
+	}
+	if !d.destroyed["sb_gc2"] {
+		t.Fatal("无租约的过期沙箱应被销毁")
+	}
+}

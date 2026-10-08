@@ -1021,3 +1021,54 @@ func TestLeaseGenerationMonotonic(t *testing.T) {
 		t.Fatalf("新租约应存活: active=%v err=%v", active, err)
 	}
 }
+
+// TestListMessagesForRunExcludesCurrentRun 审计 #5：请求冻结——重放时排除
+// 本 run 已提交的非 user 消息（漂移反例关闭：PG 全历史含后续 assistant/tool）。
+func contains(xs []string, v string) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestListMessagesForRunExcludesCurrentRun(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	sid := fmt.Sprintf("s_freeze_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, "org_freeze", "o")
+	_ = s.CreateAgent(ctx, "a_fz", "org_freeze", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, sid, "org_freeze", "a_fz")
+	// run 行（messages FK 地基 + active 唯一约束——旧 run 完成后建新 run）
+	if _, err := s.CreateRunWithCommand(ctx, "r_old", sid, "", "", nil, map[string]any{}); err != nil {
+		t.Fatalf("create old run: %v", err)
+	}
+	_ = s.UpdateRunStatus(ctx, "r_old", sessionapi.RunCompleted)
+	if _, err := s.CreateRunWithCommand(ctx, "r_cur", sid, "", "", nil, map[string]any{}); err != nil {
+		t.Fatalf("create cur run: %v", err)
+	}
+	// 前一个 run 的历史（保留）
+	if err := s.AppendMessage(ctx, sid, "r_old", 1, "assistant", json.RawMessage(`"旧回答"`)); err != nil {
+		t.Fatalf("append old: %v", err)
+	}
+	// 本 run 的 user 输入 + 已提交 assistant（重放时 assistant 应被排除）
+	if err := s.AppendMessage(ctx, sid, "r_cur", 0, "user", json.RawMessage(`"本轮输入"`)); err != nil {
+		t.Fatalf("append user: %v", err)
+	}
+	if err := s.AppendMessage(ctx, sid, "r_cur", 1, "assistant", json.RawMessage(`"本 run 后续已提交"`)); err != nil {
+		t.Fatalf("append assistant: %v", err)
+	}
+	msgs, err := s.ListMessagesForRun(ctx, sid, "r_cur", 50)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+	// 期望：旧 run 的 assistant + 本 run 的 user；本 run 的 assistant 排除
+	if len(msgs) != 2 || !contains(roles, "user") || !contains(roles, "assistant") {
+		t.Fatalf("本 run 非 user 消息应被排除（请求冻结）: %v %d 条", roles, len(msgs))
+	}
+}
