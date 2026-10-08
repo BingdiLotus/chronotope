@@ -2,9 +2,11 @@ package restate
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/bingdilotus/chronotope/internal/core/runs"
+	"github.com/bingdilotus/chronotope/internal/execproto"
 )
 
 // TestCodeToolInputEmptyArgs 空参防御（生产形态基准待办 2：真实模型偶发
