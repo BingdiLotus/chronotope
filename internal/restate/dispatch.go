@@ -28,6 +28,20 @@ type execOutcome struct {
 	Duration time.Duration `json:"duration_ns"`
 }
 
+// sandboxGone 判沙箱真实缺失（审计 P1-9：404 哨兵只限此类——此前把所有
+// Execute/WriteFile 错误包装 404，恢复函数见 404 就清绑定重建重试——
+// in-flight 409/权限拒绝/结果落库失败都被误判为「沙箱不存在」扩大重试）。
+func sandboxGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, execproto.ErrSandboxNotFound) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "sandbox not found") || strings.Contains(s, "sandbox destroyed")
+}
+
 // execWithSandboxRecovery 执行沙箱操作；沙箱不存在（已销毁/回收）→ 清绑定 +
 // 重建（快照恢复路径）→ 重试一次（评审 #7「一周前会话今天还能继续」的机制）。
 func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg sessionapi.AgentConfig, fn func(sandboxID string) error) error {
@@ -97,7 +111,12 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 					break
 				}
 				if err != nil {
-					return nil, restate.ToTerminalError(err, restate.WithErrorCode(404))
+					// 审计 P1-9：只对真实沙箱缺失标 404 哨兵——其他错误
+					//（in-flight/权限/落库失败）原样 terminal（不触发重建）
+					if sandboxGone(err) {
+						return nil, restate.ToTerminalError(err, restate.WithErrorCode(404))
+					}
+					return nil, restate.ToTerminalError(err)
 				}
 				return &execOutcome{Result: res, Duration: time.Since(started)}, nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
@@ -130,7 +149,10 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			_, wErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 				// TerminalError 包装（#2 修复纪律：裸错误 → Infinite 重试循环）
 				if e := deps.Executor.WriteFile(rc, sandboxID, path, content); e != nil {
-					return "", restate.ToTerminalError(e, restate.WithErrorCode(404))
+					if sandboxGone(e) {
+						return "", restate.ToTerminalError(e, restate.WithErrorCode(404))
+					}
+					return "", restate.ToTerminalError(e)
 				}
 				return "", nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))
