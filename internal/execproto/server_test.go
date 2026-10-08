@@ -190,11 +190,11 @@ func (f *fakeSBStore) ListWorkspaceFiles(_ context.Context, sessionID string, _ 
 	return out, nil
 }
 
-func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) error {
+func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prepared[key] = sandboxID
-	return nil
+	return true, nil
 }
 
 func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, result json.RawMessage) error {

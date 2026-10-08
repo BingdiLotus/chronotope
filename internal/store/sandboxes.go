@@ -127,17 +127,23 @@ FROM sandbox_execs WHERE idempotency_key = $1`
 	return &e, nil
 }
 
-// PutExecPrepared 执行前 claim（prepared；同键已存在不覆盖——并发第二个请求
-// 走 GetExec 的分支：done → 回缓存 / prepared 新鲜 → 409 / prepared 过期 → 重跑）。
-func (s *Store) PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error {
+// PutExecPrepared 执行前 claim（prepared）。返回 won：本轮插入成功 = 获得单执行权
+// ——并发同键两请求都先 GetExec cache miss 时，只有一个 INSERT 生效（审计 #1：
+// 旧实现 ON CONFLICT DO NOTHING 无条件返回 nil，败者无感知 → 双执行）。
+func (s *Store) PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, error) {
 	const q = `
 INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state, input_digest, prepared_at)
 VALUES ($1, $2, NULL, now() + interval '30 days', 'prepared', $3, now())
-ON CONFLICT (idempotency_key) DO NOTHING`
-	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, inputDigest); err != nil {
-		return fmt.Errorf("store: prepared exec: %w", err)
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING idempotency_key`
+	var returned string
+	if err := s.Pool.QueryRow(ctx, q, idempotencyKey, sandboxID, inputDigest).Scan(&returned); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil // 未插入 = 败者（已有 prepared 行）
+		}
+		return false, fmt.Errorf("store: prepared exec: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // PutExecDone 执行完成落账（状态 done；失败返回错误——调用方必须发 error 帧，

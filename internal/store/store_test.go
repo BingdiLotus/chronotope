@@ -239,8 +239,12 @@ func TestSandboxAndExecCacheRoundtrip(t *testing.T) {
 	result := json.RawMessage(`{"exit":0,"output":"42\n"}`)
 	execKey := "r_" + key + ":0:t_1"
 	// prepared（claim）→ done（落账）——PutExec 一步式已删（架构审计死方法）
-	if err := s.PutExecPrepared(ctx, execKey, key, "digest"); err != nil {
-		t.Fatalf("put exec prepared: %v", err)
+	if won, err := s.PutExecPrepared(ctx, execKey, key, "digest"); err != nil || !won {
+		t.Fatalf("put exec prepared: won=%v err=%v", won, err)
+	}
+	// 审计 #1：并发同键第二次 claim 必须败（winner 唯一）
+	if won2, err := s.PutExecPrepared(ctx, execKey, key, "digest"); err != nil || won2 {
+		t.Fatalf("第二次 claim 应败: won=%v err=%v", won2, err)
 	}
 	if err := s.PutExecDone(ctx, execKey, key, result); err != nil {
 		t.Fatalf("put exec done: %v", err)

@@ -32,7 +32,7 @@ type SandboxStore interface {
 	UpdateSandboxTier(ctx context.Context, sandboxID string, tier int, snapshotRef *string) error
 	GetExec(ctx context.Context, idempotencyKey string) (*store.ExecRow, error)
 	// 执行状态机（评审 #1：prepared claim → done 落账）
-	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) error
+	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, error)
 	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
 	// ComputeLease（正确性二期 ⑨）
 	AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*store.LeaseRow, error)
@@ -264,10 +264,16 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 执行前 claim（prepared；并发同键第二个请求在 GetExec 分支被 409）
+	// 执行前 claim（prepared）——获胜者执行；败者（并发同键第二个请求，
+	// 都过 GetExec cache miss 后只有一人插入成功——审计 #1 双执行反例）409
 	if req.IdempotencyKey != "" {
-		if err := s.Store.PutExecPrepared(r.Context(), req.IdempotencyKey, req.SandboxID, inputDigest(req)); err != nil {
+		won, err := s.Store.PutExecPrepared(r.Context(), req.IdempotencyKey, req.SandboxID, inputDigest(req))
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, 500, err.Error())
+			return
+		}
+		if !won {
+			writeError(w, http.StatusConflict, 409, "同键执行进行中（claim 未获胜——in-flight）")
 			return
 		}
 	}
