@@ -28,7 +28,7 @@ func TestBuildMessagesInjectsMemory(t *testing.T) {
 	}
 	cfg := sessionapi.AgentConfig{Model: "m", Instructions: "你是助手。", Version: 1}
 
-	msgs, err := buildMessages(t.Context(), st, nil, RunInput{SessionID: "s_1", Input: "继续", Topic: "default"}, cfg, nil)
+	msgs, err := buildMessages(t.Context(), st, nil, RunInput{SessionID: "s_1", Input: "继续", Topic: "default"}, "r_1", cfg, nil)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBuildMessagesKnowledgeInjection(t *testing.T) {
 	har := &fakeHarness{embed: []float32{0.1}}
 	st.knowledge = []store.KnowledgeItem{{ID: "k1", TenantID: "o_1", Content: "共享知识片段"}}
 	cfg := sessionapi.AgentConfig{Model: "m", Instructions: "i", Tools: []string{}, Version: 1}
-	msgs, err := buildMessages(t.Context(), st, har, RunInput{SessionID: "s_1", Input: "hi", Topic: "default"}, cfg, nil)
+	msgs, err := buildMessages(t.Context(), st, har, RunInput{SessionID: "s_1", Input: "hi", Topic: "default"}, "r_1", cfg, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestBuildMessagesKnowledgeInjection(t *testing.T) {
 	}
 	// 嵌入失败 → 静默降级（不阻断 run）
 	har2 := &fakeHarness{embedErr: fmt.Errorf("embed down")}
-	msgs2, err := buildMessages(t.Context(), st, har2, RunInput{SessionID: "s_1", Input: "hi", Topic: "default"}, cfg, nil)
+	msgs2, err := buildMessages(t.Context(), st, har2, RunInput{SessionID: "s_1", Input: "hi", Topic: "default"}, "r_1", cfg, nil)
 	if err != nil || len(msgs2) == 0 {
 		t.Fatalf("嵌入失败应降级: %v", err)
 	}

@@ -259,19 +259,39 @@ ON CONFLICT DO NOTHING`
 // ListMessages 按时间升序读最近 limit 条消息（buildMessages 的真相来源；
 // 曾 DESC——请求消息时序颠倒，tool 先于 assistant 出现，真实模型 e2e 实证 400）。
 func (s *Store) ListMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
+	return s.listMessages(ctx, sessionID, "", limit)
+}
+
+// ListMessagesForRun 组装本 run 的消息上下文（审计 #5：排除本 run 已提交的
+// assistant/tool 消息——重放时 PG 已含后续消息，重读全历史会拼出与首次不同
+// 的 ModelRequest（漂移反例）；本 run 的 user 输入保留）。
+func (s *Store) ListMessagesForRun(ctx context.Context, sessionID, currentRunID string, limit int) ([]Message, error) {
+	return s.listMessages(ctx, sessionID, currentRunID, limit)
+}
+
+func (s *Store) listMessages(ctx context.Context, sessionID, currentRunID string, limit int) ([]Message, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	const q = `
+	q := `
 SELECT id, session_id, COALESCE(run_id, ''), COALESCE(step, -1), role, content
 FROM (
 	SELECT * FROM messages
-	WHERE session_id = $1
+	WHERE session_id = $1`
+	if currentRunID != "" {
+		q += ` AND (run_id <> $2 OR role = 'user')`
+	}
+	q += `
 	ORDER BY id DESC
-	LIMIT $2
+	LIMIT $` + map[bool]string{true: "3", false: "2"}[currentRunID != ""] + `
 ) recent
 ORDER BY id ASC`
-	rows, err := s.Pool.Query(ctx, q, sessionID, limit)
+	args := []any{sessionID}
+	if currentRunID != "" {
+		args = append(args, currentRunID)
+	}
+	args = append(args, limit)
+	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list messages: %w", err)
 	}

@@ -139,7 +139,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
-	msgs, err := buildMessages(ctx, deps.Store, deps.Harness, in, cfg, state.Skills)
+	msgs, err := buildMessages(ctx, deps.Store, deps.Harness, in, runID, cfg, state.Skills)
 	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
@@ -194,6 +194,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 				"step": step,
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
+			_ = deps.Sessions.ClearCancel(ctx, in.SessionID) // run 级一次性——审计 #9
 			return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
 		}
 		// 沙箱租约绑定（会话沙箱懒创建后生效；重放时 stepState 同值）
@@ -422,8 +423,8 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 }
 
 // buildMessages 组装本轮消息（分层记忆的 W5 前简化形态：system 指令 + 历史 + 本 run 输入）。
-func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, cfg sessionapi.AgentConfig, skills []string) ([]runs.Message, error) {
-	history, err := st.ListMessages(ctx, in.SessionID, 50)
+func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, runID string, cfg sessionapi.AgentConfig, skills []string) ([]runs.Message, error) {
+	history, err := st.ListMessagesForRun(ctx, in.SessionID, runID, 50)
 	if err != nil {
 		return nil, err
 	}

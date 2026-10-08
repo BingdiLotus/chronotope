@@ -54,6 +54,7 @@ func sessionObjectDef() restate.ServiceDefinition {
 		Handler("AttachSandbox", restate.NewObjectHandler[string, SessionState](attachSandbox)).
 		Handler("ClearSandbox", restate.NewObjectHandler[restate.Void, SessionState](clearSandbox)).
 		Handler("Cancel", restate.NewObjectHandler[restate.Void, SessionState](cancelSessionRun)).
+		Handler("ClearCancel", restate.NewObjectHandler[restate.Void, SessionState](clearSessionCancel)).
 		Handler("SetPendingAwakeable", restate.NewObjectHandler[SetPendingApprovalInput, SessionState](setPendingAwakeable)).
 		Handler("SetFrozenAwakeable", restate.NewObjectHandler[string, SessionState](setFrozenAwakeable)).
 		Handler("Unfreeze", restate.NewObjectHandler[restate.Void, SessionState](unfreezeSession)).
@@ -82,6 +83,18 @@ func cancelSessionRun(ctx restate.ObjectContext, _ restate.Void) (SessionState, 
 		return SessionState{}, err
 	}
 	state.CancelRequested = true
+	restate.Set(ctx, sessionStateKey, state)
+	return state, nil
+}
+
+// clearSessionCancel 清取消标志（审计 #9：永久 CancelRequested 曾污染后续
+// run——run 级一次性：cancel 终态后清除）。
+func clearSessionCancel(ctx restate.ObjectContext, _ restate.Void) (SessionState, error) {
+	state, err := getSessionState(ctx, restate.Void{})
+	if err != nil {
+		return SessionState{}, err
+	}
+	state.CancelRequested = false
 	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }

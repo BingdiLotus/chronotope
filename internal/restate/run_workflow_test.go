@@ -161,6 +161,10 @@ func (f *fakeStore) CreateSession(_ context.Context, id, orgID, agentID string) 
 	return nil
 }
 
+func (f *fakeStore) ListMessagesForRun(_ context.Context, sessionID, _ string, limit int) ([]store.Message, error) {
+	return f.ListMessages(context.Background(), sessionID, limit)
+}
+
 func (f *fakeStore) ListMessages(_ context.Context, _ string, limit int) ([]store.Message, error) {
 	out := f.messages
 	if len(out) > limit {
@@ -309,6 +313,11 @@ func (f *fakeSessions) ClearSandbox(_ restate.Context, sessionID string) error {
 
 func (f *fakeSessions) AttachSandbox(_ restate.Context, _, sandboxID string) error {
 	f.attached = append(f.attached, sandboxID)
+	return nil
+}
+
+func (f *fakeSessions) ClearCancel(_ restate.Context, _ string) error {
+	f.state.CancelRequested = false
 	return nil
 }
 

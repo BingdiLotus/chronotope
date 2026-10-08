@@ -193,14 +193,24 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 
 	// worker 控制面：run_workflow/{run_id}/run（W1 为同步对话闭环）
 	var out struct {
-		Final string `json:"final"`
-		Steps int    `json:"steps"`
+		Final    string `json:"final"`
+		Steps    int    `json:"steps"`
+		Canceled bool   `json:"canceled"`
 	}
 	err = h.Ingress.Call(r.Context(), "/run_workflow/"+runID+"/run", http.MethodPost,
 		map[string]any{"session_id": sessionID, "input": req.Input, "topic": req.Topic}, &out)
 	if err != nil {
 		_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunFailed)
 		writeError(w, http.StatusBadGateway, 502, "run_workflow failed: "+err.Error())
+		return
+	}
+	// 审计 #9：workflow canceled 曾无条件被写 completed——按 Canceled 写
+	// canonical 状态（HTTP 返回不得覆盖 workflow 的权威状态）
+	if out.Canceled {
+		_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunCanceled)
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"run_id": runID, "status": "canceled", "final": out.Final, "steps": out.Steps,
+		})
 		return
 	}
 	_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunCompleted)

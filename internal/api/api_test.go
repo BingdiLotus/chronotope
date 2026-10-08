@@ -545,8 +545,9 @@ type fakeIngress struct {
 	mu     sync.Mutex
 	calls  []string
 	runOut struct {
-		Final string `json:"final"`
-		Steps int    `json:"steps"`
+		Final    string `json:"final"`
+		Steps    int    `json:"steps"`
+		Canceled bool   `json:"canceled"`
 	}
 }
 
@@ -563,10 +564,11 @@ func (f *fakeIngress) Call(_ context.Context, path, method string, body any, out
 		}
 	case strings.HasPrefix(path, "/run_workflow/"):
 		if m, ok := out.(*struct {
-			Final string `json:"final"`
-			Steps int    `json:"steps"`
+			Final    string `json:"final"`
+			Steps    int    `json:"steps"`
+			Canceled bool   `json:"canceled"`
 		}); ok {
-			m.Final, m.Steps = f.runOut.Final, f.runOut.Steps
+			m.Final, m.Steps, m.Canceled = f.runOut.Final, f.runOut.Steps, f.runOut.Canceled
 		}
 	}
 	return nil
@@ -599,8 +601,9 @@ func setup(t *testing.T) (*Handler, *fakeStore, *fakeIngress) {
 	t.Helper()
 	fs := newFakeStore()
 	ing := &fakeIngress{runOut: struct {
-		Final string `json:"final"`
-		Steps int    `json:"steps"`
+		Final    string `json:"final"`
+		Steps    int    `json:"steps"`
+		Canceled bool   `json:"canceled"`
 	}{Final: "你好，我是助手。", Steps: 1}}
 	h := New(fs, events.NewHub(), ing)
 	return h, fs, ing

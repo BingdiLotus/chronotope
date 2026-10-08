@@ -19,6 +19,7 @@ type Store interface {
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (seq int64, err error)
 	AppendMessage(ctx context.Context, sessionID, runID string, step int, role string, content json.RawMessage) error
 	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
+	ListMessagesForRun(ctx context.Context, sessionID, currentRunID string, limit int) ([]store.Message, error)
 	// GetRun 供 webhook 解析 run → session（HITL 审批回调按 run_id 定位 awakeable）。
 	GetRun(ctx context.Context, runID string) (*store.Run, error)
 	// 交付清单（outbox，W8 后置）
@@ -69,6 +70,7 @@ type SessionSource interface {
 	Cancel(ctx restate.Context, sessionID string) error
 	// SetPendingAwakeable 记录挂起的审批 awakeable id（HITL；resolve 前可查）。
 	SetPendingAwakeable(ctx restate.Context, sessionID, awakeableID, actionDigest, tool string) error
+	ClearCancel(ctx restate.Context, sessionID string) error
 	// Create 初始化子会话对象状态（子 Agent 派发；幂等对象调用）。
 	Create(ctx restate.Context, sessionID string, cfg sessionapi.AgentConfig) error
 	// SetFrozenAwakeable 记录欠费冻结的 awakeable id（与审批槽独立，避免互踩）。
@@ -126,6 +128,13 @@ func (RestateSessionSource) ClearSandbox(ctx restate.Context, sessionID string) 
 func (RestateSessionSource) AttachSandbox(ctx restate.Context, sessionID, sandboxID string) error {
 	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "AttachSandbox").
 		Request(sandboxID)
+	return err
+}
+
+// ClearCancel 清取消标志（run 级一次性——审计 #9：永久标志污染后续 run）。
+func (RestateSessionSource) ClearCancel(ctx restate.Context, sessionID string) error {
+	_, err := restate.Object[SessionState](ctx, SessionObjectName, sessionID, "ClearCancel").
+		Request(restate.Void{})
 	return err
 }
 
