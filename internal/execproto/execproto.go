@@ -22,11 +22,13 @@ type Limits struct {
 }
 
 // Capabilities 是沙箱能力（cpu/gpu/network/browser 字段从第一天就在协议里，实现可后补）。
+// Capabilities 是沙箱能力面（executor-protocol.md 契约字段全集；network 已
+// 接线（none|bridge 二档），gpu/cpu/browser 为预设未实现——契约投影完整性）。
 type Capabilities struct {
 	Network bool `json:"network"`
-	// GPU 能力（预设未实现：正式版架构「能力路由（网络/GPU/镜像）」——曾误删，
-	// 恢复为规划标记；实现时加 executor 侧透传）
-	GPU bool `json:"gpu"`
+	GPU     bool `json:"gpu"`
+	CPU     bool `json:"cpu"`     // 预设：CPU 型号/配额路由（未实现）
+	Browser bool `json:"browser"` // 预设：浏览器沙箱档（未实现）
 }
 
 // CreateSandboxRequest 是 POST /sandboxes 的请求体。

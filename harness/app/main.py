@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -93,9 +94,15 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
         yield _sse(p.error("protocol_unsupported", f"protocol {req.protocol} not in {p.SUPPORTED_PROTOCOLS}"))
         return
 
-    # 心跳帧：循环开头发一次（内联 API 工具超时 10s，无需周期 beat；
-    # 契约 beat 语义由该帧满足）
+    # 心跳帧：开场一帧 + 流式期间每 30s 周期补发（契约：每 ≥30s 一发——
+    # 模型挂起 196s 实证期间无帧违反契约；worker 侧 30s 无帧即超时）
     yield _sse(p.frame("beat", 0, {}))
+
+    async def beat_timer(stream):
+        """流迭代期间每 30s 无产出补一帧 beat（与流并发；流结束即停）。"""
+        while True:
+            await asyncio.sleep(30)
+            yield _sse(p.frame("beat", 0, {}))
 
     messages = [m.model_dump(exclude_none=True) for m in req.messages]
     seq = 1
@@ -107,7 +114,16 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
         tool_calls: dict[int, dict] = {}
         usage = p.LLMUsage()
 
-        async for chunk in _safe_stream(req, llm):
+        stream_iter = _safe_stream(req, llm)
+        while True:
+            # 并发等下一帧或 30s 超时（超时发 beat 帧继续等——契约每 ≥30s 一发）
+            try:
+                chunk = await asyncio.wait_for(anext(stream_iter), timeout=30)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                yield _sse(p.frame("beat", 0, {}))
+                continue
             if getattr(chunk, "error", None):
                 yield _sse(p.error("model_stream_failed", str(chunk.error)))
                 return
