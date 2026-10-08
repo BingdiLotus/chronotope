@@ -27,8 +27,11 @@ $PSQL -qc "DELETE FROM orgs WHERE id='org_pitr_probe'; DELETE FROM events" 2>/de
 EVENTS_DAMAGED=$($PSQL -tAc "SELECT count(*) FROM events")
 [ "$EVENTS_DAMAGED" -eq 0 ] && pass "事故模拟（events 清空）" || fail "事故模拟（events 未清空: $EVENTS_DAMAGED）"
 
-# 4. 恢复（--clean 先删后建；pg_restore 到同一库——活跃连接可能干扰，
-# 失败时日志留证并如实 fail，不再吞错假绿）
+# 4. 恢复前显式预删分区表（--clean 对分区表的删除顺序不可靠——019 分区
+# 表引入后 pg_restore 的 ALTER ATTACH 冲突实证）；随后 --clean 恢复
+$PSQL -qc "DROP TABLE IF EXISTS archive_events CASCADE" > /dev/null 2>&1 || true
+# --clean 先删后建；pg_restore 到同一库——活跃连接可能干扰，
+# 失败时日志留证并如实 fail，不再吞错假绿
 if docker exec -i chronotope-postgres-1 pg_restore -U chronotope -d chronotope --clean --if-exists /tmp/chronotope.dump > /tmp/pitr-restore.log 2>&1; then
   pass "pg_restore 恢复（--clean --if-exists）"
 else
