@@ -3,7 +3,8 @@ name: DR 演练
 on:
   workflow_dispatch: {}          # 手动触发
   schedule:
-    - cron: '30 3 * * 1'        # 每周一 03:30 UTC
+    - cron: '30 3 * * 1'        # 每周一 03:30 UTC（三演练）
+    - cron: '0 4 1 * *'         # 每月 1 日 04:00 UTC（月度全量）
 
 permissions:
   contents: read
@@ -33,3 +34,11 @@ jobs:
 
       - name: D3 Restate 状态备份演练
         run: bash test/dr/restate-backup.sh
+
+      - name: PITR RTO 基线断言（月度哨兵——> 5 分钟即 fail）
+        run: |
+          START=$(date +%s)
+          bash test/dr/pitr.sh
+          DUR=$(( $(date +%s) - START ))
+          echo "PITR 演练耗时: ${DUR}s（RTO 目标 < 300s）"
+          [ "$DUR" -lt 300 ] || { echo "RTO 超标: ${DUR}s"; exit 1; }
