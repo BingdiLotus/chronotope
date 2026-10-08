@@ -78,6 +78,7 @@ func main() {
 		}
 	}
 	h.DeliveryAllowPrivate = os.Getenv("OUTBOX_ALLOW_PRIVATE") == "true"
+	deliverSigningSecret := os.Getenv("OUTBOX_SIGNING_SECRET")
 	if v := os.Getenv("EXECUTOR_URL"); v != "" {
 		h.Executor = api.NewHTTPExecutor(v)
 	}
@@ -106,10 +107,11 @@ func main() {
 	go admission.Run(ctx, time.Minute)
 
 	deliverer := &api.Deliverer{
-		Store:        st,
-		Logger:       slog.Default(),
-		Batch:        100,
-		AllowPrivate: os.Getenv("OUTBOX_ALLOW_PRIVATE") == "true",
+		SigningSecret: deliverSigningSecret,
+		Store:         st,
+		Logger:        slog.Default(),
+		Batch:         100,
+		AllowPrivate:  os.Getenv("OUTBOX_ALLOW_PRIVATE") == "true",
 		SMTP: api.SMTPConfig{
 			Host: os.Getenv("SMTP_HOST"),
 			Port: firstNonEmpty(os.Getenv("SMTP_PORT"), "25"),

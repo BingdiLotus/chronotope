@@ -3,6 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -19,12 +22,13 @@ import (
 
 // Deliverer 是投递循环（api 进程内，与 Aggregator 同构）。
 type Deliverer struct {
-	Store        Store
-	HTTP         *http.Client
-	SMTP         SMTPConfig // 零值 = email 通道禁用
-	Logger       Logger
-	Batch        int
-	AllowPrivate bool // SSRF 防护放行开关（本地/e2e；生产默认拒绝）
+	Store         Store
+	HTTP          *http.Client
+	SMTP          SMTPConfig // 零值 = email 通道禁用
+	Logger        Logger
+	Batch         int
+	AllowPrivate  bool   // SSRF 防护放行开关（本地/e2e；生产默认拒绝）
+	SigningSecret string // Webhook 签名密钥（OUTBOX_SIGNING_SECRET；生产必配）
 }
 
 type Logger interface {
@@ -95,7 +99,17 @@ func (d *Deliverer) deliverWebhook(ctx context.Context, target, sessionID, typ s
 		"session_id": sessionID, "type": typ, "payload": json.RawMessage(payload),
 		"at": at.UTC().Format(time.RFC3339),
 	})
-	resp, err := d.HTTP.Post(target, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// 投递签名（期 5 §D）：org 派生密钥的 HMAC-SHA256——接收方按
+	// docs/Webhook-接入指南.md 验证（防伪造投递）
+	if sig, ts := d.signWebhook(sessionID, body); sig != "" {
+		req.Header.Set("X-Chronotope-Signature", fmt.Sprintf("t=%d,v1=%s", ts, sig))
+	}
+	resp, err := d.HTTP.Do(req)
 	if err != nil {
 		return err
 	}
@@ -104,6 +118,27 @@ func (d *Deliverer) deliverWebhook(ctx context.Context, target, sessionID, typ s
 		return fmt.Errorf("webhook %s: status %d", target, resp.StatusCode)
 	}
 	return nil
+}
+
+// signWebhook 生成投递签名：密钥 = HMAC(平台密钥, orgID)（session → org），
+// 签名 = HMAC-SHA256(密钥, body) 的 hex；平台密钥空 → 不签名（开发默认）。
+func (d *Deliverer) signWebhook(sessionID string, body []byte) (string, int64) {
+	secret := d.SigningSecret
+	if secret == "" {
+		secret = "chronotope" // 开发默认；生产 OUTBOX_SIGNING_SECRET 必配
+	}
+	orgID := ""
+	if d.Store != nil {
+		if row, err := d.Store.GetSession(context.Background(), sessionID); err == nil {
+			orgID = row.OrgID
+		}
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(orgID))
+	key := mac.Sum(nil)
+	mac2 := hmac.New(sha256.New, key)
+	mac2.Write(body)
+	return hex.EncodeToString(mac2.Sum(nil)), time.Now().Unix()
 }
 
 // deliverEmail SMTP 投递（正文 = 事件 JSON）。
