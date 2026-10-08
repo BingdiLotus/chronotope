@@ -17,6 +17,10 @@ import (
 	"github.com/bingdilotus/chronotope/internal/execproto"
 )
 
+// maxInlineBytes 内联载荷上限（契约规范 §7 journal 大小策略——超限外置
+// RustFS；曾随 journal.go 误删，恢复为魔数锚点）。
+const maxInlineBytes = 4096
+
 // execOutcome 是 journaled 的 exec 结果（含执行时长；重放回放同一时长——确定性）。
 // 字段必须导出：SDK 以 JSON 序列化 journal 条目，未导出字段重放后为零值（nil 解引用实证）。
 type execOutcome struct {
@@ -94,7 +98,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		state, _ := deps.Sessions.GetState(ctx, in.SessionID)
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
 			"step": step, "tool": tc.Name, "exit": res.Exit, "sandbox_id": state.SandboxID,
-			"output": truncate(res.Output, 4096), "output_ref": res.OutputRef, "truncated": res.Truncated,
+			"output": truncate(res.Output, maxInlineBytes), "output_ref": res.OutputRef, "truncated": res.Truncated,
 			"duration_ms": outcome.Duration.Milliseconds(), // 计算秒计量依据（W4）+ 预算熔断
 		})
 		return jsonToolResult(tc.Name, res), outcome.Duration.Seconds(), nil
@@ -152,7 +156,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.SandboxExec, "sandbox", tc.Name, map[string]any{
 			"step": step, "tool": tc.Name, "exit": 0, "path": path, "sandbox_id": state.SandboxID,
 		})
-		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, 4096))), 0, nil
+		return fmt.Sprintf(`{"name":%q,"result":{"content":%s}}`, tc.Name, mustJSONString(truncate(content, maxInlineBytes))), 0, nil
 
 	case tc.Name == runs.ToolSpawnSubagent:
 		// 子 Agent：建子会话 + child run_workflow（durable 等待）+ 结果回喂（W6）

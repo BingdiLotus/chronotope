@@ -21,7 +21,7 @@
 POST /sandboxes
 { "image": "golang:1.23-bookworm", "limits": {"cpu": "1", "mem": "512Mi", "disk": "2Gi"},
   "ttl": "24h", "capabilities": {"network": true, "gpu": false} }
-→ 201 { "sandbox_id": "sb_1", "status": "creating", "image": "golang:1.23-bookworm", "driver": "docker" }
+→ 201 { "sandbox_id": "sb_1", "status": "ready", "image": "golang:1.23-bookworm", "driver": "docker" }
 ```
 
 ```
