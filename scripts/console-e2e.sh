@@ -6,7 +6,8 @@
 # 前置：postgres/restate 运行中（docker compose up postgres restate）。
 # 用法: bash scripts/console-e2e.sh [console|tt|runtree] [playwright 附加参数]
 set -euo pipefail
-cd "$(dirname "$0")/.."
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 export PATH="/opt/homebrew/bin:$PATH"
 DB='postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable'
 PROFILE="${1:-console}"
@@ -57,6 +58,15 @@ sleep 3
 curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
   -d '{"uri":"http://host.docker.internal:9080","version":"v1","use_http_11":true,"force":true}' > /dev/null
 for u in 8000 9082 9080 8080; do curl -fsS "localhost:$u/healthz" > /dev/null; done
+
+# 3.5 收尾恢复 compose 应用容器（脚本开头 stop 了它们——不留半停栈；
+# 全量测试编排实证：不恢复会使后续套件环境损坏）
+restore_compose_apps() {
+  docker compose --env-file .env -f "$ROOT/deploy/docker-compose.yml" up -d api worker executor harness > /dev/null 2>&1 || true
+  pkill -f 'chronotope-(api|worker|executor)' 2>/dev/null || true
+  pkill -f 'uvicorn app.main:app' 2>/dev/null || true
+}
+trap restore_compose_apps EXIT
 
 # 4. Playwright（profile → 测试文件）
 cd web
