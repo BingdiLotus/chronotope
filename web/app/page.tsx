@@ -11,9 +11,19 @@ type Session = {
 };
 
 export default function Home() {
-  const [org, setOrg] = useState("org-demo");
+  const [org, setOrg] = useState(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("org") || "org-demo";
+    }
+    return "org-demo";
+  });
   const [sessions, setSessions] = useState<Session[]>([]);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const fromURL = new URLSearchParams(window.location.search).get("org");
+    if (fromURL) setOrg(fromURL);
+  }, []);
 
   useEffect(() => {
     fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}/orgs/${org}/sessions`)
@@ -30,6 +40,9 @@ export default function Home() {
         组织：
         <input value={org} onChange={(e) => setOrg(e.target.value)} style={{ marginLeft: 8, padding: 4 }} />
       </label>
+      <a data-testid="org-manage-link" href={`/orgs/${org}`} style={{ marginLeft: 16, color: "#3b82f6" }}>
+        组织管理（用量/配额/成员/审计）
+      </a>
       {error && <p style={{ color: "red" }}>{error}</p>}
       <ul>
         {sessions.map((s) => (

@@ -3,6 +3,7 @@
 #   console  = 人控闭环三条用例（harness 审批脚本：bash class 2 强制审批）
 #   tt       = 时空视图用例（checkpoint/fork/diff/rollback；harness plain）
 #   runtree  = run 树拓扑图用例（harness spawn_subagent 脚本；child 动态注入）
+#   org      = 期 5 §B org 管理页用例（用量看板/配额/成员/审计；数据脚本内自种）
 # 前置：postgres/restate 运行中（docker compose up postgres restate）。
 # 用法: bash scripts/console-e2e.sh [console|tt|runtree] [playwright 附加参数]
 set -euo pipefail
@@ -32,6 +33,9 @@ case "$PROFILE" in
   tt)
     SCRIPT=""
     ;;
+  org)
+    SCRIPT=""
+    ;;
   runtree)
     # child agent（harness 的 chronotope-subagent 分支确定性终答）
     nohup env DATABASE_URL="$DB" RESTATE_URL=http://localhost:8081 ./bin/chronotope-api -addr :8080 > /tmp/console-api.log 2>&1 &
@@ -44,7 +48,7 @@ case "$PROFILE" in
     sleep 1
     ;;
   *)
-    echo "未知 profile: $PROFILE（支持 console|tt|runtree）" >&2
+    echo "未知 profile: $PROFILE（支持 console|tt|runtree|org）" >&2
     exit 2
     ;;
 esac
@@ -74,4 +78,5 @@ case "$PROFILE" in
   console) timeout 300 pnpm exec playwright test console "${@:2}" ;;
   tt)      timeout 300 pnpm exec playwright test timetravel "${@:2}" ;;
   runtree) timeout 300 pnpm exec playwright test runtree "${@:2}" ;;
+  org)     timeout 300 pnpm exec playwright test org-management "${@:2}" ;;
 esac

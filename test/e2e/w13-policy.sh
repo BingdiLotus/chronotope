@@ -129,8 +129,10 @@ curl -fsS -X POST "$API/sessions/$SID4/mcp" -H 'content-type: application/json' 
   -d '{"server":"echo","url":"http://localhost:9100"}' > /dev/null
 curl -fsS -N "$API/sessions/$SID4/events?after=0" "${AUTH[@]}" > /tmp/w13-c.out 2>&1 &
 sleep 1
-curl -fsS -m 120 -X POST "$API/sessions/$SID4/runs" -H 'content-type: application/json' "${AUTH[@]}" \
-  -H "Idempotency-Key: $RUN_ID-c" -d '{"input":"调用 MCP 工具"}' > /tmp/w13-c-run.out 2>&1
+# 执行层 allowlist 防御（期 5 §B 后）：被拒工具 → run 失败（502）——
+# curl 容忍非 2xx；核心断言是「无 mcp.call 事件」（拒发）
+curl -sS -m 120 -X POST "$API/sessions/$SID4/runs" -H 'content-type: application/json' "${AUTH[@]}" \
+  -H "Idempotency-Key: $RUN_ID-c" -d '{"input":"调用 MCP 工具"}' > /tmp/w13-c-run.out 2>&1 || true
 assert "allowlist 过滤：未列工具不下发（无 mcp.call 事件）" \
   bash -c '! grep -q "mcp.call" /tmp/w13-c.out'
 

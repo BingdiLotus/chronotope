@@ -61,6 +61,17 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 	if !ok || server == "" || tool == "" {
 		return "", 0, restate.ToTerminalError(fmt.Errorf("MCP 工具名不规范（应为 mcp:<server>:<tool>）: %q", tc.Name))
 	}
+	// 执行层 allowlist 防御（清单层过滤之外的兜底——fake/异常调用绕过清单
+	// 仍会到执行层；w13 断言稳定失败实证：allowlist 拒绝的工具仍发 mcp.call）
+	if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+		// 只拦「显式配置且不匹配」（无配置 = 旧 MCP 路径放行——W6 历史段
+		// 兼容；有配置则按 allowlist 拒发——w13 语义）
+		if has, hErr := deps.Store.HasMCPAllowlist(ctx, sess.OrgID, server); hErr == nil && has {
+			if allowed, aErr := deps.Store.MCPToolAllowed(ctx, sess.OrgID, server, tool); aErr == nil && !allowed {
+				return "", 0, restate.ToTerminalError(fmt.Errorf("MCP 工具 %s 不在 org allowlist（过滤拒发）", tc.Name))
+			}
+		}
+	}
 	state, err := deps.Sessions.GetState(ctx, in.SessionID)
 	if err != nil {
 		return "", 0, err

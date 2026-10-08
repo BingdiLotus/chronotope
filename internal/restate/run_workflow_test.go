@@ -32,10 +32,11 @@ type storedEvent struct {
 }
 
 type fakeStore struct {
-	knowledge        []store.KnowledgeItem
-	allowlistAllowed map[string]bool
-	events           []storedEvent
-	messages         []struct {
+	knowledge           []store.KnowledgeItem
+	allowlistAllowed    map[string]bool
+	allowlistConfigured map[string]bool
+	events              []storedEvent
+	messages            []struct {
 		sessionID, runID, role, content string
 		step                            int
 	}
@@ -100,6 +101,14 @@ func (f *fakeStore) ListWorkspaceFiles(_ context.Context, _ string, _ int) ([]st
 
 func (f *fakeStore) RetrieveKnowledge(_ context.Context, _ string, _ []float32, _ int) ([]store.KnowledgeItem, error) {
 	return f.knowledge, nil
+}
+
+func (f *fakeStore) HasMCPAllowlist(_ context.Context, _ string, server string) (bool, error) {
+	if f.allowlistConfigured == nil {
+		return false, nil
+	}
+	_, ok := f.allowlistConfigured[server]
+	return ok, nil
 }
 
 func (f *fakeStore) MCPToolAllowed(_ context.Context, tenantID, server, tool string) (bool, error) {

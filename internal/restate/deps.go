@@ -54,6 +54,7 @@ type Store interface {
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 	// MCP 网关 allowlist（期 3 §C）
 	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
+	HasMCPAllowlist(ctx context.Context, tenantID, server string) (bool, error)
 	// 共享知识检索（期 3 §D：tenant 级 pgvector）
 	RetrieveKnowledge(ctx context.Context, tenantID string, embedding []float32, topK int) ([]store.KnowledgeItem, error)
 }
