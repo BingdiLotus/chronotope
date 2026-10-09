@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
@@ -101,6 +102,10 @@ func approvalRouterOf(st *store.Store) policy.ApprovalRouter {
 		Get: func(ctx context.Context, tenantID string) ([]string, []string, int64, error) {
 			p, err := st.GetApprovalPolicy(ctx, tenantID)
 			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					// 无策略行 = ManualOnly 默认放行（合法状态——w5r 语义）
+					return nil, nil, 0, nil
+				}
 				return nil, nil, 0, err
 			}
 			return p.ToolPatterns, p.Approvers, p.TTLSeconds, nil

@@ -88,12 +88,14 @@ DIGEST=$(python3 -c 'import json; t=open("/tmp/w13-b1.out").read(); m=[json.load
 # bob（非成员）→ 拒绝（run 保持挂起 + audit.approval_denied）；拒绝是 TerminalError
 # 的 HTTP 表达（502）——curl 容忍非 2xx（-sS 不带 -f）
 curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $ADMIN_KEY" \
   -d "{\"payload\":\"approve\",\"action_digest\":\"$DIGEST\",\"approver\":\"bob\"}"
 sleep 2
 assert "非成员审批被拒（audit.approval_denied，run 仍挂起）" \
   bash -c 'grep -q "audit.approval_denied" /tmp/w13-b1.out && ! grep -q "run.completed" /tmp/w13-b1.out'
-# alice（成员）→ 批准 → 完成
+# alice（成员）→ 批准 → 完成（admin key 认证放行；自报 approver=alice 保留）
 curl -fsS -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $ADMIN_KEY" \
   -d "{\"payload\":\"approve\",\"action_digest\":\"$DIGEST\",\"approver\":\"alice\"}" > /dev/null
 for i in $(seq 1 60); do grep -q '"type":"run.completed"' /tmp/w13-b1.out 2>/dev/null && break; sleep 1; done
 assert "成员批准后 run 恢复完成" grep -q '"type":"run.completed"' /tmp/w13-b1.out
@@ -111,6 +113,7 @@ RID2=$(python3 -c 'import json; t=open("/tmp/w13-b2.out").read(); m=[json.loads(
 sleep 5 # 过 TTL
 DIGEST2=$(python3 -c 'import json; t=open("/tmp/w13-b2.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["payload"].get("action_digest","") for e in m if e["type"]=="run.awaiting_approval"][0])')
 curl -fsS -X POST "$API/webhooks/approval/$RID2" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $ADMIN_KEY" \
   -d "{\"payload\":\"approve\",\"approver\":\"alice\",\"action_digest\":\"$DIGEST2\"}" > /dev/null
 sleep 3
 assert "TTL 过期自动拒绝（audit.approval_expired + tool_denied 终态）" \

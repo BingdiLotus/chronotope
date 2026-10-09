@@ -72,7 +72,7 @@ for i in $(seq 1 30); do
 done
 RID2=$(grep -a -B2 "awakeable_id" /tmp/risk-deny-sse.out | grep -a -o '"run_id":"[^"]*"' | head -1 | cut -d'"' -f4)
 DIGEST2=$(grep -a -B2 "awakeable_id" /tmp/risk-deny-sse.out | grep -a -o '"action_digest":"[^"]*"' | head -1 | cut -d'"' -f4)
-curl -fsS -X POST "$API/webhooks/approval/$RID2" -H 'content-type: application/json' \
+curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID2" -H 'content-type: application/json' \
   -d "{\"payload\":\"{\\\"approved\\\":false,\\\"note\\\":\\\"拒绝危险操作\\\"}\",\"approver\":\"e2e-approver\",\"action_digest\":\"$DIGEST2\"}" > /dev/null
 wait "$RUN2" || true
 sleep 1 # 事件经 poller 送达（提交 curl 与事件流竞态）

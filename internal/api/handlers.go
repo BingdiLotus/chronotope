@@ -331,7 +331,8 @@ func (h *Handler) approvalWebhook(w http.ResponseWriter, r *http.Request) {
 	// 401 fail closed（此前自报 approver 非空即放行——授权链绕过实证）
 	if p := PrincipalFrom(r.Context()); p != "" {
 		req.Approver = p
-	} else if h.AuthMode == "on" {
+	} else if h.AuthMode == "on" && !AdminFrom(r.Context()) {
+		// admin key 放行自报（平台引导身份）；匿名在 on 模式下 fail closed
 		writeError(w, http.StatusUnauthorized, 401, "approver 必须经认证导出（API_AUTH_MODE=on）")
 		return
 	} else if req.Approver == "" {

@@ -25,6 +25,8 @@ type ctxKey string
 
 const orgKey ctxKey = "auth.org"
 
+const adminKeyCtx ctxKey = "auth.admin"
+
 // AuthOrg 取认证后的 org（off 模式为 ""——匿名，org 从路径取）。
 // sha256Hex 哈希 key（认证查找 + 存储）。
 func sha256Hex(key string) string {
@@ -73,6 +75,7 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 			}
 			ctx := context.WithValue(r.Context(), orgKey, org)
 			ctx = context.WithValue(ctx, userKey, principal)
+			ctx = context.WithValue(ctx, adminKeyCtx, admin)
 			if mode == "on" {
 				// 匿名路径（healthz/webhooks）与 admin key 在 on 模式下放行
 				if !anonymousPath(r) && !admin && org == "" {
@@ -87,6 +90,13 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// AdminFrom 读认证的 admin 标志（审计 #6：admin key 的审批回调放行自报
+// approver——admin 是平台引导身份，不参与 approver 集合）。
+func AdminFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(adminKeyCtx).(bool)
+	return v
 }
 
 // OrgFrom 取上下文中的认证租户（中间件写 orgKey 的读侧——与 PrincipalFrom
