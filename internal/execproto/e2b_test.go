@@ -71,6 +71,10 @@ func (f *fakeE2BAPI) CreateSnapshot(_ context.Context, _, snapshotID string) (st
 	return snapshotID, nil
 }
 
+func (f *fakeE2BAPI) ListFiles(_ context.Context, _ string, _ string) ([]WorkspaceEntry, error) {
+	return nil, nil
+}
+
 func (f *fakeE2BAPI) Delete(_ context.Context, id string) error {
 	f.deleted = id
 	return nil

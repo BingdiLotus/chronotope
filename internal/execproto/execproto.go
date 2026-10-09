@@ -91,4 +91,13 @@ type Driver interface {
 	Destroy(ctx context.Context, sandboxID string) error
 	// ListOrphanContainers 按 label 列沙箱容器名（D2 启动 sweep）
 	ListOrphanContainers(ctx context.Context) ([]string, error) // Tier 3
+	// ListWorkspaceFiles 工作区清单快照（E1c：CLI 修改入索引——execute 后
+	// 扫描 bash/python 改写的文件）。
+	ListWorkspaceFiles(ctx context.Context, sandboxID string) ([]WorkspaceEntry, error)
+}
+
+// WorkspaceEntry 是工作区清单条目（E1c 的扫描单元）。
+type WorkspaceEntry struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
 }

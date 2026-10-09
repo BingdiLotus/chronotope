@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -265,6 +266,32 @@ func (d *DockerDriver) simple(ctx context.Context, op string, args ...string) er
 
 // ListOrphanContainers 按 label 列全部沙箱容器名（生命周期闭环 D2：启动 sweep
 // 对比 DB 行的孤儿来源；ps 失败返回错误让调用方降级）。
+// ListWorkspaceFiles docker 档：exec find 清单（路径/字节数）。
+func (d *DockerDriver) ListWorkspaceFiles(ctx context.Context, sandboxID string) ([]WorkspaceEntry, error) {
+	out, err := d.Runner.Run(ctx, "exec", sandboxID, "find", "/workspace", "-type", "f", "-printf", "%s %p\n")
+	if err != nil {
+		// 沙箱可能刚创建无 /workspace 内容——空清单不报错
+		if strings.Contains(string(out), "No such file or directory") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("docker list workspace: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	var entries []WorkspaceEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		size, _ := strconv.ParseInt(parts[0], 10, 64)
+		entries = append(entries, WorkspaceEntry{Path: parts[1], Size: size})
+	}
+	return entries, nil
+}
+
 func (d *DockerDriver) ListOrphanContainers(ctx context.Context) ([]string, error) {
 	out, err := d.Runner.Run(ctx, "ps", "-a", "--filter", "label=chronotope.sandbox", "--format", "{{.Names}}")
 	if err != nil {

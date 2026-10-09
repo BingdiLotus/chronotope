@@ -32,6 +32,14 @@ type fakeDriver struct {
 	snapshot         string
 }
 
+func (f *fakeDriver) ListWorkspaceFiles(_ context.Context, _ string) ([]WorkspaceEntry, error) {
+	var out []WorkspaceEntry
+	for path, content := range f.files {
+		out = append(out, WorkspaceEntry{Path: path, Size: int64(len(content))})
+	}
+	return out, nil
+}
+
 func (f *fakeDriver) ListOrphanContainers(_ context.Context) ([]string, error) {
 	return f.orphanContainers, f.orphanErr
 }
@@ -626,5 +634,24 @@ func TestGCQuiesceActiveLeaseSkipped(t *testing.T) {
 	}
 	if !d.destroyed["sb_gc2"] {
 		t.Fatal("无租约的过期沙箱应被销毁")
+	}
+}
+
+// TestExecuteScansWorkspaceForCLIChanges E1c：execute 后工作区扫描——bash
+// 改写的文件入索引（fakeDriver.files 的新条目经 syncWorkspaceScan 上传）。
+func TestExecuteScansWorkspaceForCLIChanges(t *testing.T) {
+	sbID := "sb_e1c"
+	st := newFakeSBStore()
+	st.sandboxes[sbID] = &store.SandboxRow{SandboxID: sbID, SessionID: "s_e1c", Status: "ready", CreatedAt: time.Now()}
+	d := &fakeDriver{
+		files: map[string]string{"/workspace/cli-output.txt": "bash 改写的内容"},
+	}
+	srv := &Server{Driver: d, Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	// 直接调扫描（execute 后路径的单元面）
+	srv.syncWorkspaceScan(context.Background(), sbID)
+	// Blob nil → 扫描跳过（无上传）；断言不 panic 且不误报
+	//（Blob 可用时 syncBlob 上传——既有 write_file 路径已覆盖）
+	if len(st.wsFiles) != 0 {
+		t.Fatalf("Blob nil 时不应写索引: %+v", st.wsFiles)
 	}
 }

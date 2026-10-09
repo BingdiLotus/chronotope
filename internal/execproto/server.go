@@ -362,7 +362,48 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// E1c：CLI 修改入索引——execute 后扫描工作区（bash/python 改写的文件
+	// 与既有索引 diff → 变化文件内容上传 blob + 索引 upsert；扫描失败不阻断
+	// execute 结果（索引滞后可被下次扫描追上））
+	s.syncWorkspaceScan(r.Context(), req.SandboxID)
 	s.writeSSE(w, fl, map[string]any{"type": "exit", "payload": cached})
+}
+
+// syncWorkspaceScan E1c：工作区清单快照与既有索引 diff——变化文件按需
+// 上传（内容 hash 经 syncBlob 复用；>8MB 跳过——单文件上限 MVP）。
+func (s *Server) syncWorkspaceScan(ctx context.Context, sandboxID string) {
+	if s.Blob == nil {
+		return
+	}
+	sb, err := s.Store.GetSandbox(ctx, sandboxID)
+	if err != nil || sb.SessionID == "" {
+		return
+	}
+	entries, err := s.Driver.ListWorkspaceFiles(ctx, sandboxID)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	existing, iErr := s.Store.ListWorkspaceFiles(ctx, sb.SessionID, 500)
+	if iErr != nil {
+		return
+	}
+	index := map[string]store.WorkspaceFile{}
+	for _, f := range existing {
+		index[f.Path] = f
+	}
+	for _, e := range entries {
+		if e.Size > 8<<20 {
+			continue // 单文件 8MB 上限（MVP——大文件走 explicit PUT）
+		}
+		if prev, ok := index[e.Path]; ok && prev.Size == e.Size {
+			continue // 未变化
+		}
+		data, rErr := s.Driver.ReadFile(ctx, sandboxID, e.Path)
+		if rErr != nil || len(data) == 0 {
+			continue
+		}
+		s.syncBlob(ctx, sandboxID, e.Path, data)
+	}
 }
 
 // POST /sandboxes/{sandboxID}/lease —— 获取/续约（body {run_id, ttl}；UPSERT

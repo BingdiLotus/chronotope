@@ -31,6 +31,8 @@ type E2BAPI interface {
 	Resume(ctx context.Context, sandboxID string) error
 	CreateSnapshot(ctx context.Context, sandboxID, snapshotID string) (string, error)
 	Delete(ctx context.Context, sandboxID string) error
+	// ListFiles 工作区文件列表（E1c——官方云 envd 无列表端点时返回空）。
+	ListFiles(ctx context.Context, sandboxID, path string) ([]WorkspaceEntry, error)
 }
 
 // E2BDriver 以镜像名作 templateID（部署方把镜像映射为 E2B 模板；
@@ -140,6 +142,19 @@ func (d *E2BDriver) Snapshot(ctx context.Context, sandboxID string) (string, err
 // Destroy → E2B 删除（Tier 3）。
 // ListOrphanContainers：E2B 沙箱生命周期由 E2B 侧 TTL 自动回收（微 VM 无本地
 // 容器残留面）——sweep 空操作；容器卷泄漏是 docker driver 专属问题。
+// ListWorkspaceFiles E2B 档：/files 递归（官方云 files API）。
+func (d *E2BDriver) ListWorkspaceFiles(ctx context.Context, sandboxID string) ([]WorkspaceEntry, error) {
+	files, err := d.API.ListFiles(ctx, sandboxID, "/workspace")
+	if err != nil {
+		return nil, fmt.Errorf("e2b list workspace: %w", err)
+	}
+	entries := make([]WorkspaceEntry, 0, len(files))
+	for _, f := range files {
+		entries = append(entries, WorkspaceEntry{Path: f.Path, Size: f.Size})
+	}
+	return entries, nil
+}
+
 func (d *E2BDriver) ListOrphanContainers(context.Context) ([]string, error) {
 	return nil, nil
 }
@@ -154,6 +169,12 @@ type HTTPE2BAPI struct {
 	Base string
 	Key  string
 	HTTP *http.Client
+}
+
+// ListFiles 官方云 envd 无文件列表端点（E1c 的 E2B 档后置——docker 档
+// 完整；空清单不误报变化）。
+func (a *HTTPE2BAPI) ListFiles(ctx context.Context, sandboxID, path string) ([]WorkspaceEntry, error) {
+	return nil, nil
 }
 
 func NewHTTPE2BAPI(base, key string) *HTTPE2BAPI {
