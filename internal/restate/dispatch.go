@@ -88,7 +88,10 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 	case tc.Name == runs.ToolBash || tc.Name == runs.ToolRunPython || tc.Name == runs.ToolListFiles:
 		input, inputErr := codeToolInput(tc)
 		if inputErr != nil {
-			return "", 0, restate.ToTerminalError(inputErr, restate.WithErrorCode(400))
+			// 真实模型偶发空参调用（real-hitl 实证：批准后 arguments={}）——
+			// 工具结果返回错误 JSON 供模型下一轮补参数（run 不失败；127
+			// 防御保留——空命令不执行）
+			return fmt.Sprintf(`{"name":%q,"result":{"exit":1,"error":%q}}`, tc.Name, inputErr.Error()), 0, nil
 		}
 		var outcome *execOutcome
 		err := execWithSandboxRecovery(ctx, deps, in, cfg, func(sandboxID string) error {
@@ -256,6 +259,7 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	if err != nil {
 		return "", err
 	}
+
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunResumed, "resume", "", map[string]any{
 		"step": step, "result": result,
 	})

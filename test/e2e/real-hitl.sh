@@ -36,8 +36,19 @@ assert "真实模型触发 class 2 审批（run.awaiting_approval）" \
   grep -q '"type":"run.awaiting_approval"' /tmp/rhitl-sse.out
 RID=$(python3 -c 'import json; t=open("/tmp/rhitl-sse.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["run_id"] for e in m if e["type"]=="run.awaiting_approval"][-1])')
 DIGEST=$(python3 -c 'import json; t=open("/tmp/rhitl-sse.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["payload"].get("action_digest","") for e in m if e["type"]=="run.awaiting_approval"][-1])')
-curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' \
-  -d "{\"payload\":\"approve\",\"action_digest\":\"$DIGEST\",\"approver\":\"human\"}"
+# 批准循环：真实模型会多轮 bash 调用（每轮挂起即批——fake 只一轮的假设
+# 在真实路径不成立，300s 超时实证）
+for i in $(seq 1 4); do
+  curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID" -H 'content-type: application/json' \
+    -d "{\"payload\":\"approve\",\"action_digest\":\"$DIGEST\",\"approver\":\"human\"}"
+  # 等待完成或新一轮挂起（新挂起有新 RID/DIGEST——重取）
+  for j in $(seq 1 30); do
+    grep -q '"type":"run.completed"' /tmp/rhitl-sse.out 2>/dev/null && break 2
+    sleep 2
+  done
+  RID=$(python3 -c 'import json; t=open("/tmp/rhitl-sse.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["run_id"] for e in m if e["type"]=="run.awaiting_approval"][-1])')
+  DIGEST=$(python3 -c 'import json; t=open("/tmp/rhitl-sse.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["payload"].get("action_digest","") for e in m if e["type"]=="run.awaiting_approval"][-1])')
+done
 wait "$RUN_PID" || true
 sleep 2
 kill "$SSE_PID" 2>/dev/null || true
