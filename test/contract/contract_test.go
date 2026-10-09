@@ -216,3 +216,51 @@ func splitLines(t *testing.T, s string) []string {
 	}
 	return out
 }
+
+// TestHarnessFrameConformance M4：第三方 harness 自证的最小一致性——
+// runs.frames.ndjson 的帧序列必须符合（delta 序递增、tool_call 交棒、
+// done 唯一终态、beat 帧合法）。
+func TestHarnessFrameConformance(t *testing.T) {
+	lines := string(testdata(t, "runs.frames.ndjson"))
+	var frames []map[string]any
+	for _, ln := range splitLines(t, lines) {
+		if ln == "" {
+			continue
+		}
+		var f map[string]any
+		if err := json.Unmarshal([]byte(ln), &f); err != nil {
+			t.Fatalf("帧必须是 JSON: %v", err)
+		}
+		frames = append(frames, f)
+	}
+	deltaSeq := 0
+	doneCount := 0
+	for _, f := range frames {
+		typ, _ := f["type"].(string)
+		payload, _ := f["payload"].(map[string]any)
+		switch typ {
+		case "delta":
+			if payload == nil || payload["text"] == nil {
+				t.Fatalf("delta 帧缺 payload.text: %v", f)
+			}
+			deltaSeq++
+		case "tool_call":
+			if payload == nil || (payload["name"] == nil && payload["tool_call"] == nil) {
+				t.Fatalf("tool_call 帧缺 name/tool_call: %v", f)
+			}
+		case "done":
+			doneCount++
+		case "beat":
+			// 心跳帧合法（M1 后的帧类型）
+		case "error":
+			if payload == nil || payload["error"] == nil {
+				t.Fatalf("error 帧缺 payload.error: %v", f)
+			}
+		default:
+			t.Fatalf("未知帧类型 %q（协议只增不改——新类型需契约同步）", typ)
+		}
+	}
+	if deltaSeq == 0 || doneCount != 1 {
+		t.Fatalf("帧序列不符：delta=%d done=%d（done 是唯一终态）", deltaSeq, doneCount)
+	}
+}

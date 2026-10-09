@@ -17,3 +17,14 @@
 - `../../test/contract/testdata/runs.request.json` — /runs 请求样例
 - `../../test/contract/testdata/runs.frames.ndjson` — SSE 帧序列样例（含截断 done）
 - `../../test/contract/testdata/events.sample.json` — 事件行样例
+
+## 版本与 Changelog（M4，2026-10-09）
+
+| 契约 | 版本 | 变更 |
+|---|---|---|
+| runs-protocol | v1.0 | 初始（protocol 1.0、三铁律、幂等 (run_id,step)） |
+| executor-protocol | v1.0 | 初始（六端点 + capabilities Seam 声明） |
+| events.schema | v1.0 | 初始（类型全集只增不改）+ M1 哈希链字段（prev_hash/event_hash/hold） |
+| seam | v1.0 | 新增（可替换接缝的一等公民声明） |
+
+原则：只增不改（废弃走版本窗口）；版本绑定在 run；幂等键贯穿全链路。
