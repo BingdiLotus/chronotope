@@ -98,7 +98,7 @@ func TestWebhookResolveApproval(t *testing.T) {
 	deps := &Deps{Store: store, Sessions: sessions}
 
 	mockCtx := mocks.NewMockContext(t)
-	mockCtx.EXPECT().ResolveAwakeable("aw_9", "approve").Once()
+	mockCtx.EXPECT().ResolveAwakeable("aw_9", `{"approved":true,"approver":"","payload":"approve"}`).Once()
 	ctx := restate.WithMockContext(mockCtx)
 
 	got, err := resolveApproval(ctx, deps, WebhookResolveInput{RunID: "r_1", Payload: "approve", ActionDigest: "d1"})
@@ -146,7 +146,7 @@ func TestResolveApprovalDigestBinding(t *testing.T) {
 		PendingAwakeable: "aw_9", PendingActionDigest: "aaaa1111",
 	}}
 	mockCtx2 := mocks.NewMockContext(t)
-	mockCtx2.EXPECT().ResolveAwakeable("aw_9", "已批准").Once()
+	mockCtx2.EXPECT().ResolveAwakeable("aw_9", `{"approved":true,"approver":"ops@x","payload":"已批准"}`).Once()
 	got, err := resolveApproval(ctx2(mockCtx2), &Deps{Store: st2, Sessions: sessions2}, WebhookResolveInput{
 		RunID: "r_1", Payload: "已批准", ActionDigest: "aaaa1111", Approver: "ops@x",
 	})

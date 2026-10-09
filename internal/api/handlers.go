@@ -1003,6 +1003,18 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// runCalls 效果账本对账（审计 A1/A2 的消费端：llm/mcp 账本行 + admission 状态）。
+func (h *Handler) runCalls(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	calls, err := h.Store.ListCallsForRun(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	admission, _ := h.Store.AdmissionState(r.Context(), runID)
+	writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "admission_state": admission, "calls": calls})
+}
+
 func (h *Handler) runAudit(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
 	if _, err := h.Store.GetRun(r.Context(), runID); errors.Is(err, store.ErrNotFound) {

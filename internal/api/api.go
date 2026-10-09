@@ -36,6 +36,8 @@ type Store interface {
 	CreateRunWithCommand(ctx context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	MarkAdmissionDispatched(ctx context.Context, runID string) error
 	ListPendingAdmissions(ctx context.Context, olderThan time.Duration, limit int) ([]store.AdmissionPending, error)
+	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
+	AdmissionState(ctx context.Context, runID string) (string, error)
 	GetRun(ctx context.Context, id string) (*store.Run, error)
 	GetActiveRun(ctx context.Context, sessionID string) (*store.Run, error)
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error
@@ -198,6 +200,7 @@ func (h *Handler) Router() chi.Router {
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
 	r.Get("/runs/{runID}/audit", h.runAudit) // journal 审计导出（期 1：重放轨迹 + dedupe 证据链）
+	r.Get("/runs/{runID}/calls", h.runCalls) // 效果账本对账（审计 A1/A2）
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)
 	return r
 }

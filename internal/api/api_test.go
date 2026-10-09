@@ -140,6 +140,14 @@ func (f *fakeStore) SoftDeleteSession(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeStore) ListCallsForRun(_ context.Context, _ string) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) AdmissionState(_ context.Context, _ string) (string, error) {
+	return "dispatched", nil
+}
+
 func (f *fakeStore) MarkAdmissionDispatched(_ context.Context, _ string) error { return nil }
 
 func (f *fakeStore) ListPendingAdmissions(_ context.Context, _ time.Duration, _ int) ([]store.AdmissionPending, error) {

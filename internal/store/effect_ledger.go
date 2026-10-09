@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // LLMCallRow 是 ModelCall 账本行（审计 A1——Provider 接受证据 + usage 对账事实）。
@@ -36,6 +39,76 @@ RETURNING id, run_id, step, dispatch_seq, state, prepared_at`
 		return nil, fmt.Errorf("store: llm prepared: %w", err)
 	}
 	return &row, nil
+}
+
+// MarkLLMCallDispatched 派发发出标 dispatched（审计 A1：prepared→dispatched
+// →result 三态完整——发送证据与结果之间的接受证据）。
+func (s *Store) MarkLLMCallDispatched(ctx context.Context, runID string, step int) error {
+	const q = `UPDATE llm_calls SET state = 'dispatched', dispatched_at = now() WHERE run_id = $1 AND step = $2 AND state = 'prepared'`
+	if _, err := s.Pool.Exec(ctx, q, runID, step); err != nil {
+		return fmt.Errorf("store: llm dispatched: %w", err)
+	}
+	return nil
+}
+
+// ListCallsForRun 对账查询（审计 A1/A2 的消费端：llm+mcp 账本行）。
+func (s *Store) ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error) {
+	var out []map[string]any
+	llmRows, err := s.Pool.Query(ctx, `SELECT step, dispatch_seq, state, tokens_in, tokens_out, usage_partial, usage_unknown, COALESCE(err,''), prepared_at, dispatched_at, result_at FROM llm_calls WHERE run_id=$1 ORDER BY step`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list llm calls: %w", err)
+	}
+	defer llmRows.Close()
+	for llmRows.Next() {
+		var step, seq int
+		var state string
+		var tin, tout int64
+		var partial, unknown bool
+		var errMsg string
+		var pa time.Time
+		var da, ra *time.Time
+		if err := llmRows.Scan(&step, &seq, &state, &tin, &tout, &partial, &unknown, &errMsg, &pa, &da, &ra); err != nil {
+			return nil, fmt.Errorf("store: scan llm call: %w", err)
+		}
+		out = append(out, map[string]any{
+			"kind": "llm", "step": step, "dispatch_seq": seq, "state": state,
+			"tokens_in": tin, "tokens_out": tout, "usage_partial": partial,
+			"usage_unknown": unknown, "err": errMsg, "prepared_at": pa,
+			"dispatched_at": da, "result_at": ra,
+		})
+	}
+	mcpRows, err := s.Pool.Query(ctx, `SELECT step, server, tool, state, COALESCE(err,''), prepared_at, result_at FROM mcp_calls WHERE run_id=$1 ORDER BY step`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list mcp calls: %w", err)
+	}
+	defer mcpRows.Close()
+	for mcpRows.Next() {
+		var step int
+		var server, tool, state, errMsg string
+		var pa time.Time
+		var ra *time.Time
+		if err := mcpRows.Scan(&step, &server, &tool, &state, &errMsg, &pa, &ra); err != nil {
+			return nil, fmt.Errorf("store: scan mcp call: %w", err)
+		}
+		out = append(out, map[string]any{
+			"kind": "mcp", "step": step, "server": server, "tool": tool,
+			"state": state, "err": errMsg, "prepared_at": pa, "result_at": ra,
+		})
+	}
+	return out, nil
+}
+
+// AdmissionState 查询接纳派发状态（审计 B1 的消费端）。
+func (s *Store) AdmissionState(ctx context.Context, runID string) (string, error) {
+	const q = `SELECT COALESCE(state, '') FROM admission_outbox WHERE run_id = $1`
+	var state string
+	if err := s.Pool.QueryRow(ctx, q, runID).Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil // 历史 run 无 outbox 行
+		}
+		return "", fmt.Errorf("store: admission state: %w", err)
+	}
+	return state, nil
 }
 
 // PutLLMCallResult 结果落账（usage 三字段 + 状态 result/unknown）。

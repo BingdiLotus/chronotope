@@ -114,6 +114,14 @@ func (f *fakeStore) HasMCPAllowlist(_ context.Context, _ string, server string) 
 
 func (f *fakeStore) IsMember(_ context.Context, _, _ string) (bool, error) { return true, nil }
 
+func (f *fakeStore) MarkLLMCallDispatched(_ context.Context, _ string, _ int) error { return nil }
+
+func (f *fakeStore) ListCallsForRun(_ context.Context, _ string) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) AdmissionState(_ context.Context, _ string) (string, error) { return "", nil }
+
 func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int) (*store.LLMCallRow, error) {
 	f.llmPrepared++
 	return &store.LLMCallRow{}, nil

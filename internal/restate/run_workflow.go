@@ -259,6 +259,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			// 账本（审计 A1）：派发证据先落 prepared 行（幂等按 run+step——
 			// 崩溃窗口的第二次闭包执行更新同一行，dispatch 证据供对账）
 			_, _ = deps.Store.PutLLMCallPrepared(rc, runID, step)
+			_ = deps.Store.MarkLLMCallDispatched(rc, runID, step) // 发送证据（A1 三态）
 			r, err := deps.Harness.Call(rc, req)
 			// 结果落账（usage 三字段 + unknown 状态——审计 #7 的账本化）
 			if r != nil {
@@ -362,6 +363,25 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 						_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
 						_ = deps.Sessions.ClearCancel(ctx, in.SessionID)
 						return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
+					}
+					if approvalGranted(decision) && deps.ApprovalRouter != nil {
+						// 审计 C1：派发前重验（批准后、dispatch 前的撤权窗口——
+						// approvers 集合现查，approver 已移除则拒绝）
+						var d struct {
+							Approver string `json:"approver"`
+						}
+						_ = json.Unmarshal([]byte(decision), &d)
+						if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+							if approvers, _, rErr := deps.ApprovalRouter.Route(ctx, policy.ApprovalRequest{
+								TenantID: sess.OrgID, Tool: tc.Name, Class: 2, SessionID: in.SessionID, RunID: runID,
+							}); rErr == nil && len(approvers) > 0 && d.Approver != "" && !containsStr(approvers, d.Approver) {
+								_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
+									"step": step, "tool": tc.Name, "risk_class": 2, "reason": "approver_revoked",
+								})
+								_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+								return RunOutput{}, restate.ToTerminalError(fmt.Errorf("工具 %s 的审批人已撤权（派发前重验）", tc.Name))
+							}
+						}
 					}
 					if !approvalGranted(decision) {
 						_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
