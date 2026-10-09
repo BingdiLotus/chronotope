@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from app import main as m
+from app import protocol as p
 from app.llm import StreamChunk
 
 
@@ -37,3 +38,35 @@ async def test_heartbeat_keeps_stream_task():
     assert "慢" in deltas and "速完成" in deltas, f"慢流被 beat 取消: {deltas} {beats}"
     last = frames[-1]
     assert last.usage and last.usage["tokens_in"] == 7
+
+
+@pytest.mark.asyncio
+async def test_run_consumer_tolerates_beat_dict():
+    """审计 #1 反例固化：_run 与 _stream_frames 的连接——慢流经 beat 后
+    完整产出（beat 帧是 SSE dict，_run 必须透传而非按 StreamChunk 解引用；
+    旧接线 chunk.delta 曾 AttributeError）。"""
+    from app.llm import LLMProvider
+
+    class SlowProvider2(LLMProvider):
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, req):
+            self.calls += 1
+            yield StreamChunk(delta="慢")
+            await asyncio.sleep(1.2)
+            yield StreamChunk(delta="速完成")
+            yield StreamChunk(usage={"tokens_in": 3, "tokens_out": 5})
+
+    # 缩短 beat 间隔到 0.5s（契约 30s 的测试等价——不得改变取消语义）
+    frames = []
+    async for frame in m._run(p.RunRequest(
+        protocol="1.0", run_id="r_conn", step=0, session_id="s_conn",
+        messages=[], tools=[], model="m",
+        agent_config={"model": "m", "instructions": "i", "tools": [], "version": 1},
+    ), SlowProvider2(), beat_interval=0.5):
+        frames.append(frame)
+    datas = [f["data"] for f in frames if isinstance(f, dict)]
+    done = [d for d in datas if '"type":"done"' in d]
+    assert done, f"慢流经 beat 后应产出 done: {[d[:60] for d in datas]}"
+    assert "速完成" in done[0], "最终回答不得被 beat 帧截断"

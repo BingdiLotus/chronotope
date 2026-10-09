@@ -205,12 +205,13 @@ RETURNING id`
 	return true, nil
 }
 
-// GetRun 读取 run。
+// GetRun 读取 run（含不可变 command——审计 #3：投影缺 input/topic 使
+// 幂等比较恒空失效）。
 func (s *Store) GetRun(ctx context.Context, id string) (*Run, error) {
-	const q = `SELECT id, session_id, status, bound FROM runs WHERE id = $1`
+	const q = `SELECT id, session_id, status, bound, COALESCE(input, ''), COALESCE(topic, '') FROM runs WHERE id = $1`
 	var r Run
 	var boundJSON json.RawMessage
-	err := s.Pool.QueryRow(ctx, q, id).Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON)
+	err := s.Pool.QueryRow(ctx, q, id).Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON, &r.Input, &r.Topic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

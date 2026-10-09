@@ -263,13 +263,19 @@ type fakeHarness struct {
 	onCall   func() // 每次 Call 前的钩子（确定性测试注入副作用）
 	embed    []float32
 	embedErr error
+	err      error // Call 直接失败（审计 #2：res=nil + error 的 panic 反例）
 }
 
 func (f *fakeHarness) Embed(_ context.Context, _ string) ([]float32, error) {
 	return f.embed, f.embedErr
 }
 
+func (f *fakeHarness) CallErr() error { return f.err }
+
 func (f *fakeHarness) Call(_ context.Context, req *runs.Request) (*Result, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.onCall != nil {
 		f.onCall()
 	}
@@ -1007,5 +1013,18 @@ func TestWriteFileSandboxRecovery(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("应重试一次（2 次 WriteFile）: %d", calls)
+	}
+}
+
+// TestRunLoopHarnessErrorNoPanic 审计 #2：harness 错误时 res 为 nil——usage
+// 检查必须 nil 守卫（旧代码在 runErr 判断前解引用曾 panic）。
+func TestRunLoopHarnessErrorNoPanic(t *testing.T) {
+	st := &fakeStore{runs: map[string]*store.Run{"r_nil": {ID: "r_nil", SessionID: "s_nil"}}}
+	har := &fakeHarness{err: restate.ToTerminalError(fmt.Errorf("model 400"))}
+	deps := &Deps{Store: st, Harness: har, Sessions: &fakeSessions{state: SessionState{}}}
+	ctx := restate.WithMockContext(mocks.NewMockContext(t))
+	_, err := runLoop(ctx, deps, RunInput{SessionID: "s_nil", Input: "hi"}, "r_nil")
+	if err == nil {
+		t.Fatal("harness 错误应返回 error（且不 panic）")
 	}
 }

@@ -1072,3 +1072,22 @@ func TestListMessagesForRunExcludesCurrentRun(t *testing.T) {
 		t.Fatalf("本 run 非 user 消息应被排除（请求冻结）: %v %d 条", roles, len(msgs))
 	}
 }
+
+// TestGetRunProjectionCommand 审计 #3：GetRun 投影补 input/topic——幂等比较
+// 真实生效（生产同 key 不同 input 的 409 依赖此投影）。
+func TestGetRunProjectionCommand(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	rid := fmt.Sprintf("r_proj_%d", time.Now().UnixNano())
+	sid := fmt.Sprintf("s_proj_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, "org_proj", "o")
+	_ = s.CreateAgent(ctx, "a_pr", "org_proj", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, sid, "org_proj", "a_pr")
+	if _, err := s.CreateRunWithCommand(ctx, rid, sid, "原始输入", "话题X", nil, map[string]any{}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	row, err := s.GetRun(ctx, rid)
+	if err != nil || row.Input != "原始输入" || row.Topic != "话题X" {
+		t.Fatalf("GetRun 投影应含 input/topic: %+v err=%v", row, err)
+	}
+}

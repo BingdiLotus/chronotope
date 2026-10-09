@@ -109,7 +109,7 @@ async def _safe_stream(req: p.RunRequest, llm: LLMProvider):
         yield llm.stream_error_chunk(f"model stream failed: {exc}")
 
 
-async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, str]]:
+async def _run(req: p.RunRequest, llm: LLMProvider, beat_interval: float = 30.0) -> AsyncIterator[dict[str, str]]:
     """执行一段 agent 循环：模型流式调用 → delta 帧 → 工具分流 → done/交棒/error。"""
 
     if req.protocol not in p.SUPPORTED_PROTOCOLS:
@@ -138,7 +138,12 @@ async def _run(req: p.RunRequest, llm: LLMProvider) -> AsyncIterator[dict[str, s
         usage = p.LLMUsage()
 
         stream_iter = _safe_stream(req, llm)
-        async for chunk in _stream_frames(stream_iter, p, 30.0):
+        async for chunk in _stream_frames(stream_iter, p, beat_interval):
+            if isinstance(chunk, dict):
+                # 心跳帧（_stream_frames 的 beat 产出 SSE dict）——直接透传，
+                # 不得按 StreamChunk 解引用（审计 #1：chunk.delta 曾 AttributeError）
+                yield chunk
+                continue
             if getattr(chunk, "error", None):
                 yield _sse(p.error("model_stream_failed", str(chunk.error)))
                 return
