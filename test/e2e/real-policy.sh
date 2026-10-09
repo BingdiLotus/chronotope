@@ -67,9 +67,11 @@ curl -fsS -m 300 -X POST "$API/sessions/$SID2/runs" -H 'content-type: applicatio
 RUN2=$!
 for i in $(seq 1 120); do grep -q '"type":"run.awaiting_approval"' /tmp/rpol-ttl.out 2>/dev/null && break; sleep 2; done
 RID2=$(python3 -c 'import json; t=open("/tmp/rpol-ttl.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["run_id"] for e in m if e["type"]=="run.awaiting_approval"][-1])')
+sleep 1
 sleep 6
+DIGEST2=$(python3 -c 'import json; t=open("/tmp/rpol-ttl.out").read(); m=[json.loads(l[6:]) for l in t.splitlines() if l.startswith("data: ")]; print([e["payload"].get("action_digest","") for e in m if e["type"]=="run.awaiting_approval"][-1])')
 curl -sS -o /dev/null -X POST "$API/webhooks/approval/$RID2" -H 'content-type: application/json' \
-  -d '{"payload":"approve","approver":"alice"}'
+  -d "{\"payload\":\"approve\",\"approver\":\"alice\",\"action_digest\":\"$DIGEST2\"}"
 wait "$RUN2" || true
 sleep 2
 kill "$SSE2" 2>/dev/null || true
