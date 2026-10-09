@@ -499,6 +499,26 @@ func (s *Server) deleteExec(w http.ResponseWriter, r *http.Request) {
 
 // externalize 把大输出写到宿主机工作区文件，返回 file:// 引用（RustFS 已落地）。
 func (s *Server) externalize(sandboxID, body string) (string, error) {
+	// E1b：大输出对象化（blob 上传返回 blob 引用——跨 Host 恢复的 manifest
+	// 一致性；Blob 不可用回退 file://）
+	if s.Blob != nil {
+		if sb, err := s.Store.GetSandbox(context.Background(), sandboxID); err == nil && sb.SessionID != "" {
+			orgID := ""
+			if oid, oErr := s.Store.SessionOrg(context.Background(), sb.SessionID); oErr == nil {
+				orgID = oid
+			}
+			tmp, err := os.CreateTemp("", "chronotope-output-*")
+			if err == nil {
+				if _, wErr := tmp.Write([]byte(body)); wErr == nil && tmp.Close() == nil {
+					if hash, _, pErr := s.Blob.PutFile(context.Background(), orgID, sb.SessionID, tmp.Name()); pErr == nil {
+						os.Remove(tmp.Name())
+						return "blob:" + hash, nil
+					}
+				}
+				os.Remove(tmp.Name())
+			}
+		}
+	}
 	path := fmt.Sprintf("%s/%s/output-%d.txt", strings.TrimRight(s.WorkspaceRoot, "/"), sandboxID, time.Now().UnixNano())
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return "", fmt.Errorf("externalize output: %w", err)
@@ -636,6 +656,14 @@ func (s *Server) restoreFromBlob(ctx context.Context, sb *store.SandboxRow) erro
 		os.Remove(tmp.Name())
 		if err != nil {
 			return err
+		}
+		// E1a：恢复 SHA/size 校验（checkpoint 一致 manifest——下载对象与
+		// 索引行的 hash/size 不符即报错，不写入沙箱）
+		got := sha256.Sum256(data)
+		gotHash := hex.EncodeToString(got[:])
+		if gotHash != f.Hash || int64(len(data)) != f.Size {
+			return fmt.Errorf("blob: manifest 不一致 %s: hash %s≠%s size %d≠%d",
+				f.Path, gotHash, f.Hash, len(data), f.Size)
 		}
 		if err := s.Driver.WriteFile(ctx, sb.SandboxID, f.Path, data); err != nil {
 			return fmt.Errorf("blob: write sandbox %s: %w", f.Path, err)

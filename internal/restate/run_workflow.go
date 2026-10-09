@@ -458,15 +458,15 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 			})
-			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCompleted)
 			releaseLease()
-			// 交付清单（W8 后置 outbox：投递方轮询消费；run_id 唯一幂等）
+			// E2：终态原子性——canonical terminal + 交付结果引用同事务
+			//（deliverable 失败不再被吞：终态与交付要么同存要么同无）
 			payload, _ := json.Marshal(map[string]any{
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 				"tokens_in": accTokens, "compute_seconds": accCompute,
 			})
-			if err := deps.Store.CreateDeliverable(ctx, runID, in.SessionID, "run_completed", payload); err != nil {
-				slog.Default().Warn("outbox 写入失败（不阻断 run）", "run_id", runID, "err", err)
+			if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
+				return RunOutput{}, restate.ToTerminalError(err)
 			}
 			// 记忆消化（run 结束后；失败不影响主流程——内部已吞错）
 			_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)

@@ -63,6 +63,7 @@ type Store interface {
 	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 	AdmissionState(ctx context.Context, runID string) (string, error)
+	FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error
 	HasMCPAllowlist(ctx context.Context, tenantID, server string) (bool, error)
 	// 共享知识检索（期 3 §D：tenant 级 pgvector）
 	RetrieveKnowledge(ctx context.Context, tenantID string, embedding []float32, topK int) ([]store.KnowledgeItem, error)

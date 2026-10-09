@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"time"
 )
 
@@ -59,6 +60,36 @@ func (s *Store) MarkDeliverableDelivered(ctx context.Context, id int64) error {
 	const q = `UPDATE deliverables SET delivered_at = now() WHERE id = $1 AND delivered_at IS NULL`
 	if _, err := s.Pool.Exec(ctx, q, id); err != nil {
 		return fmt.Errorf("store: mark deliverables delivered: %w", err)
+	}
+	return nil
+}
+
+// FinalizeRun E2：终态原子性——run 终态状态 + deliverable 结果引用同事务
+// （canonical terminal 与 owner outbox 的原子提交——deliverable 失败不再被吞，
+// 终态与交付要么同存要么同无）。
+func (s *Store) FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: finalize begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	const q = `
+UPDATE runs SET status = $2,
+  started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
+  finished_at = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END
+WHERE id = $1`
+	if _, err := tx.Exec(ctx, q, runID, string(status)); err != nil {
+		return fmt.Errorf("store: finalize status: %w", err)
+	}
+	const dq = `
+INSERT INTO deliverables (run_id, session_id, kind, payload)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (run_id) DO NOTHING`
+	if _, err := tx.Exec(ctx, dq, runID, sessionID, kind, payload); err != nil {
+		return fmt.Errorf("store: finalize deliverable: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: finalize commit: %w", err)
 	}
 	return nil
 }

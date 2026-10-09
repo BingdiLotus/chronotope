@@ -33,6 +33,7 @@ type storedEvent struct {
 
 type fakeStore struct {
 	llmPrepared         int
+	finalized           []string
 	knowledge           []store.KnowledgeItem
 	allowlistAllowed    map[string]bool
 	allowlistConfigured map[string]bool
@@ -121,6 +122,14 @@ func (f *fakeStore) ListCallsForRun(_ context.Context, _ string) ([]map[string]a
 }
 
 func (f *fakeStore) AdmissionState(_ context.Context, _ string) (string, error) { return "", nil }
+
+func (f *fakeStore) FinalizeRun(_ context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error {
+	f.finalized = append(f.finalized, runID+":"+string(status)+":"+kind)
+	if r, ok := f.runs[runID]; ok {
+		r.Status = status
+	}
+	return nil
+}
 
 func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int) (*store.LLMCallRow, error) {
 	f.llmPrepared++
@@ -723,8 +732,8 @@ func TestRunLoopWritesOutbox(t *testing.T) {
 	if err != nil || out.Final != "交付完成。" {
 		t.Fatalf("run: %+v err=%v", out, err)
 	}
-	if len(st.deliverables) != 1 || st.deliverables[0]["kind"] != "run_completed" || !strings.Contains(st.deliverables[0]["payload"].(string), "交付完成") {
-		t.Fatalf("交付清单应一行: %+v", st.deliverables)
+	if len(st.finalized) != 1 || !strings.HasPrefix(st.finalized[0], "r_1:completed:run_completed") {
+		t.Fatalf("终态原子性应一行（status+deliverable 同事务）: %+v", st.finalized)
 	}
 }
 
