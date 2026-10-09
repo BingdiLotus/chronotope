@@ -107,8 +107,17 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 			return "expired", nil
 		}
 	}
-	// 审计 C1：决议带 approver（runLoop 派发前重查集合——撤权即时拒绝）
-	decision, _ := json.Marshal(map[string]any{"approved": true, "approver": in.Approver, "payload": in.Payload})
+	// 审计 C1：决议带 approver（runLoop 派发前重查集合——撤权即时拒绝）；
+	// 显式拒绝（payload 为 {"approved":false} JSON）保持拒绝
+	var pd struct {
+		Approved *bool `json:"approved"`
+	}
+	_ = json.Unmarshal([]byte(in.Payload), &pd)
+	approved := true
+	if pd.Approved != nil {
+		approved = *pd.Approved
+	}
+	decision, _ := json.Marshal(map[string]any{"approved": approved, "approver": in.Approver, "payload": in.Payload})
 	restate.ResolveAwakeable[string](ctx, state.PendingAwakeable, string(decision))
 	// 审计事件：审批者与决议留痕（幂等 dedupe 按 run）
 	audit, _ := json.Marshal(map[string]any{
