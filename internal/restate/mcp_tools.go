@@ -92,7 +92,10 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 		// 审计 4.1 仲裁：账本失败零派发；unknown 停派发（SDK 重试不得覆盖）
 		row, err := deps.Store.PutMCPCallPrepared(rc, runID, step, server, tool)
 		if err != nil {
-			return "", fmt.Errorf("mcp 账本 prepare 失败（零派发）: %w", err)
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 prepare 失败（零派发）: %w", err))
+		}
+		if row == nil {
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 prepare 无行（零派发）"))
 		}
 		if row.State == "result" {
 			return "", fmt.Errorf("mcp 账本已有结果（不重派发）")
@@ -106,7 +109,7 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 			errMsg = err.Error()
 		}
 		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, errMsg); lErr != nil {
-			return "", fmt.Errorf("mcp 账本 result 失败: %w", lErr)
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 result 失败: %w", lErr))
 		}
 		return r, err
 	}, restate.WithName(StepName("mcp", step, tc.Name)))
