@@ -28,6 +28,7 @@ const maxInlineOutput = 256 * 1024
 type SandboxStore interface {
 	UpsertSandbox(ctx context.Context, sb *store.SandboxRow) error
 	GetSandbox(ctx context.Context, sandboxID string) (*store.SandboxRow, error)
+	GetSandboxBySession(ctx context.Context, sessionID string) (*store.SandboxRow, error)
 	UpdateSandboxStatus(ctx context.Context, sandboxID, status string) error
 	UpdateSandboxTier(ctx context.Context, sandboxID string, tier int, snapshotRef *string) error
 	GetExec(ctx context.Context, idempotencyKey string) (*store.ExecRow, error)
@@ -180,6 +181,31 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(req.RestoreFrom, "blob:") {
 		blobRestore = true
 		req.RestoreFrom = ""
+	}
+	// F1c：tar 段的 blob:<hash> → 下载到本地 tmp（跨 Host 恢复——driver 只认
+	// 本地 tar 路径；三段式 img|digest|tar）
+	if s.Blob != nil {
+		if parts := strings.Split(req.RestoreFrom, "|"); len(parts) == 3 && strings.HasPrefix(parts[2], "blob:") {
+			if sbRow, sErr := s.Store.GetSandboxBySession(r.Context(), req.SessionID); sErr == nil {
+				orgID := ""
+				if oid, oErr := s.Store.SessionOrg(r.Context(), req.SessionID); oErr == nil {
+					orgID = oid
+				}
+				tmp, tErr := os.CreateTemp("", "chronotope-restore-*.tar")
+				if tErr == nil {
+					tmp.Close()
+					if gErr := s.Blob.GetFile(r.Context(), orgID, req.SessionID, strings.TrimPrefix(parts[2], "blob:"), tmp.Name()); gErr == nil {
+						req.RestoreFrom = parts[0] + "|" + parts[1] + "|" + tmp.Name()
+						defer os.Remove(tmp.Name())
+					} else {
+						os.Remove(tmp.Name())
+						s.Logger.Warn("快照 tar blob 下载失败（回退本地路径）", "hash", parts[2], "err", gErr)
+					}
+				}
+			} else {
+				_ = sbRow
+			}
+		}
 	}
 	s.Logger.Info("createSandbox: 请求", "session", req.SessionID, "blob_restore", blobRestore, "restore", req.RestoreFrom)
 	sb, err := s.Driver.CreateSandbox(r.Context(), req)
@@ -743,6 +769,21 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
+	}
+	// F1c：tar 上传 blob（跨 Host 传输——ref 的 tar 段换 blob:<hash>；上传
+	// 失败保持本地 tar 路径——单 Host 恢复仍可用）
+	if s.Blob != nil {
+		if parts := strings.Split(ref, "|"); len(parts) == 3 && parts[2] != "" {
+			if sb, sErr := s.Store.GetSandbox(r.Context(), id); sErr == nil && sb.SessionID != "" {
+				orgID := ""
+				if oid, oErr := s.Store.SessionOrg(r.Context(), sb.SessionID); oErr == nil {
+					orgID = oid
+				}
+				if hash, _, pErr := s.Blob.PutFile(r.Context(), orgID, sb.SessionID, parts[2]); pErr == nil {
+					ref = parts[0] + "|" + parts[1] + "|blob:" + hash
+				}
+			}
+		}
 	}
 	_ = s.Store.UpdateSandboxStatus(r.Context(), id, "snapshotted")
 	_ = s.Store.UpdateSandboxTier(r.Context(), id, 2, &ref)

@@ -49,9 +49,6 @@ type DockerDriver struct {
 	// SnapshotRoot 快照产物根（volume.tar 与工作区解耦——销毁沙箱不清快照；
 	// 真实 e2e 并发销毁实证 ENOENT）
 	SnapshotRoot string
-	// restoreTar/restoreID 暂存待恢复的卷 tar（CreateSandbox 创建后解回；单请求内）。
-	restoreTar string
-	restoreID  string
 }
 
 // NewDockerDriver 构造 docker driver（workspaceRoot 为空时用系统临时目录）。
@@ -85,16 +82,22 @@ func (d *DockerDriver) CreateSandbox(ctx context.Context, req CreateSandboxReque
 		"-e", "SANDBOX_ID=" + id,
 		"-v", id + ":/workspace",
 	}
+	// F1b：恢复 tar 请求级局部（共享字段的并发串扰关闭）
+	var restoreTar, restoreID string
 	if req.RestoreFrom != "" {
 		// Tier2 快照恢复：镜像 + 卷内容（评审 #7——卷不进镜像，显式解回）
 		img, tarPath, found := strings.Cut(req.RestoreFrom, "|")
 		if !found {
 			img = req.RestoreFrom // 兼容旧 ref（仅镜像）
 		}
+		// F1a：ref 三段式 img|digest|tar（digest 空 = 旧两段兼容）
+		if parts := strings.Split(tarPath, "|"); len(parts) == 2 {
+			tarPath = parts[1]
+		}
 		args = append(args, "--entrypoint", "sleep")
 		args = append(args, img, "infinity")
-		d.restoreTar = tarPath
-		d.restoreID = id
+		restoreTar = tarPath
+		restoreID = id
 	} else {
 		args = append(args, req.Image, "sleep", "infinity")
 	}
@@ -103,17 +106,17 @@ func (d *DockerDriver) CreateSandbox(ctx context.Context, req CreateSandboxReque
 		return nil, fmt.Errorf("docker create sandbox: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	// 快照恢复：卷内容解回（评审 #7——named volume 不进镜像，必须显式恢复）
-	if d.restoreID == id && d.restoreTar != "" {
+	if restoreID == id && restoreTar != "" {
 		if out, err := d.Runner.Run(ctx, "exec", id, "mkdir", "-p", "/workspace"); err != nil {
 			return nil, fmt.Errorf("restore mkdir: %w: %s", err, strings.TrimSpace(string(out)))
 		}
-		if out, err := d.Runner.Run(ctx, "cp", d.restoreTar, id+":/workspace/restore.tar"); err != nil {
+		if out, err := d.Runner.Run(ctx, "cp", restoreTar, id+":/workspace/restore.tar"); err != nil {
 			return nil, fmt.Errorf("restore cp: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		if out, err := d.Runner.Run(ctx, "exec", id, "tar", "-xf", "/workspace/restore.tar", "-C", "/workspace"); err != nil {
 			return nil, fmt.Errorf("restore untar: %w: %s", err, strings.TrimSpace(string(out)))
 		}
-		d.restoreID, d.restoreTar = "", ""
+		restoreID, restoreTar = "", ""
 	}
 	return &Sandbox{ID: id, Driver: "docker"}, nil
 }
@@ -226,6 +229,11 @@ func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, 
 	if out, err := d.Runner.Run(ctx, "commit", sandboxID, img); err != nil {
 		return "", fmt.Errorf("docker commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	// F1a：镜像内容 Id（digest 固定——恢复时校验；inspect 失败不阻断）
+	digest := ""
+	if out, err := d.Runner.Run(ctx, "image", "inspect", "--format", "{{.Id}}", img); err == nil {
+		digest = strings.TrimSpace(string(out))
+	}
 	// 卷内容打包（含 externalize 大输出——它们在 WorkspaceRoot 下同目录）
 	if err := d.prepareHostDir(sandboxID); err != nil {
 		return "", err
@@ -243,7 +251,7 @@ func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, 
 		"alpine:3.20", "tar", "-cf", "/backup/volume.tar", "-C", "/workspace", "."); err != nil {
 		return "", fmt.Errorf("snapshot volume tar: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return img + "|" + tarPath, nil
+	return img + "|" + digest + "|" + tarPath, nil
 }
 
 func (d *DockerDriver) Destroy(ctx context.Context, sandboxID string) error {

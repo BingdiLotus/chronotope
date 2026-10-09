@@ -113,6 +113,15 @@ func (f *fakeSBStore) UpsertSandbox(_ context.Context, sb *store.SandboxRow) err
 	f.sandboxes[sb.SandboxID] = sb
 	return nil
 }
+func (f *fakeSBStore) GetSandboxBySession(_ context.Context, sessionID string) (*store.SandboxRow, error) {
+	for _, sb := range f.sandboxes {
+		if sb.SessionID == sessionID {
+			return sb, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 func (f *fakeSBStore) GetSandbox(_ context.Context, id string) (*store.SandboxRow, error) {
 	sb, ok := f.sandboxes[id]
 	if !ok {
