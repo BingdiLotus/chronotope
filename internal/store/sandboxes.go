@@ -130,30 +130,33 @@ FROM sandbox_execs WHERE idempotency_key = $1`
 // PutExecPrepared 执行前 claim（prepared）。返回 won：本轮插入成功 = 获得单执行权
 // ——并发同键两请求都先 GetExec cache miss 时，只有一个 INSERT 生效（审计 #1：
 // 旧实现 ON CONFLICT DO NOTHING 无条件返回 nil，败者无感知 → 双执行）。
-func (s *Store) PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, error) {
+func (s *Store) PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, *time.Time, error) {
 	const q = `
 INSERT INTO sandbox_execs (idempotency_key, sandbox_id, result, expires_at, state, input_digest, prepared_at)
 VALUES ($1, $2, NULL, now() + interval '30 days', 'prepared', $3, now())
 ON CONFLICT (idempotency_key) DO NOTHING
-RETURNING idempotency_key`
+RETURNING idempotency_key, prepared_at`
 	var returned string
-	if err := s.Pool.QueryRow(ctx, q, idempotencyKey, sandboxID, inputDigest).Scan(&returned); err != nil {
+	var pa time.Time
+	if err := s.Pool.QueryRow(ctx, q, idempotencyKey, sandboxID, inputDigest).Scan(&returned, &pa); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil // 未插入 = 败者（已有 prepared 行）
+			return false, nil, nil // 未插入 = 败者（已有 prepared 行）
 		}
-		return false, fmt.Errorf("store: prepared exec: %w", err)
+		return false, nil, fmt.Errorf("store: prepared exec: %w", err)
 	}
-	return true, nil
+	return true, &pa, nil
 }
 
 // PutExecDone 执行完成落账（状态 done；失败返回错误——调用方必须发 error 帧，
 // 不得回成功 exit，否则未知窗口内重试会双执行，评审 #1）。
-func (s *Store) PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error {
+// 审计准入 #2：prepared_at 条件——旧 holder 的迟到结果（prepared 已换代）
+// 不得覆盖 canonical done。
+func (s *Store) PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage, preparedAt *time.Time) error {
 	const q = `
 UPDATE sandbox_execs
 SET result = $3, state = 'done', expires_at = now() + interval '30 days', sandbox_id = $2
-WHERE idempotency_key = $1`
-	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result); err != nil {
+WHERE idempotency_key = $1 AND prepared_at = $4`
+	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result, preparedAt); err != nil {
 		return fmt.Errorf("store: done exec: %w", err)
 	}
 	return nil

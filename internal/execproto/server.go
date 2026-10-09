@@ -32,8 +32,8 @@ type SandboxStore interface {
 	UpdateSandboxTier(ctx context.Context, sandboxID string, tier int, snapshotRef *string) error
 	GetExec(ctx context.Context, idempotencyKey string) (*store.ExecRow, error)
 	// 执行状态机（评审 #1：prepared claim → done 落账）
-	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, error)
-	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage) error
+	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, *time.Time, error)
+	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage, preparedAt *time.Time) error
 	// ComputeLease（正确性二期 ⑨）
 	AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*store.LeaseRow, error)
 	ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error)
@@ -70,10 +70,11 @@ func (s *Server) GC(ctx context.Context) (int, error) {
 	}
 	cleaned := 0
 	for _, sb := range expired {
-		// 审计 P0-3：销毁前二次 lease 校验（扫描与销毁间的窗口——扫描后新建
-		// 的 lease 被拦下；无 quiesce 曾杀活跃执行）
-		if active, lErr := s.Store.HasActiveLease(ctx, sb.SandboxID); lErr == nil && active {
-			s.Logger.Warn("gc: 沙箱有活跃租约，跳过本轮", "sandbox", sb.SandboxID)
+		// 审计准入 #3：原子 quiesce——Acquire(gc-reclaim) 的 owner CAS 抢占
+		//（活跃租约的换 owner 被 CAS 拒绝 → skip；查询错误同样 skip——
+		// fail closed：DB 故障不得解释为「无人使用」继续销毁）
+		if _, qErr := s.Store.AcquireLease(ctx, sb.SandboxID, "gc-reclaim", time.Minute); qErr != nil {
+			s.Logger.Warn("gc: quiesce 未获得（活跃租约或查询失败），跳过", "sandbox", sb.SandboxID)
 			continue
 		}
 		// 容器名 = 沙箱 id（docker driver 约定）：无条件销毁（container_ref 缺失的
@@ -114,7 +115,8 @@ func (s *Server) Sweep(ctx context.Context) (int, error) {
 			shouldDestroy = true // 行已 destroyed 但容器未删成（历史尽力销毁）
 		case row.TTL != nil && time.Since(row.CreatedAt) > *row.TTL:
 			// 审计 P0-3：Sweep 的 TTL 分支查 lease（此前完全不查——可杀活跃执行）
-			if active, lErr := s.Store.HasActiveLease(ctx, id); lErr == nil && active {
+			// 审计准入 #3：TTL 分支同样 quiesce（CAS 抢占——失败即 skip）
+			if _, qErr := s.Store.AcquireLease(ctx, id, "gc-reclaim", time.Minute); qErr != nil {
 				continue
 			}
 			shouldDestroy = true // 已过期（GC 尚未轮到的残留）
@@ -278,14 +280,16 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ComputeLease（正确性二期 ⑨）：TTL 过期且无有效租约 → 409 lease expired
-	//（worker 走重建路径）。审计 P0-1：RunID 非空时 lease 持有者必须匹配
-	//（旧 owner 在 holder 换代后仍可 dispatch 的反例关闭）。
+	//（worker 走重建路径）。审计准入 #1：holder 校验无条件执行（此前只在
+	// TTL 过期分支——fresh TTL/TTL 空绕过；每次执行绑定当前 owner）。
 	if sb.TTL != nil && time.Since(sb.CreatedAt) > *sb.TTL {
 		lease, err := s.Store.GetLease(r.Context(), req.SandboxID)
 		if err != nil || lease == nil || time.Now().After(lease.ExpiresAt) {
 			writeError(w, http.StatusConflict, 409, "sandbox lease expired")
 			return
 		}
+	}
+	if lease, err := s.Store.GetLease(r.Context(), req.SandboxID); err == nil && lease != nil && !time.Now().After(lease.ExpiresAt) {
 		if req.RunID != "" && lease.RunID != req.RunID {
 			writeError(w, http.StatusConflict, 409, "lease holder 不匹配（旧 owner 的 dispatch 被拒）")
 			return
@@ -294,8 +298,9 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 
 	// 执行前 claim（prepared）——获胜者执行；败者（并发同键第二个请求，
 	// 都过 GetExec cache miss 后只有一人插入成功——审计 #1 双执行反例）409
+	var preparedAt *time.Time
 	if req.IdempotencyKey != "" {
-		won, err := s.Store.PutExecPrepared(r.Context(), req.IdempotencyKey, req.SandboxID, inputDigest(req))
+		won, pa, err := s.Store.PutExecPrepared(r.Context(), req.IdempotencyKey, req.SandboxID, inputDigest(req))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, 500, err.Error())
 			return
@@ -304,6 +309,7 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, 409, "同键执行进行中（claim 未获胜——in-flight）")
 			return
 		}
+		preparedAt = pa
 	}
 
 	// SSE 流式日志 + exit 结果帧
@@ -344,7 +350,7 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(cached)
 		// 落账失败必须发 error 帧（不回成功 exit）：否则未知窗口内重试会双执行
 		// （评审 #1——曾仅 Warn 后继续发成功 exit）
-		if err := s.Store.PutExecDone(r.Context(), req.IdempotencyKey, req.SandboxID, raw); err != nil {
+		if err := s.Store.PutExecDone(r.Context(), req.IdempotencyKey, req.SandboxID, raw, preparedAt); err != nil {
 			s.Logger.Error("exec 落账失败（发 error 帧，重试由客户端 unknown 停派发）", "err", err)
 			s.writeSSE(w, fl, map[string]any{"type": "error", "payload": map[string]any{"message": "exec result persistence failed: " + err.Error()}})
 			return

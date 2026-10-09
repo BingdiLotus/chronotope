@@ -142,6 +142,10 @@ func (f *fakeSBStore) AcquireLease(_ context.Context, sandboxID, runID string, _
 		f.leases = map[string]*store.LeaseRow{}
 	}
 	row := f.leases[sandboxID]
+	// owner CAS：活跃租约且 holder 不同 → 拒绝（gc-reclaim 的 quiesce 失败）
+	if row != nil && row.ExpiresAt.After(time.Now()) && row.RunID != runID {
+		return nil, store.ErrLeaseOwnerMismatch
+	}
 	if row == nil {
 		row = &store.LeaseRow{SandboxID: sandboxID, RunID: runID, Generation: 1}
 	} else {
@@ -200,14 +204,15 @@ func (f *fakeSBStore) ListWorkspaceFiles(_ context.Context, sessionID string, _ 
 	return out, nil
 }
 
-func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) (bool, error) {
+func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest string) (bool, *time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prepared[key] = sandboxID
-	return true, nil
+	now := time.Now()
+	return true, &now, nil
 }
 
-func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, result json.RawMessage) error {
+func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, result json.RawMessage, _ *time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.execs[key] = result
