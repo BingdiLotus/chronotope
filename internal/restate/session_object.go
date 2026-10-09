@@ -77,12 +77,17 @@ func attachSandbox(ctx restate.ObjectContext, sandboxID string) (SessionState, e
 }
 
 // cancelSessionRun 置取消标志（runLoop 下一步检查点生效——非抢占式取消）。
+// 审计 #7：等待中的 cancel 主动解除挂起审批的 awakeable（resolve 拒绝——
+// 挂起的 run 立即恢复而非等 TTL/批准）。
 func cancelSessionRun(ctx restate.ObjectContext, _ restate.Void) (SessionState, error) {
 	state, err := getSessionState(ctx, restate.Void{})
 	if err != nil {
 		return SessionState{}, err
 	}
 	state.CancelRequested = true
+	if state.PendingAwakeable != "" {
+		restate.ResolveAwakeable[string](ctx, state.PendingAwakeable, `{"approved":false,"note":"canceled"}`)
+	}
 	restate.Set(ctx, sessionStateKey, state)
 	return state, nil
 }

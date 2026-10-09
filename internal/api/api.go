@@ -105,6 +105,8 @@ type HarnessEmbedder interface {
 
 // Handler 是网关依赖集。
 type Handler struct {
+	// AuthMode 认证模式（审计 #6：approvalWebhook 按模式 fail closed）。
+	AuthMode string
 	// Blob 是冷层归档的 S3 门面（期 2 §B；nil = 归档未启用）。
 	Blob *blobstore.BlobStore
 	// Embedder 文本嵌入（期 3 §D：共享知识写入的向量来源；nil = 需显式向量）。

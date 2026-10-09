@@ -77,7 +77,12 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 		approvers, ttl, rErr := deps.ApprovalRouter.Route(ctx, policy.ApprovalRequest{
 			TenantID: sess.OrgID, Tool: state.PendingTool, Class: 2, SessionID: run.SessionID, RunID: in.RunID,
 		})
-		if rErr == nil && len(approvers) > 0 {
+		if rErr != nil {
+			// 审计 #6：policy/store 错误 fail closed（此前倾向放行——授权
+			// 故障不得静默降级为全放行）
+			return "", restate.ToTerminalError(fmt.Errorf("审批策略查询失败（fail closed）: %w", rErr))
+		}
+		if len(approvers) > 0 {
 
 			allowed := in.Approver != "" && containsStr(approvers, in.Approver)
 			if !allowed {

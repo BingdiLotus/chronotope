@@ -139,7 +139,12 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
-	msgs, err := buildMessages(ctx, deps.Store, deps.Harness, in, runID, cfg, state.Skills)
+	// 审计 #5：请求冻结——整个组装 journaled（重放回放缓存的消息切片，
+	// 不再重读 PG 历史/embed/知识检索/摘要/记忆——崩溃后外围更新不漂移
+	// 同一未确认 step 的 ModelRequest）
+	msgs, err := restate.Run(ctx, func(rc restate.RunContext) ([]runs.Message, error) {
+		return buildMessages(rc, deps.Store, deps.Harness, in, runID, cfg, state.Skills)
+	}, restate.WithName("build-messages"))
 	if err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
 	}
@@ -336,6 +341,16 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 					decision, err := awaitApproval(ctx, deps, in, runID, step, tc, emit, 2)
 					if err != nil {
 						return RunOutput{}, restate.ToTerminalError(fmt.Errorf("await approval (class 2): %w", err))
+					}
+					// 审计 #7：approved 但已取消 → 不派发（重验取消——此前
+					// 直接派发，已取消却先产生新效果的反例关闭）
+					if cur, cErr := deps.Sessions.GetState(ctx, in.SessionID); cErr == nil && cur.CancelRequested {
+						_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCanceled, "", "", map[string]any{
+							"step": step, "reason": "cancel_after_approval",
+						})
+						_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
+						_ = deps.Sessions.ClearCancel(ctx, in.SessionID)
+						return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
 					}
 					if !approvalGranted(decision) {
 						_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{

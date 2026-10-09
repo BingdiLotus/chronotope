@@ -200,8 +200,11 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	err = h.Ingress.Call(r.Context(), "/run_workflow/"+runID+"/run", http.MethodPost,
 		map[string]any{"session_id": sessionID, "input": req.Input, "topic": req.Topic}, &out)
 	if err != nil {
-		_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunFailed)
-		writeError(w, http.StatusBadGateway, 502, "run_workflow failed: "+err.Error())
+		// 审计 #4：HTTP 未知 ≠ canonical 失败——ingress 超时/断开时 workflow
+		// 可能已被 Restate 接纳并继续运行（长审批的 DeadlineExceeded 反例：
+		// 写 failed 释放 active 唯一约束会让另一 Run 进入同 Session）。worker
+		// 的 terminal 写是唯一权威——这里只回 502，状态按 GetRun 查询。
+		writeError(w, http.StatusBadGateway, 502, "run_workflow 提交后无法同步确认（按 run_id 查询状态）: "+err.Error())
 		return
 	}
 	// 审计 #9：workflow canceled 曾无条件被写 completed——按 Canceled 写
@@ -324,12 +327,15 @@ func (h *Handler) approvalWebhook(w http.ResponseWriter, r *http.Request) {
 		Approver     string `json:"approver"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	// 审计 #8：approver 从认证 principal 导出（auth on 时自报不可信）；
-	// auth off（dev/e2e）保留自报——生产 API_AUTH_MODE=on 必配
+	// 审计 #8/#6：approver 从认证 principal 导出；auth on 无 principal →
+	// 401 fail closed（此前自报 approver 非空即放行——授权链绕过实证）
 	if p := PrincipalFrom(r.Context()); p != "" {
 		req.Approver = p
-	} else if r.Header.Get("Authorization") == "" && req.Approver == "" {
-		writeError(w, http.StatusUnauthorized, 401, "approver 必填（auth off 自报；auth on 经认证导出）")
+	} else if h.AuthMode == "on" {
+		writeError(w, http.StatusUnauthorized, 401, "approver 必须经认证导出（API_AUTH_MODE=on）")
+		return
+	} else if req.Approver == "" {
+		writeError(w, http.StatusUnauthorized, 401, "approver 必填（auth off 自报）")
 		return
 	}
 

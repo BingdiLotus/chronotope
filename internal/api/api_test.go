@@ -542,9 +542,10 @@ func (f *fakeStore) addEvent(sessionID string, typ event.Type) int64 {
 
 // fakeIngress 记录调用并按路径回放结果。
 type fakeIngress struct {
-	mu     sync.Mutex
-	calls  []string
-	runOut struct {
+	mu      sync.Mutex
+	calls   []string
+	failErr error
+	runOut  struct {
 		Final    string `json:"final"`
 		Steps    int    `json:"steps"`
 		Canceled bool   `json:"canceled"`
@@ -555,6 +556,9 @@ func (f *fakeIngress) Call(_ context.Context, path, method string, body any, out
 	f.mu.Lock()
 	f.calls = append(f.calls, method+" "+path)
 	f.mu.Unlock()
+	if f.failErr != nil {
+		return f.failErr
+	}
 	switch {
 	case strings.HasPrefix(path, "/session_object/"):
 		if m, ok := out.(*struct {
@@ -1515,5 +1519,32 @@ func TestSubmitRunCanceledCanonical(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Status != "canceled" {
 		t.Fatalf("canceled workflow 应返回 canceled 状态: %+v err=%v", resp, err)
+	}
+}
+
+// TestSubmitRunIngressErrorKeepsRunning 审计 #4：ingress 错误（同步超时/断开）
+// 不再无条件写 failed——workflow 可能已被接纳继续运行（长审批反例：写
+// failed 释放 active 唯一约束让另一 Run 进入）。
+func TestSubmitRunIngressErrorKeepsRunning(t *testing.T) {
+	h, fs, ing := setup(t)
+	ing.failErr = fmt.Errorf("context deadline exceeded")
+	_, sessionID := seedAgentSession(t, h, fs)
+	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs",
+		`{"input":"hi"}`, map[string]string{"Idempotency-Key": "k-ingress", "Content-Type": "application/json"})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("ingress 错误应 502，得 %d", rec.Code)
+	}
+	// canonical 状态仍 running（未被 HTTP 错误覆盖为 failed）——fakeStore 的
+	// run 由 CreateRun 建为 queued、submit 置 running；失败覆盖会写 failed
+	failed := false
+	fs.mu.Lock()
+	for _, r := range fs.runs {
+		if r.Status == sessionapi.RunFailed {
+			failed = true
+		}
+	}
+	fs.mu.Unlock()
+	if failed {
+		t.Fatal("ingress 错误不得把 run 写 failed（worker terminal 写是权威）")
 	}
 }
