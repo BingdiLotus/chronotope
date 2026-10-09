@@ -34,6 +34,8 @@ type Store interface {
 	SoftDeleteSession(ctx context.Context, id string) error
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	CreateRunWithCommand(ctx context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (bool, error)
+	MarkAdmissionDispatched(ctx context.Context, runID string) error
+	ListPendingAdmissions(ctx context.Context, olderThan time.Duration, limit int) ([]store.AdmissionPending, error)
 	GetRun(ctx context.Context, id string) (*store.Run, error)
 	GetActiveRun(ctx context.Context, sessionID string) (*store.Run, error)
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error

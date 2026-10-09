@@ -93,3 +93,49 @@ WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4`
 	}
 	return nil
 }
+
+// AdmissionPending 是接纳派发的 pending 行（审计 B1——重投扫描的精确源）。
+type AdmissionPending struct {
+	RunID     string
+	SessionID string
+	Input     string
+	Topic     string
+}
+
+// MarkAdmissionDispatched 派发成功标 dispatched（handlers 的 ingress 成功后）。
+func (s *Store) MarkAdmissionDispatched(ctx context.Context, runID string) error {
+	const q = `UPDATE admission_outbox SET state = 'dispatched', dispatched_at = now() WHERE run_id = $1`
+	if _, err := s.Pool.Exec(ctx, q, runID); err != nil {
+		return fmt.Errorf("store: admission dispatched: %w", err)
+	}
+	return nil
+}
+
+// ListPendingAdmissions 扫 pending（派发前崩溃的孤儿——精确重投源；超时
+// 窗口防「在途派发」误重投）。
+func (s *Store) ListPendingAdmissions(ctx context.Context, olderThan time.Duration, limit int) ([]AdmissionPending, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	const q = `
+SELECT a.run_id, r.session_id, COALESCE(r.input, ''), COALESCE(r.topic, '')
+FROM admission_outbox a
+JOIN runs r ON r.id = a.run_id
+WHERE a.state = 'pending' AND a.created_at < now() - $1::interval
+ORDER BY a.created_at
+LIMIT $2`
+	rows, err := s.Pool.Query(ctx, q, fmt.Sprintf("%d seconds", int(olderThan.Seconds())), limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list pending admissions: %w", err)
+	}
+	defer rows.Close()
+	var out []AdmissionPending
+	for rows.Next() {
+		var a AdmissionPending
+		if err := rows.Scan(&a.RunID, &a.SessionID, &a.Input, &a.Topic); err != nil {
+			return nil, fmt.Errorf("store: scan pending admission: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

@@ -85,6 +85,8 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 		if len(approvers) > 0 {
 
 			allowed := in.Approver != "" && containsStr(approvers, in.Approver)
+			// 审计 C1：approvers 集合即当前授权（Route 每次现查——撤权 =
+			// 从集合移除，即时生效；批准时校验已含）
 			if !allowed {
 				denied, _ := json.Marshal(map[string]any{
 					"run_id": in.RunID, "approver": in.Approver, "reason": "approver_not_in_policy",

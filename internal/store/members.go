@@ -64,3 +64,14 @@ func (s *Store) RemoveMember(ctx context.Context, orgID, userID string) error {
 	}
 	return nil
 }
+
+// IsMember 判 user 是否为 org 成员（审计 C1：审批时的成员存在性重验——
+// 撤权后的批准拒绝）。
+func (s *Store) IsMember(ctx context.Context, orgID, userID string) (bool, error) {
+	const q = `SELECT EXISTS (SELECT 1 FROM members WHERE org_id = $1 AND user_id = $2)`
+	var ok bool
+	if err := s.Pool.QueryRow(ctx, q, orgID, userID).Scan(&ok); err != nil {
+		return false, fmt.Errorf("store: is member: %w", err)
+	}
+	return ok, nil
+}

@@ -59,6 +59,7 @@ type Store interface {
 	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg string) error
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool string) error
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, errMsg string) error
+	IsMember(ctx context.Context, orgID, userID string) (bool, error)
 	HasMCPAllowlist(ctx context.Context, tenantID, server string) (bool, error)
 	// 共享知识检索（期 3 §D：tenant 级 pgvector）
 	RetrieveKnowledge(ctx context.Context, tenantID string, embedding []float32, topK int) ([]store.KnowledgeItem, error)

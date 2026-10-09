@@ -112,6 +112,8 @@ func (f *fakeStore) HasMCPAllowlist(_ context.Context, _ string, server string) 
 	return ok, nil
 }
 
+func (f *fakeStore) IsMember(_ context.Context, _, _ string) (bool, error) { return true, nil }
+
 func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int) (*store.LLMCallRow, error) {
 	f.llmPrepared++
 	return &store.LLMCallRow{}, nil

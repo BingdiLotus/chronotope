@@ -194,6 +194,10 @@ INSERT INTO runs (id, session_id, trigger, status, bound, input, topic)
 VALUES ($1, $2, $3, 'queued', $4, $5, $6)
 ON CONFLICT (id) DO NOTHING
 RETURNING id`
+	// 审计 B1：admission outbox 同行事务（pending 派发契约——重投扫描的精确源）
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO admission_outbox (run_id, state) VALUES ($1, 'pending') ON CONFLICT (run_id) DO NOTHING`, id); err != nil {
+		return false, fmt.Errorf("store: admission outbox: %w", err)
+	}
 	var got string
 	err = s.Pool.QueryRow(ctx, q, id, sessionID, nullableRaw(trigger), boundJSON, nullIfEmpty(input), nullIfEmpty(topic)).Scan(&got)
 	if errors.Is(err, pgx.ErrNoRows) {

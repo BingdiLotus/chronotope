@@ -199,6 +199,9 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	}
 	err = h.Ingress.Call(r.Context(), "/run_workflow/"+runID+"/run", http.MethodPost,
 		map[string]any{"session_id": sessionID, "input": req.Input, "topic": req.Topic}, &out)
+	if err == nil {
+		_ = h.Store.MarkAdmissionDispatched(r.Context(), runID) // B1：派发确认
+	}
 	if err != nil {
 		// 审计 #4：HTTP 未知 ≠ canonical 失败——ingress 超时/断开时 workflow
 		// 可能已被 Restate 接纳并继续运行（长审批的 DeadlineExceeded 反例：

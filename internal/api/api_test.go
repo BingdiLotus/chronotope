@@ -140,6 +140,12 @@ func (f *fakeStore) SoftDeleteSession(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeStore) MarkAdmissionDispatched(_ context.Context, _ string) error { return nil }
+
+func (f *fakeStore) ListPendingAdmissions(_ context.Context, _ time.Duration, _ int) ([]store.AdmissionPending, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) CreateRunWithCommand(_ context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (bool, error) {
 	return f.CreateRun(context.Background(), id, sessionID, trigger, bound)
 }
