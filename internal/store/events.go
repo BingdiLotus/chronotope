@@ -172,13 +172,14 @@ func (s *Store) ListEventsWithChain(ctx context.Context, sessionID string, limit
 	var out []map[string]any
 	for rows.Next() {
 		var seq int64
-		var runID, typ, payload, prev, ev, hold string
+		var runID, typ, payload, prev, ev string
+		var hold bool
 		if err := rows.Scan(&seq, &runID, &typ, &payload, &prev, &ev, &hold); err != nil {
 			return nil, fmt.Errorf("store: audit scan: %w", err)
 		}
 		out = append(out, map[string]any{
 			"seq": seq, "run_id": runID, "type": typ, "payload": json.RawMessage(payload),
-			"prev_hash": prev, "event_hash": ev, "hold": hold == "true",
+			"prev_hash": prev, "event_hash": ev, "hold": hold,
 		})
 	}
 	return out, nil
