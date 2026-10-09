@@ -278,10 +278,10 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			// 审计 4.1 仲裁合同：账本写入失败 = 零次新派发；冲突读既存状态
 			row, err := deps.Store.PutLLMCallPrepared(rc, runID, step)
 			if err != nil {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err))
+				return nil, fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err)
 			}
 			if row == nil {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 无行（零派发）"))
+				return nil, fmt.Errorf("llm 账本 prepare 无行（零派发）")
 			}
 			if row.State == "result" {
 				// 同 operation 已有结果——不执行（dispatch_seq 已递增的证据）
@@ -292,18 +292,18 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 				return nil, fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）")
 			}
 			if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err))
+				return nil, fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err)
 			}
 			r, err := deps.Harness.Call(rc, req)
 			// 结果落账（usage 三字段 + unknown 状态——审计 #7 的账本化）
 			if r != nil {
 				unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
 				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, ""); lErr != nil {
-					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
+					return nil, fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr)
 				}
 			} else if err != nil {
 				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error()); lErr != nil {
-					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
+					return nil, fmt.Errorf("llm 账本 unknown 失败: %w", lErr)
 				}
 			}
 			return r, err
@@ -320,6 +320,11 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 				"reason": runErr.Error(),
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+			// 仲裁类错误（账本仲裁/停派发）terminal 化——SDK 重试循环关闭，
+			// 人工裁决入口（unknown 状态经 /calls 对账可见）
+			if strings.Contains(runErr.Error(), "停派发") || strings.Contains(runErr.Error(), "账本") {
+				return RunOutput{}, restate.ToTerminalError(runErr)
+			}
 			return RunOutput{}, runErr
 		}
 
