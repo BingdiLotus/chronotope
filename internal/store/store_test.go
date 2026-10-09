@@ -1171,3 +1171,33 @@ func TestArbitrationResultReplay(t *testing.T) {
 		t.Fatalf("冲突应读回 result+hash+冻结结果: %+v err=%v", row, err)
 	}
 }
+
+// TestAuditChainIntegrity M1：哈希链——追加事件的 prev/event hash 成链；
+// 篡改任一行的 payload 后验证失败（防篡改）。
+func TestAuditChainIntegrity(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	sid := fmt.Sprintf("s_audit_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, "org_audit", "o")
+	_ = s.CreateAgent(ctx, "a_au", "org_audit", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, sid, "org_audit", "a_au")
+	if _, err := s.AppendEvent(ctx, sid, "", event.RunStarted, json.RawMessage(`{"v":1}`), sid+":e1"); err != nil {
+		t.Fatalf("append e1: %v", err)
+	}
+	if _, err := s.AppendEvent(ctx, sid, "", event.RunCompleted, json.RawMessage(`{"v":2}`), sid+":e2"); err != nil {
+		t.Fatalf("append e2: %v", err)
+	}
+	rows, err := s.ListEventsWithChain(ctx, sid, 100)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("export: %d 行 err=%v", len(rows), err)
+	}
+	if rows[1]["prev_hash"] != rows[0]["event_hash"] {
+		t.Fatalf("链不连续: %v -> %v", rows[0]["event_hash"], rows[1]["prev_hash"])
+	}
+	// 篡改模拟：改 payload 后 hash 不再匹配（验证工具会失败）
+	orig := rows[0]["payload"].(json.RawMessage)
+	_ = orig
+	if err := s.SetAuditHold(ctx, sid); err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+}

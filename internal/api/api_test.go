@@ -148,6 +148,12 @@ func (f *fakeStore) AdmissionState(_ context.Context, _ string) (string, error) 
 	return "dispatched", nil
 }
 
+func (f *fakeStore) ListEventsWithChain(_ context.Context, _ string, _ int) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) SetAuditHold(_ context.Context, _ string) error { return nil }
+
 func (f *fakeStore) MarkAdmissionDispatched(_ context.Context, _ string) error { return nil }
 
 func (f *fakeStore) ListPendingAdmissions(_ context.Context, _ time.Duration, _ int) ([]store.AdmissionPending, error) {

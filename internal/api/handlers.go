@@ -1003,6 +1003,27 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// auditExport M1 审计导出（哈希链——审计师验证历史未改写）。
+func (h *Handler) auditExport(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	rows, err := h.Store.ListEventsWithChain(r.Context(), sessionID, 5000)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "events": rows})
+}
+
+// auditHold M1 法定保留（hold 行不可删——删除策略护栏）。
+func (h *Handler) auditHold(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	if err := h.Store.SetAuditHold(r.Context(), sessionID); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "hold": true})
+}
+
 // runCalls 效果账本对账（审计 A1/A2 的消费端：llm/mcp 账本行 + admission 状态）。
 func (h *Handler) runCalls(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")

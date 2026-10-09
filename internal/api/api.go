@@ -38,6 +38,8 @@ type Store interface {
 	ListPendingAdmissions(ctx context.Context, olderThan time.Duration, limit int) ([]store.AdmissionPending, error)
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 	AdmissionState(ctx context.Context, runID string) (string, error)
+	ListEventsWithChain(ctx context.Context, sessionID string, limit int) ([]map[string]any, error)
+	SetAuditHold(ctx context.Context, sessionID string) error
 	GetRun(ctx context.Context, id string) (*store.Run, error)
 	GetActiveRun(ctx context.Context, sessionID string) (*store.Run, error)
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error

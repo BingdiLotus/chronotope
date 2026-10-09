@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,13 +13,24 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// sha256HexEvent 事件哈希（M1：sha256(prev_hash || type || payload)——防篡改链）。
+func sha256HexEvent(prevHash string, typ event.Type, payload json.RawMessage) string {
+	h := sha256.New()
+	h.Write([]byte(prevHash))
+	h.Write([]byte("|"))
+	h.Write([]byte(typ))
+	h.Write([]byte("|"))
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // AppendEvent 幂等插入事件（append-only，契约规范 §5）。
 // dedupe_key 冲突时读回既有行 seq——重放重复发射被幂等吞掉，seq 允许 gap。
 // worker 是事件唯一写入者；api 只读投影（订阅分发与计量聚合）。
 func (s *Store) AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (seq int64, err error) {
 	const insert = `
-INSERT INTO events (session_id, run_id, type, payload, dedupe_key)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO events (session_id, run_id, type, payload, dedupe_key, prev_hash, event_hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (dedupe_key) DO NOTHING
 RETURNING id, seq`
 	// 事件与投递入队同事务（落地方案 §5 outbox 语义）：订阅方在事件提交的
@@ -29,8 +42,14 @@ RETURNING id, seq`
 		return 0, fmt.Errorf("store: append event begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// M1 哈希链：prev = 同 session 最新事件的 event_hash；event = sha256(prev||event)
+	prevHash := ""
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(event_hash, '') FROM events WHERE session_id = $1 ORDER BY seq DESC LIMIT 1`, sessionID).Scan(&prevHash); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("store: prev hash: %w", err)
+	}
+	eventHash := sha256HexEvent(prevHash, typ, payload)
 	var eventID int64
-	err = tx.QueryRow(ctx, insert, sessionID, nullable(runID), string(typ), payload, dedupeKey).Scan(&eventID, &seq)
+	err = tx.QueryRow(ctx, insert, sessionID, nullable(runID), string(typ), payload, dedupeKey, nullIfEmpty(prevHash), eventHash).Scan(&eventID, &seq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 重放重复发射：读回既有 seq，不再入队（幂等吞掉）
 		const readBack = `SELECT seq FROM events WHERE dedupe_key = $1`
@@ -138,4 +157,38 @@ FROM events WHERE run_id = $1 ORDER BY seq LIMIT $2`
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ListEventsWithChain 审计导出（M1）：事件 + 哈希链 + hold 标记（按 session 全量）。
+func (s *Store) ListEventsWithChain(ctx context.Context, sessionID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 1000
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT seq, COALESCE(run_id, ''), type, payload::text, COALESCE(prev_hash, ''), COALESCE(event_hash, ''), hold FROM events WHERE session_id = $1 ORDER BY seq LIMIT $2`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: audit export: %w", err)
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var seq int64
+		var runID, typ, payload, prev, ev, hold string
+		if err := rows.Scan(&seq, &runID, &typ, &payload, &prev, &ev, &hold); err != nil {
+			return nil, fmt.Errorf("store: audit scan: %w", err)
+		}
+		out = append(out, map[string]any{
+			"seq": seq, "run_id": runID, "type": typ, "payload": json.RawMessage(payload),
+			"prev_hash": prev, "event_hash": ev, "hold": hold == "true",
+		})
+	}
+	return out, nil
+}
+
+// SetAuditHold 法定保留（M1：hold 行不可删——删除策略护栏）。
+func (s *Store) SetAuditHold(ctx context.Context, sessionID string) error {
+	const q = `UPDATE events SET hold = true WHERE session_id = $1`
+	if _, err := s.Pool.Exec(ctx, q, sessionID); err != nil {
+		return fmt.Errorf("store: audit hold: %w", err)
+	}
+	return nil
 }
