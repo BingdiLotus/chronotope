@@ -1124,17 +1124,17 @@ func TestEffectLedgerRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	rid := fmt.Sprintf("r_ledger_%d", time.Now().UnixNano())
 	// A1：prepared → result（usage 落账）
-	if _, err := s.PutLLMCallPrepared(ctx, rid, 0); err != nil {
+	if _, err := s.PutLLMCallPrepared(ctx, rid, 0, "hash-a"); err != nil {
 		t.Fatalf("llm prepared: %v", err)
 	}
-	if err := s.PutLLMCallResult(ctx, rid, 0, 120, 45, false, false, ""); err != nil {
+	if err := s.PutLLMCallResult(ctx, rid, 0, 120, 45, false, false, "", ""); err != nil {
 		t.Fatalf("llm result: %v", err)
 	}
 	// 错误 → unknown（usage_unknown 账本化）
-	if _, err := s.PutLLMCallPrepared(ctx, rid, 1); err != nil {
+	if _, err := s.PutLLMCallPrepared(ctx, rid, 1, "hash-b"); err != nil {
 		t.Fatalf("llm prepared2: %v", err)
 	}
-	if err := s.PutLLMCallResult(ctx, rid, 1, 0, 0, false, true, "model 400"); err != nil {
+	if err := s.PutLLMCallResult(ctx, rid, 1, 0, 0, false, true, "model 400", ""); err != nil {
 		t.Fatalf("llm unknown: %v", err)
 	}
 	// A2：mcp prepared → 错误 unknown
@@ -1150,5 +1150,24 @@ func TestEffectLedgerRoundtrip(t *testing.T) {
 	}
 	if err := s.Pool.QueryRow(ctx, `SELECT state FROM mcp_calls WHERE run_id=$1`, rid).Scan(&state); err != nil || state != "unknown" {
 		t.Fatalf("mcp 应 unknown（网络超时可能效果已发生）: %q err=%v", state, err)
+	}
+}
+
+// TestArbitrationResultReplay 仲裁合同深化：result 冲突 + hash 同 → 回读冻结
+// 原结果（零派发）；hash 异 → 拒绝（operation 冲突）。
+func TestArbitrationResultReplay(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	rid := fmt.Sprintf("r_arb_%d", time.Now().UnixNano())
+	if _, err := s.PutLLMCallPrepared(ctx, rid, 0, "hash-1"); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if err := s.PutLLMCallResult(ctx, rid, 0, 10, 5, false, false, "", `{"final":"冻结原结果"}`); err != nil {
+		t.Fatalf("result: %v", err)
+	}
+	// 冲突读回：state=result + hash 同 → 回读冻结结果
+	row, err := s.PutLLMCallPrepared(ctx, rid, 0, "hash-1")
+	if err != nil || row.State != "result" || row.RequestHash != "hash-1" || row.Result == "" {
+		t.Fatalf("冲突应读回 result+hash+冻结结果: %+v err=%v", row, err)
 	}
 }

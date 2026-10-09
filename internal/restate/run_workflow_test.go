@@ -131,12 +131,12 @@ func (f *fakeStore) FinalizeRun(_ context.Context, runID, sessionID string, stat
 	return nil
 }
 
-func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int) (*store.LLMCallRow, error) {
+func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int, _ string) (*store.LLMCallRow, error) {
 	f.llmPrepared++
 	return &store.LLMCallRow{}, nil
 }
 
-func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ int64, _, _ bool, _ string) error {
+func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ int64, _, _ bool, _, _ string) error {
 	return nil
 }
 

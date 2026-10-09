@@ -55,8 +55,8 @@ type Store interface {
 	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
 	// MCP 网关 allowlist（期 3 §C）
 	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
-	PutLLMCallPrepared(ctx context.Context, runID string, step int) (*store.LLMCallRow, error)
-	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg string) error
+	PutLLMCallPrepared(ctx context.Context, runID string, step int, requestHash string) (*store.LLMCallRow, error)
+	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool string) (*store.MCPCallRow, error)
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, errMsg string) error
 	IsMember(ctx context.Context, orgID, userID string) (bool, error)

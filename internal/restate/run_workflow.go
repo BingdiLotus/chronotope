@@ -276,7 +276,8 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		// 崩溃重放直接回放缓存，不重调 harness——三条纪律之三）
 		res, runErr := restate.Run(ctx, func(rc restate.RunContext) (*Result, error) {
 			// 审计 4.1 仲裁合同：账本写入失败 = 零次新派发；冲突读既存状态
-			row, err := deps.Store.PutLLMCallPrepared(rc, runID, step)
+			reqHash := requestHashOf(req)
+			row, err := deps.Store.PutLLMCallPrepared(rc, runID, step, reqHash)
 			if err != nil {
 				return nil, fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err)
 			}
@@ -284,25 +285,37 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 				return nil, fmt.Errorf("llm 账本 prepare 无行（零派发）")
 			}
 			if row.State == "result" {
-				// 同 operation 已有结果——不执行（dispatch_seq 已递增的证据）
-				return nil, fmt.Errorf("llm 账本已有结果（不重派发，state=result）")
+				// 合同表：同 operation 已有结果——hash 同 → 返回冻结原结果
+				//（不执行）；hash 异 → 拒绝（operation 语义冲突）
+				if row.RequestHash != "" && row.RequestHash != reqHash {
+					return nil, fmt.Errorf("llm 账本结果与请求 hash 不符（operation 冲突）")
+				}
+				if row.Result != "" {
+					var cached Result
+					if jErr := json.Unmarshal([]byte(row.Result), &cached); jErr == nil {
+						return &cached, nil // 原结果——零派发
+					}
+				}
+				return nil, fmt.Errorf("llm 账本已有结果（无法回读——人工裁决）")
 			}
 			if row.State == "unknown" {
-				// 已派发但生效未知——停派发（人工裁决；不覆盖 unknown）
+				// 合同表：已派发但生效未知——无法查询 receipt 时停住（人工裁决）
 				return nil, fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）")
 			}
 			if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
 				return nil, fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err)
 			}
 			r, err := deps.Harness.Call(rc, req)
-			// 结果落账（usage 三字段 + unknown 状态——审计 #7 的账本化）
+			// 结果落账（冻结结果引用 + usage——合同表的「同 operation 已有
+			// result」的回读源）
 			if r != nil {
 				unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
-				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, ""); lErr != nil {
+				resultJSON, _ := json.Marshal(r)
+				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON)); lErr != nil {
 					return nil, fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr)
 				}
 			} else if err != nil {
-				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error()); lErr != nil {
+				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), ""); lErr != nil {
 					return nil, fmt.Errorf("llm 账本 unknown 失败: %w", lErr)
 				}
 			}
@@ -514,6 +527,13 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 	})
 	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
 	return RunOutput{}, restate.ToTerminalError(fmt.Errorf("max steps (%d) exceeded", maxSteps))
+}
+
+// requestHashOf 冻结请求的 hash（仲裁合同——同 operation 结果校验）。
+func requestHashOf(req *runs.Request) string {
+	b, _ := json.Marshal(req)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // buildMessages 组装本轮消息（分层记忆的 W5 前简化形态：system 指令 + 历史 + 本 run 输入）。

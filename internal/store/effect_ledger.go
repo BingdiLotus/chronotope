@@ -15,6 +15,8 @@ type LLMCallRow struct {
 	Step         int
 	DispatchSeq  int
 	State        string
+	RequestHash  string
+	Result       string
 	TokensIn     int64
 	TokensOut    int64
 	UsagePartial bool
@@ -27,17 +29,20 @@ type LLMCallRow struct {
 
 // PutLLMCallPrepared 派发前落 prepared 行（幂等按 run+step：重放/崩溃窗口
 // 的第二次闭包执行更新同一行——dispatch 证据保留供对账）。
-func (s *Store) PutLLMCallPrepared(ctx context.Context, runID string, step int) (*LLMCallRow, error) {
+func (s *Store) PutLLMCallPrepared(ctx context.Context, runID string, step int, requestHash string) (*LLMCallRow, error) {
 	const q = `
-INSERT INTO llm_calls (run_id, step, state, prepared_at)
-VALUES ($1, $2, 'prepared', now())
-ON CONFLICT (run_id, step) DO UPDATE SET dispatch_seq = llm_calls.dispatch_seq + 1
-RETURNING id, run_id, step, dispatch_seq, state, prepared_at`
+INSERT INTO llm_calls (run_id, step, state, prepared_at, request_hash)
+VALUES ($1, $2, 'prepared', now(), $3)
+ON CONFLICT (run_id, step) DO UPDATE SET dispatch_seq = llm_calls.dispatch_seq + 1,
+    request_hash = COALESCE(llm_calls.request_hash, EXCLUDED.request_hash)
+RETURNING id, run_id, step, dispatch_seq, state, prepared_at, COALESCE(request_hash, ''), COALESCE(result::text, '')`
 	var row LLMCallRow
 	var id int64
-	if err := s.Pool.QueryRow(ctx, q, runID, step).Scan(&id, &row.RunID, &row.Step, &row.DispatchSeq, &row.State, &row.PreparedAt); err != nil {
+	var resultRaw string
+	if err := s.Pool.QueryRow(ctx, q, runID, step, nullIfEmpty(requestHash)).Scan(&id, &row.RunID, &row.Step, &row.DispatchSeq, &row.State, &row.PreparedAt, &row.RequestHash, &resultRaw); err != nil {
 		return nil, fmt.Errorf("store: llm prepared: %w", err)
 	}
+	row.Result = resultRaw
 	return &row, nil
 }
 
@@ -112,7 +117,7 @@ func (s *Store) AdmissionState(ctx context.Context, runID string) (string, error
 }
 
 // PutLLMCallResult 结果落账（usage 三字段 + 状态 result/unknown）。
-func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg string) error {
+func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error {
 	state := "result"
 	if unknown || errMsg != "" {
 		state = "unknown"
@@ -120,9 +125,10 @@ func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, to
 	const q = `
 UPDATE llm_calls
 SET state = $3, tokens_in = $4, tokens_out = $5, usage_partial = $6,
-    usage_unknown = $7, err = $8, result_at = now()
+    usage_unknown = $7, err = $8, result_at = now(),
+    result = COALESCE($9::jsonb, result)
 WHERE run_id = $1 AND step = $2`
-	_, err := s.Pool.Exec(ctx, q, runID, step, state, tokensIn, tokensOut, partial, unknown, nullIfEmpty(errMsg))
+	_, err := s.Pool.Exec(ctx, q, runID, step, state, tokensIn, tokensOut, partial, unknown, nullIfEmpty(errMsg), nullIfEmpty(resultJSON))
 	if err != nil {
 		return fmt.Errorf("store: llm result: %w", err)
 	}
