@@ -175,8 +175,13 @@ func (s *Store) PutExecDone(ctx context.Context, idempotencyKey, sandboxID strin
 UPDATE sandbox_execs
 SET result = $3, state = 'done', expires_at = now() + interval '30 days', sandbox_id = $2
 WHERE idempotency_key = $1 AND prepared_at = $4`
-	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result, preparedAt); err != nil {
+	tag, err := s.Pool.Exec(ctx, q, idempotencyKey, sandboxID, result, preparedAt)
+	if err != nil {
 		return fmt.Errorf("store: done exec: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// 审计 6.1：UPDATE 0 行（prepared 已换代/不存在）不得对外成功
+		return fmt.Errorf("store: done exec: %w", ErrExecClaimLost)
 	}
 	return nil
 }
@@ -281,6 +286,9 @@ func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	}
 	return nil
 }
+
+// ErrExecClaimLost done 落账的 claim 已失效（审计 6.1——0 行 UPDATE）。
+var ErrExecClaimLost = errors.New("exec claim lost (prepared_at 不匹配)")
 
 // ErrLeaseOwnerMismatch 租约持有者不匹配（审计 P0-1 的 owner CAS 拒绝）。
 var ErrLeaseOwnerMismatch = errors.New("lease owner mismatch")

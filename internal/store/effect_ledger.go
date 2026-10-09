@@ -31,7 +31,7 @@ func (s *Store) PutLLMCallPrepared(ctx context.Context, runID string, step int) 
 	const q = `
 INSERT INTO llm_calls (run_id, step, state, prepared_at)
 VALUES ($1, $2, 'prepared', now())
-ON CONFLICT (run_id, step) DO NOTHING
+ON CONFLICT (run_id, step) DO UPDATE SET dispatch_seq = llm_calls.dispatch_seq + 1
 RETURNING id, run_id, step, dispatch_seq, state, prepared_at`
 	var row LLMCallRow
 	var id int64
@@ -140,16 +140,19 @@ type MCPCallRow struct {
 	PreparedAt time.Time
 }
 
-// PutMCPCallPrepared 派发前落行（幂等按 run+step+server+tool）。
-func (s *Store) PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool string) error {
+// PutMCPCallPrepared 派发前落行（冲突读既存状态——仲裁合同：result/unknown
+// 不得重派发）。
+func (s *Store) PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool string) (*MCPCallRow, error) {
 	const q = `
 INSERT INTO mcp_calls (run_id, step, server, tool, state, prepared_at)
 VALUES ($1, $2, $3, $4, 'prepared', now())
-ON CONFLICT (run_id, step, server, tool) DO NOTHING`
-	if _, err := s.Pool.Exec(ctx, q, runID, step, server, tool); err != nil {
-		return fmt.Errorf("store: mcp prepared: %w", err)
+ON CONFLICT (run_id, step, server, tool) DO NOTHING
+RETURNING run_id, step, server, tool, state, prepared_at`
+	var row MCPCallRow
+	if err := s.Pool.QueryRow(ctx, q, runID, step, server, tool).Scan(&row.RunID, &row.Step, &row.Server, &row.Tool, &row.State, &row.PreparedAt); err != nil {
+		return nil, fmt.Errorf("store: mcp prepared: %w", err)
 	}
-	return nil
+	return &row, nil
 }
 
 // PutMCPCallResult 结果落账（错误 → unknown——网络超时可能效果已发生）。

@@ -56,7 +56,7 @@ func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID
 	}
 	// 候选 = 注册表新鲜行
 	orgID := ""
-	if p.OrgOf != nil {
+	if p.OrgOf != nil && sessionID != "" {
 		oid, err := p.OrgOf(ctx, sessionID)
 		if err != nil {
 			// 审计准入 #5：org 归属查询失败 fail closed（此前留空使

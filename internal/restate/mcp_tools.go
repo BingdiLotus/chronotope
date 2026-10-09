@@ -89,15 +89,25 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 	// 审计 #10：MCP 调用 journaled（restate.Run 缓存结果——重放不重调外部
 	// 工具；「效果已发生、确认未存」的 receipt ledger 窗口后置标注）
 	result, callErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
-		// 账本（审计 A2）：外部效果证据——prepared 先落、结果/错误落账
-		//（错误 → unknown：网络超时可能效果已发生）
-		_ = deps.Store.PutMCPCallPrepared(rc, runID, step, server, tool)
+		// 审计 4.1 仲裁：账本失败零派发；unknown 停派发（SDK 重试不得覆盖）
+		row, err := deps.Store.PutMCPCallPrepared(rc, runID, step, server, tool)
+		if err != nil {
+			return "", fmt.Errorf("mcp 账本 prepare 失败（零派发）: %w", err)
+		}
+		if row.State == "result" {
+			return "", fmt.Errorf("mcp 账本已有结果（不重派发）")
+		}
+		if row.State == "unknown" {
+			return "", fmt.Errorf("mcp 账本 unknown 停派发（需人工裁决）")
+		}
 		r, err := deps.MCP.Call(rc, url, tool, json.RawMessage(tc.Arguments))
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
 		}
-		_ = deps.Store.PutMCPCallResult(rc, runID, step, server, tool, errMsg)
+		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, errMsg); lErr != nil {
+			return "", fmt.Errorf("mcp 账本 result 失败: %w", lErr)
+		}
 		return r, err
 	}, restate.WithName(StepName("mcp", step, tc.Name)))
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.MCPCall, "mcp", tc.Name, map[string]any{

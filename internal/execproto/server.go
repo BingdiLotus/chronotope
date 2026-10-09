@@ -148,7 +148,9 @@ func (s *Server) Router() chi.Router {
 	r.Delete("/sandboxes/{sandboxID}/lease", s.releaseLease)
 	r.Post("/execute", s.execute)
 	r.Get("/execs/{key}", s.getExec)
-	r.Delete("/execs/{key}", s.deleteExec)
+	// 审计 4.2：DELETE 禁用——通用删除非裁决（done/prepared/unknown 都能
+	// 删、无认证/scope/expected state）；接管命令待完整设计（认证+范围+
+	// expected state+裁决依据+审计）
 	r.Get("/files/{sandboxID}/*", s.readFile)
 	r.Put("/files/{sandboxID}/*", s.writeFile)
 	r.Post("/sandboxes/{sandboxID}/freeze", s.freeze)
@@ -552,16 +554,6 @@ func (s *Server) getExec(w http.ResponseWriter, r *http.Request) {
 		"idempotency_key": key, "state": row.State, "sandbox_id": row.SandboxID,
 		"input_digest": row.InputDigest, "result": row.Result,
 	})
-}
-
-// deleteExec 管理员接管（审计 A3：prepared/unknown 卡死 → 删除后重新 claim）。
-func (s *Server) deleteExec(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "key")
-	if err := s.Store.DeleteExec(r.Context(), key); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": key})
 }
 
 // externalize 把大输出写到宿主机工作区文件，返回 file:// 引用（RustFS 已落地）。

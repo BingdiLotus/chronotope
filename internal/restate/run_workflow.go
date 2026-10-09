@@ -265,17 +265,33 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		// 一次 harness 调用 = 一个 journaled step（缓存键 = journal 位置，
 		// 崩溃重放直接回放缓存，不重调 harness——三条纪律之三）
 		res, runErr := restate.Run(ctx, func(rc restate.RunContext) (*Result, error) {
-			// 账本（审计 A1）：派发证据先落 prepared 行（幂等按 run+step——
-			// 崩溃窗口的第二次闭包执行更新同一行，dispatch 证据供对账）
-			_, _ = deps.Store.PutLLMCallPrepared(rc, runID, step)
-			_ = deps.Store.MarkLLMCallDispatched(rc, runID, step) // 发送证据（A1 三态）
+			// 审计 4.1 仲裁合同：账本写入失败 = 零次新派发；冲突读既存状态
+			row, err := deps.Store.PutLLMCallPrepared(rc, runID, step)
+			if err != nil {
+				return nil, fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err)
+			}
+			if row.State == "result" {
+				// 同 operation 已有结果——不执行（dispatch_seq 已递增的证据）
+				return nil, fmt.Errorf("llm 账本已有结果（不重派发，state=result）")
+			}
+			if row.State == "unknown" {
+				// 已派发但生效未知——停派发（人工裁决；不覆盖 unknown）
+				return nil, fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）")
+			}
+			if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
+				return nil, fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err)
+			}
 			r, err := deps.Harness.Call(rc, req)
 			// 结果落账（usage 三字段 + unknown 状态——审计 #7 的账本化）
 			if r != nil {
 				unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
-				_ = deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "")
+				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, ""); lErr != nil {
+					return nil, fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr)
+				}
 			} else if err != nil {
-				_ = deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error())
+				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error()); lErr != nil {
+					return nil, fmt.Errorf("llm 账本 unknown 失败: %w", lErr)
+				}
 			}
 			return r, err
 		}, restate.WithName(StepName("harness", step, "")))
@@ -455,12 +471,9 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "assistant", content); err != nil {
 				return RunOutput{}, restate.ToTerminalError(err)
 			}
-			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
-				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
-			})
-			releaseLease()
-			// E2：终态原子性——canonical terminal + 交付结果引用同事务
-			//（deliverable 失败不再被吞：终态与交付要么同存要么同无）
+			// E2+审计 5.2：canonical terminal 先提交（终态+deliverable 同事务）
+			// ——提交成功后才发布 completed 事件与释放 claim（事件不得早于
+			// 终态提交确认——观察者不得先见未获确认的成功）
 			payload, _ := json.Marshal(map[string]any{
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 				"tokens_in": accTokens, "compute_seconds": accCompute,
@@ -468,6 +481,10 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 			if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
 				return RunOutput{}, restate.ToTerminalError(err)
 			}
+			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
+				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
+			})
+			releaseLease()
 			// 记忆消化（run 结束后；失败不影响主流程——内部已吞错）
 			_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
 			return RunOutput{Final: res.Final, Steps: step + 1}, nil

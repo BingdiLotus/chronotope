@@ -68,6 +68,7 @@ func (c *executorClient) CreateSandbox(ctx context.Context, req execproto.Create
 func (c *executorClient) Execute(ctx context.Context, sandboxID, name, input, idempotencyKey, runID string) (*ExecResult, error) {
 	body, err := json.Marshal(execproto.ExecuteRequest{
 		SandboxID: sandboxID, Name: name, Input: input, IdempotencyKey: idempotencyKey,
+		RunID: runID, // 审计 6.1：此前未 Marshal——run_id 空使 holder 检查旁路
 	})
 	if err != nil {
 		return nil, fmt.Errorf("executor: marshal execute: %w", err)
