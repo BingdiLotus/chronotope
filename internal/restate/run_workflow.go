@@ -72,7 +72,16 @@ func runWorkflowDef(deps *Deps) restate.ServiceDefinition {
 
 // runLoop 是 agent 主循环（ctx 收敛到 restate.Context + 显式 runID，便于单测：
 // runID 生产上来自 workflow key，与输入幂等键一致——契约规范 §6 幂等链）。
-func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOutput, error) {
+func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out RunOutput, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// GitHub 诊断：panic 堆栈（recover 打栈后重抛——SDK 只记 error
+			// 不记堆栈，无法定位）
+			slog.Default().Error("runLoop panic", "run", runID, "recover", fmt.Sprint(r),
+				"stack", string(debug.Stack()))
+			panic(r)
+		}
+	}()
 	emit := &Emitter{Store: deps.Store}
 
 	// 会话状态：从 session_object 读（单写者串行；AgentConfig 含模型/工具/版本）
