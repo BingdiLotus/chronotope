@@ -88,9 +88,10 @@ func main() {
 		case "e2b_selfhosted", "e2b":
 			kind = "e2b"
 		}
+		executorOrgID := os.Getenv("EXECUTOR_ORG_ID") // BYOC enrollment 的租户 scope
 		heartbeat := func() {
 			if err := st.UpsertExecutor(context.Background(), store.ExecutorRow{
-				ID: executorID, Kind: kind, Endpoint: endpoint,
+				ID: executorID, Kind: kind, Endpoint: endpoint, OrgID: executorOrgID,
 				Capabilities: []byte(`{"network":true}`),
 			}); err != nil {
 				slog.Warn("executor register failed", "err", err)

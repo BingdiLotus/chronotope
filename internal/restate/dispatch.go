@@ -177,7 +177,12 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			result, e := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 				content, rErr := deps.Executor.ReadFile(rc, sb, path)
 				if rErr != nil {
-					return "", restate.ToTerminalError(rErr, restate.WithErrorCode(404))
+					// 审计准入 #6：只对真实沙箱缺失标 404 哨兵（权限/网络/
+					// 存储错误不得清绑定重建）
+					if sandboxGone(rErr) {
+						return "", restate.ToTerminalError(rErr, restate.WithErrorCode(404))
+					}
+					return "", restate.ToTerminalError(rErr)
 				}
 				return content, nil
 			}, restate.WithName(StepName("exec", step, tc.ID)))

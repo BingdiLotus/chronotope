@@ -235,13 +235,27 @@ ORDER BY s.created_at`
 
 // DeleteSandbox 删除沙箱事实行（GC 清理成功后调用）。
 func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	// 审计准入 #4：lease 行先删（FK NO ACTION + Release 置过期保留行——
+	// 沙箱删除时其 lease tombstone 一并清理；generation 单调的 fencing
+	// 证据只对活跃沙箱有意义）。同事务——半删状态不落库。
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: delete sandbox begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM sandbox_leases WHERE sandbox_id = $1`, sandboxID); err != nil {
+		return fmt.Errorf("store: delete sandbox lease: %w", err)
+	}
 	const q = `DELETE FROM sandboxes WHERE sandbox_id = $1`
-	tag, err := s.Pool.Exec(ctx, q, sandboxID)
+	tag, err := tx.Exec(ctx, q, sandboxID)
 	if err != nil {
 		return fmt.Errorf("store: delete sandbox: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: delete sandbox commit: %w", err)
 	}
 	return nil
 }

@@ -118,10 +118,11 @@ func approvalRouterOf(st *store.Store) policy.ApprovalRouter {
 func executorPoolOf(st *store.Store, executorURL string) restate.Executor {
 	pool := restate.NewExecutorPool(restate.NewExecutorClient(executorURL), nil)
 	pool.OrgOf = func(ctx context.Context, sessionID string) (string, error) {
-		if row, err := st.GetSession(ctx, sessionID); err == nil {
-			return row.OrgID, nil
+		row, err := st.GetSession(ctx, sessionID)
+		if err != nil {
+			return "", err // fail closed（审计准入 #5——不再吞成空）
 		}
-		return "", nil
+		return row.OrgID, nil
 	}
 	pool.ListExecutors = func(ctx context.Context) ([]store.ExecutorRow, error) {
 		return st.ListHealthyExecutors(ctx, 2*time.Minute)

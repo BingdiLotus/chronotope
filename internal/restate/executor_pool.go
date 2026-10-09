@@ -40,26 +40,30 @@ func NewExecutorPool(fallback Executor, pol policy.SchedulerPolicy) *ExecutorPoo
 }
 
 // clientFor 解析沙箱归属或策略选新——返回 (客户端, executorID)。
-func (p *ExecutorPool) clientFor(ctx context.Context, sandboxID, sessionID string) (Executor, string) {
+func (p *ExecutorPool) clientFor(ctx context.Context, sandboxID, sessionID string) (Executor, string, error) {
 	return p.clientForDriver(ctx, sandboxID, sessionID, "")
 }
 
 // clientForDriver 按沙箱档过滤候选（期 4 §C：byoc 租户路由到自己的
 // executor 池——driver 空 = 全候选默认档）。
-func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID, driver string) (Executor, string) {
+func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID, driver string) (Executor, string, error) {
 	if p.SandboxOwner != nil {
 		if owner, err := p.SandboxOwner(ctx, sandboxID); err == nil && owner != "" {
 			if c, ok := p.client(owner); ok {
-				return c, owner
+				return c, owner, nil
 			}
 		}
 	}
 	// 候选 = 注册表新鲜行
 	orgID := ""
 	if p.OrgOf != nil {
-		if oid, err := p.OrgOf(ctx, sessionID); err == nil {
-			orgID = oid
+		oid, err := p.OrgOf(ctx, sessionID)
+		if err != nil {
+			// 审计准入 #5：org 归属查询失败 fail closed（此前留空使
+			// foreign executor 放行——过滤条件双方非空才比对）
+			return nil, "", err
 		}
+		orgID = oid
 	}
 	var candidates []policy.ExecutorCandidate
 	if p.ListExecutors != nil {
@@ -87,16 +91,16 @@ func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID
 		chosen := p.Policy.Pick(ctx, sessionID, candidates)
 		if chosen.ID != "" {
 			if c, ok := p.client(chosen.ID); ok {
-				return c, chosen.ID
+				return c, chosen.ID, nil
 			}
 		}
 	}
 	if driver != "" {
 		// 审计 P0-4：指定档无候选 → 不得落默认 docker（跨租户边界）——返回
 		// nil 由调用方报错
-		return nil, ""
+		return nil, "", nil
 	}
-	return p.fallback, "" // 单点兜底（driver 空——现有部署无感）
+	return p.fallback, "", nil // 单点兜底（driver 空——现有部署无感）
 }
 
 func (p *ExecutorPool) client(id string) (Executor, bool) {
@@ -113,7 +117,10 @@ func (p *ExecutorPool) setClient(id string, c Executor) {
 }
 
 func (p *ExecutorPool) CreateSandbox(ctx context.Context, req execproto.CreateSandboxRequest) (string, error) {
-	c, owner := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver)
+	c, owner, err := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver)
+	if err != nil {
+		return "", err
+	}
 	if c == nil {
 		return "", fmt.Errorf("executor 池无可用候选（driver=%s session=%s——租户档未注册）", req.Driver, req.SessionID)
 	}
@@ -125,7 +132,7 @@ func (p *ExecutorPool) CreateSandbox(ctx context.Context, req execproto.CreateSa
 		delete(p.clients, owner)
 		p.deadUntil[owner] = time.Now().Add(30 * time.Second)
 		p.mu.Unlock()
-		if c2, owner2 := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver); c2 != nil && owner2 != owner {
+		if c2, owner2, cErr := p.clientForDriver(ctx, req.SessionID, req.SessionID, req.Driver); cErr == nil && c2 != nil && owner2 != owner {
 			id, err = c2.CreateSandbox(ctx, req)
 			owner = owner2
 		}
@@ -150,31 +157,49 @@ func (p *ExecutorPool) isConnErr(err error) bool {
 }
 
 func (p *ExecutorPool) Execute(ctx context.Context, sandboxID, name, input, idempotencyKey, runID string) (*ExecResult, error) {
-	c, _ := p.clientFor(ctx, sandboxID, "")
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return nil, fmt.Errorf("executor 池无可用候选: %v", err)
+	}
 	return c.Execute(ctx, sandboxID, name, input, idempotencyKey, runID)
 }
 
 func (p *ExecutorPool) ReadFile(ctx context.Context, sandboxID, path string) (string, error) {
-	c, _ := p.clientFor(ctx, sandboxID, "")
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return "", fmt.Errorf("executor 池无可用候选: %v", err)
+	}
 	return c.ReadFile(ctx, sandboxID, path)
 }
 
 func (p *ExecutorPool) WriteFile(ctx context.Context, sandboxID, path, content string) error {
-	c, _ := p.clientFor(ctx, sandboxID, "")
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return fmt.Errorf("executor 池无可用候选: %v", err)
+	}
 	return c.WriteFile(ctx, sandboxID, path, content)
 }
 
 func (p *ExecutorPool) AcquireLease(ctx context.Context, sandboxID, runID, ttl string) (int64, error) {
-	c, _ := p.clientFor(ctx, sandboxID, "")
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return 0, fmt.Errorf("executor 池无可用候选: %v", err)
+	}
 	return c.AcquireLease(ctx, sandboxID, runID, ttl)
 }
 
 func (p *ExecutorPool) ReleaseLease(ctx context.Context, sandboxID string, generation int64) error {
-	c, _ := p.clientFor(ctx, sandboxID, "")
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return fmt.Errorf("executor 池无可用候选: %v", err)
+	}
 	return c.ReleaseLease(ctx, sandboxID, generation)
 }
 
 func (p *ExecutorPool) Snapshot(ctx context.Context, sandboxID string) (string, error) {
-	c, _ := p.clientFor(ctx, sandboxID, "")
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return "", fmt.Errorf("executor 池无可用候选: %v", err)
+	}
 	return c.Snapshot(ctx, sandboxID)
 }

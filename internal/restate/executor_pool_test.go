@@ -2,6 +2,7 @@ package restate
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -194,5 +195,15 @@ func TestExecutorPoolTenantBoundary(t *testing.T) {
 	pool.ListExecutors = func(context.Context) ([]store.ExecutorRow, error) { return nil, nil }
 	if _, err := pool.CreateSandbox(context.Background(), execproto.CreateSandboxRequest{SessionID: "s_x", Driver: "byoc"}); err == nil {
 		t.Fatal("byoc 无候选应报错而非落 docker fallback")
+	}
+	// 审计准入 #5：OrgOf 错误 fail closed（此前留空使 foreign executor 放行）
+	pool.ListExecutors = func(context.Context) ([]store.ExecutorRow, error) {
+		return []store.ExecutorRow{{ID: "byoc-a", Kind: "byoc", OrgID: "org-a", Endpoint: "http://a", HeartbeatAt: time.Now()}}, nil
+	}
+	pool.OrgOf = func(context.Context, string) (string, error) {
+		return "", fmt.Errorf("session org 查询失败")
+	}
+	if _, err := pool.CreateSandbox(context.Background(), execproto.CreateSandboxRequest{SessionID: "s_y", Driver: "byoc"}); err == nil {
+		t.Fatal("OrgOf 错误应 fail closed（不得路由 foreign executor）")
 	}
 }

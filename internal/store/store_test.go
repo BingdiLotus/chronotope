@@ -1091,3 +1091,27 @@ func TestGetRunProjectionCommand(t *testing.T) {
 		t.Fatalf("GetRun 投影应含 input/topic: %+v err=%v", row, err)
 	}
 }
+
+// TestDeleteSandboxClearsLeaseTombstone 审计准入 #4：Release 置过期保留的
+// lease 行随沙箱删除清理（FK NO ACTION 曾阻止 parent 删除——GC 卡住回归）。
+func TestDeleteSandboxClearsLeaseTombstone(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	sid := fmt.Sprintf("sb_del_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, "org_del", "o")
+	_ = s.CreateAgent(ctx, "a_dl", "org_del", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, "s_dl", "org_del", "a_dl")
+	_, _ = s.Pool.Exec(ctx, `INSERT INTO sandboxes (sandbox_id, org_id, session_id, driver, status, created_at, ttl, image)
+		VALUES ($1, 'org_del', 's_dl', 'docker', 'ready', now(), interval '1 day', 'python:3.12-slim')`, sid)
+	l, err := s.AcquireLease(ctx, sid, "run-x", time.Hour)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if _, err := s.ReleaseLease(ctx, sid, l.Generation); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	// lease 行保留（expired tombstone——ABA 语义）→ 删沙箱必须一并清理
+	if err := s.DeleteSandbox(ctx, sid); err != nil {
+		t.Fatalf("delete sandbox 应清理 lease tombstone（FK 回归）: %v", err)
+	}
+}
