@@ -196,6 +196,22 @@ func (p *ExecutorPool) ReleaseLease(ctx context.Context, sandboxID string, gener
 	return c.ReleaseLease(ctx, sandboxID, generation)
 }
 
+func (p *ExecutorPool) FreezeSandbox(ctx context.Context, sandboxID string) error {
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return fmt.Errorf("executor 池无可用候选: %v", err)
+	}
+	return c.FreezeSandbox(ctx, sandboxID)
+}
+
+func (p *ExecutorPool) UnfreezeSandbox(ctx context.Context, sandboxID string) error {
+	c, _, err := p.clientFor(ctx, sandboxID, "")
+	if err != nil || c == nil {
+		return fmt.Errorf("executor 池无可用候选: %v", err)
+	}
+	return c.UnfreezeSandbox(ctx, sandboxID)
+}
+
 func (p *ExecutorPool) Snapshot(ctx context.Context, sandboxID string) (string, error) {
 	c, _, err := p.clientFor(ctx, sandboxID, "")
 	if err != nil || c == nil {

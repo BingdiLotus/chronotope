@@ -52,9 +52,17 @@ func freezeRun(ctx restate.Context, deps *Deps, in RunInput, runID string, emit 
 		"key": key, "awakeable_id": awakeable.Id(),
 	})
 	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFrozen)
+	// D 批：欠费冻结即冻结沙箱（算力即时释放——pause 不再是状态值）
+	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {
+		_ = deps.Executor.FreezeSandbox(ctx, state.SandboxID)
+	}
 	payload, err := awakeable.Result() // 挂起：零进程占用，直到 Unfreeze 跨 HTTP resolve
 	if err != nil {
 		return err
+	}
+	// 解冻即恢复算力（对称）
+	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {
+		_ = deps.Executor.UnfreezeSandbox(ctx, state.SandboxID)
 	}
 	_ = emit.Emit(ctx, in.SessionID, runID, 0, event.RunUnfrozen, "", "", map[string]any{
 		"payload": payload,

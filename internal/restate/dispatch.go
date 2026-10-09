@@ -255,6 +255,10 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 		"tool": tc.Name, "arguments": json.RawMessage(tc.Arguments),
 		"risk_class": riskClass, "action_digest": digest,
 	})
+	// D 批：挂起即冻结——算力即时释放（不再依赖 10m lease+5m GC+TTL 存在）
+	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {
+		_ = deps.Executor.FreezeSandbox(ctx, state.SandboxID)
+	}
 	result, err := awakeable.Result() // 挂起：零进程占用，直到跨 HTTP resolve
 	if err != nil {
 		return "", err

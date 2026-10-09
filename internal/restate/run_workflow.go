@@ -189,6 +189,15 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 	for step := 0; step < maxSteps; step++ {
 		// 取消检查点（评审 #6 非抢占式：每步 harness 调用前检查会话取消标志）
 		stepState, err := deps.Sessions.GetState(ctx, in.SessionID)
+		// D 批：paused 检查点——暂停即冻结沙箱（算力即时释放；pause 不再是
+		// 状态值——运行中的 run 在检查点冻结并终止）
+		if err == nil && stepState.Phase == sessionapi.PhasePaused {
+			if stepState.SandboxID != "" {
+				_ = deps.Executor.FreezeSandbox(ctx, stepState.SandboxID)
+			}
+			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+			return RunOutput{}, restate.ToTerminalError(fmt.Errorf("会话已暂停（沙箱已冻结）"))
+		}
 		if err == nil && stepState.CancelRequested {
 			// 取消终态：绑定租约（若有）后释放——旧持有者代次随释放失活
 			if stepState.SandboxID != "" && leaseSandboxID == "" {
@@ -353,6 +362,10 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 					decision, err := awaitApproval(ctx, deps, in, runID, step, tc, emit, 2)
 					if err != nil {
 						return RunOutput{}, restate.ToTerminalError(fmt.Errorf("await approval (class 2): %w", err))
+					}
+					// D 批：批准后解冻（挂起即冻结的对称——dispatch 前恢复算力）
+					if cur, cErr := deps.Sessions.GetState(ctx, in.SessionID); cErr == nil && cur.SandboxID != "" {
+						_ = deps.Executor.UnfreezeSandbox(ctx, cur.SandboxID)
 					}
 					// 审计 #7：approved 但已取消 → 不派发（重验取消——此前
 					// 直接派发，已取消却先产生新效果的反例关闭）

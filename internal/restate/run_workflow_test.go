@@ -399,6 +399,16 @@ func (f *fakeExecutor) ReleaseLease(_ context.Context, sandboxID string, _ int64
 	return nil
 }
 
+func (f *fakeExecutor) FreezeSandbox(_ context.Context, sandboxID string) error {
+	f.ops = append(f.ops, "freeze:"+sandboxID)
+	return nil
+}
+
+func (f *fakeExecutor) UnfreezeSandbox(_ context.Context, sandboxID string) error {
+	f.ops = append(f.ops, "unfreeze:"+sandboxID)
+	return nil
+}
+
 func (f *fakeExecutor) Snapshot(_ context.Context, sandboxID string) (string, error) {
 	f.ops = append(f.ops, "snapshot:"+sandboxID)
 	return "img-" + sandboxID + "|tar-" + sandboxID, nil

@@ -12,6 +12,7 @@ import (
 )
 
 type poolFakeExec struct {
+	frozen   bool
 	id       string
 	created  int
 	executed int
@@ -31,7 +32,17 @@ func (f *poolFakeExec) AcquireLease(context.Context, string, string, string) (in
 	return 1, nil
 }
 func (f *poolFakeExec) ReleaseLease(context.Context, string, int64) error { return nil }
-func (f *poolFakeExec) Snapshot(context.Context, string) (string, error)  { return "", nil }
+func (f *poolFakeExec) FreezeSandbox(context.Context, string) error {
+	f.frozen = true
+	return nil
+}
+
+func (f *poolFakeExec) UnfreezeSandbox(context.Context, string) error {
+	f.frozen = false
+	return nil
+}
+
+func (f *poolFakeExec) Snapshot(context.Context, string) (string, error) { return "", nil }
 
 func itoa(n int) string {
 	if n == 0 {
