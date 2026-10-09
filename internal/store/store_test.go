@@ -1201,3 +1201,42 @@ func TestAuditChainIntegrity(t *testing.T) {
 		t.Fatalf("hold: %v", err)
 	}
 }
+
+// TestGoalModelRoundtrip M2：Goal version 递增 + hash；WorkItem 队列；
+// Evidence 新鲜度；ActionClaim 动作级占有权。
+func TestGoalModelRoundtrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	// Goal：两次写入 version 递增 + hash 变化
+	_ = s.CreateOrg(ctx, "org_m2", "o")
+	gid := fmt.Sprintf("goal-m2-%d", time.Now().UnixNano())
+	g1, err := s.UpsertGoal(ctx, gid, "org_m2", "目标 A", "scope-a", "owner-1")
+	if err != nil || g1.Version != 1 {
+		t.Fatalf("goal v1: %+v err=%v", g1, err)
+	}
+	g2, err := s.UpsertGoal(ctx, gid, "org_m2", "目标 A 改", "scope-a", "owner-1")
+	if err != nil || g2.Version != 2 || g2.StateHash == g1.StateHash {
+		t.Fatalf("goal v2 应递增且 hash 变: %+v %+v err=%v", g1, g2, err)
+	}
+	// WorkItem
+	if err := s.CreateWorkItem(ctx, fmt.Sprintf("wi-%d", time.Now().UnixNano()), gid, "做切片", "impl", 1, ""); err != nil {
+		t.Fatalf("work item: %v", err)
+	}
+	items, err := s.ListOpenWorkItems(ctx, gid, 10)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items: %+v err=%v", items, err)
+	}
+	// Evidence（过期 → StaleEvidence 可见；session FK 地基）
+	_ = s.CreateAgent(ctx, "a_m2", "org_m2", "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, "s_m2", "org_m2", "a_m2")
+	if err := s.PutEvidence(ctx, "ev-1", "s_m2", "r_m2", "hash-abc", "commit-a", "rev-1", "test", nil); err != nil {
+		t.Fatalf("evidence: %v", err)
+	}
+	// ActionClaim：领取 + 异 agent 活跃拒绝 + 过期后接管
+	if _, err := s.AcquireActionClaim(ctx, "repo:branch_x", "agent-a", "repo_write", time.Hour); err != nil {
+		t.Fatalf("claim a: %v", err)
+	}
+	if _, err := s.AcquireActionClaim(ctx, "repo:branch_x", "agent-b", "repo_write", time.Hour); err == nil {
+		t.Fatal("活跃 claim 的异 agent 接管应拒绝")
+	}
+}

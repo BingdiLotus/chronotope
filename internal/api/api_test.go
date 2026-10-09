@@ -148,6 +148,30 @@ func (f *fakeStore) AdmissionState(_ context.Context, _ string) (string, error) 
 	return "dispatched", nil
 }
 
+func (f *fakeStore) UpsertGoal(_ context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error) {
+	return &store.GoalRow{ID: id, OrgID: orgID, Objective: objective, Scope: scope, Owner: owner, Version: 1, StateHash: "h"}, nil
+}
+
+func (f *fakeStore) GetGoal(_ context.Context, id string) (*store.GoalRow, error) {
+	return &store.GoalRow{ID: id, Objective: "o", Version: 1, StateHash: "h"}, nil
+}
+
+func (f *fakeStore) CreateWorkItem(_ context.Context, _, _, _, _ string, _ int, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) ListOpenWorkItems(_ context.Context, _ string, _ int) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) PutEvidence(_ context.Context, _, _, _, _, _, _, _ string, _ *time.Time) error {
+	return nil
+}
+
+func (f *fakeStore) StaleEvidence(_ context.Context, _ string) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) ListEventsWithChain(_ context.Context, _ string, _ int) ([]map[string]any, error) {
 	return nil, nil
 }

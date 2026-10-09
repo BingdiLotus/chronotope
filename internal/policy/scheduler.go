@@ -1,6 +1,11 @@
 package policy
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/bingdilotus/chronotope/internal/store"
+)
 
 // ExecutorCandidate 是调度候选（期 4 §B：多宿主池的装箱前置——心跳/能力）。
 type ExecutorCandidate struct {
@@ -14,11 +19,41 @@ type ExecutorCandidate struct {
 // 保持沙箱卷本地性；装箱/成本优先由业务层替换实现）。
 type SchedulerPolicy interface {
 	Pick(ctx context.Context, sessionID string, candidates []ExecutorCandidate) ExecutorCandidate
+	// Decide M2 DECIDE 先行：定时器到点先判定本轮是否值得运行（run/wait/
+	// ask/replan/repair/quiet）——触发器只消费提示不判断业务。默认 RoundRobin
+	// 恒 run（现有部署无感）；参考实现（QuietWhenIdle）按新证据/等待状态 quiet。
+	Decide(ctx context.Context, sessionID string) store.Decision
 }
 
 // RoundRobin 是默认实现：按 sessionID 哈希轮转（同会话稳定轮转位——
 // 无状态、确定性）。
 type RoundRobin struct{}
+
+// Decide 默认恒 run（现有部署无感——业务语义由参考实现覆盖）。
+func (RoundRobin) Decide(_ context.Context, _ string) store.Decision {
+	return store.Decision{Hint: store.HintRun, Reason: "default: run"}
+}
+
+// QuietWhenIdle 参考实现（层 2 语义）：session 无活跃 run 且近 10 分钟无
+// run.completed 事件 → quiet（无新证据不烧 token——经济学基线的空转关闭）。
+type QuietWhenIdle struct {
+	HasActiveRun    func(ctx context.Context, sessionID string) (bool, error)
+	RecentCompleted func(ctx context.Context, sessionID string, within time.Duration) (bool, error)
+}
+
+func (q QuietWhenIdle) Decide(ctx context.Context, sessionID string) store.Decision {
+	if q.HasActiveRun != nil {
+		if active, err := q.HasActiveRun(ctx, sessionID); err == nil && active {
+			return store.Decision{Hint: store.HintWait, Reason: "active run in progress"}
+		}
+	}
+	if q.RecentCompleted != nil {
+		if recent, err := q.RecentCompleted(ctx, sessionID, 10*time.Minute); err == nil && !recent {
+			return store.Decision{Hint: store.HintQuiet, Reason: "no new evidence in 10m"}
+		}
+	}
+	return store.Decision{Hint: store.HintRun, Reason: "evidence fresh"}
+}
 
 func (RoundRobin) Pick(_ context.Context, sessionID string, candidates []ExecutorCandidate) ExecutorCandidate {
 	if len(candidates) == 0 {

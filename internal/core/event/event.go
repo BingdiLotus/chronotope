@@ -35,7 +35,8 @@ const (
 	RunAwaitingApproval Type = "run.awaiting_approval"
 	RunFrozen           Type = "run.frozen"
 	RunUnfrozen         Type = "run.unfrozen"
-	SessionWoken        Type = "session.woken"
+	SchedulerDecide
+	SessionWoken Type = "session.woken"
 
 	// 能力
 	SkillInstall  Type = "skill.install"

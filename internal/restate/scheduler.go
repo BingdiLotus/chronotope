@@ -3,6 +3,7 @@ package restate
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"github.com/bingdilotus/chronotope/internal/store"
 	"time"
 
 	restate "github.com/restatedev/sdk-go"
@@ -27,9 +28,11 @@ type ScheduleInput struct {
 
 // ScheduleOutput 是 scheduler 的执行结果。
 type ScheduleOutput struct {
-	Woken bool   `json:"woken"`
-	RunID string `json:"run_id"`
-	Final string `json:"final"`
+	Woken   bool   `json:"woken"`
+	RunID   string `json:"run_id"`
+	Final   string `json:"final"`
+	Decided string `json:"decided,omitempty"` // M2 DECIDE 结论（quiet/wait/ask 时）
+	Reason  string `json:"reason,omitempty"`
 }
 
 // schedulerDef 注册调度器（Workflow，key=schedule_id；durable timer 跨重启，worker-架构设计 §2）。
@@ -50,6 +53,23 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SessionWoken, "woken", restate.Key(ctx), map[string]any{
 					"schedule": restate.Key(ctx), "phase": state.Phase,
 				})
+
+				// M2 DECIDE 先行：先判定本轮是否值得运行（run/wait/quiet——
+				// 定时器到点不再直接等价「必须让 Agent 工作」）；判定 journaled
+				// ——「不作为的可问责性」（每次不运行都有依据与记录）
+				decision := store.Decision{Hint: store.HintRun, Reason: "no policy"}
+				if deps.SchedulerPolicy != nil {
+					decision = deps.SchedulerPolicy.Decide(ctx, in.SessionID)
+				}
+				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SchedulerDecide, "decide", restate.Key(ctx), map[string]any{
+					"schedule": restate.Key(ctx), "hint": string(decision.Hint),
+					"reason": decision.Reason,
+				})
+				if decision.Hint != store.HintRun {
+					// quiet/wait/ask：不派发 child run——零 token 消耗的判定
+					//（经济学基线的 DECIDE 节省实证）
+					return ScheduleOutput{Decided: string(decision.Hint), Reason: decision.Reason}, nil
+				}
 
 				// 执行：child run（run_workflow 递归复用——可组合主张的兑现）。
 				// run id 非确定性生成必须 journaled（Run 闭包内），重放回放同一 id。

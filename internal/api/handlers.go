@@ -1003,6 +1003,101 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// upsertGoal M2：目标写入（version 递增 + state_hash——慢变量）。
+func (h *Handler) upsertGoal(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	goalID := chi.URLParam(r, "goalID")
+	var req struct {
+		Objective string `json:"objective"`
+		Scope     string `json:"scope"`
+		Owner     string `json:"owner"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Objective == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "objective 必填")
+		return
+	}
+	g, err := h.Store.UpsertGoal(r.Context(), goalID, orgID, req.Objective, req.Scope, req.Owner)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+// getGoal M2：读目标（version/hash——过期快照检测）。
+func (h *Handler) getGoal(w http.ResponseWriter, r *http.Request) {
+	g, err := h.Store.GetGoal(r.Context(), chi.URLParam(r, "goalID"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+// createWorkItem M2：工作切片。
+func (h *Handler) createWorkItem(w http.ResponseWriter, r *http.Request) {
+	goalID := chi.URLParam(r, "goalID")
+	var req struct {
+		ID           string `json:"id"`
+		Description  string `json:"description"`
+		Priority     int    `json:"priority"`
+		TaskClass    string `json:"task_class"`
+		Dependencies string `json:"dependencies"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" || req.Description == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "id/description 必填")
+		return
+	}
+	if err := h.Store.CreateWorkItem(r.Context(), req.ID, goalID, req.Description, req.TaskClass, req.Priority, req.Dependencies); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": req.ID, "created": true})
+}
+
+// listWorkItems M2：可领取切片。
+func (h *Handler) listWorkItems(w http.ResponseWriter, r *http.Request) {
+	items, err := h.Store.ListOpenWorkItems(r.Context(), chi.URLParam(r, "goalID"), 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// putEvidence M2：证据记录（新鲜度字段）。
+func (h *Handler) putEvidence(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req struct {
+		ID             string     `json:"id"`
+		RunID          string     `json:"run_id"`
+		BlobHash       string     `json:"blob_hash"`
+		ValidFor       string     `json:"valid_for"`
+		SourceRevision string     `json:"source_revision"`
+		Method         string     `json:"method"`
+		ExpiresAt      *time.Time `json:"expires_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" || req.BlobHash == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "id/blob_hash 必填")
+		return
+	}
+	if err := h.Store.PutEvidence(r.Context(), req.ID, sessionID, req.RunID, req.BlobHash, req.ValidFor, req.SourceRevision, req.Method, req.ExpiresAt); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": req.ID, "recorded": true})
+}
+
+// staleEvidence M2：过期证据（行动前发现依赖过期）。
+func (h *Handler) staleEvidence(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Store.StaleEvidence(r.Context(), chi.URLParam(r, "sessionID"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stale": rows})
+}
+
 // auditExport M1 审计导出（哈希链——审计师验证历史未改写）。
 func (h *Handler) auditExport(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")

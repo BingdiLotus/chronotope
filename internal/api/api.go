@@ -40,6 +40,12 @@ type Store interface {
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	ListEventsWithChain(ctx context.Context, sessionID string, limit int) ([]map[string]any, error)
 	SetAuditHold(ctx context.Context, sessionID string) error
+	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
+	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
+	CreateWorkItem(ctx context.Context, id, goalID, description, taskClass string, priority int, dependencies string) error
+	ListOpenWorkItems(ctx context.Context, goalID string, limit int) ([]map[string]any, error)
+	PutEvidence(ctx context.Context, id, sessionID, runID, blobHash, validFor, sourceRevision, method string, expiresAt *time.Time) error
+	StaleEvidence(ctx context.Context, sessionID string) ([]map[string]any, error)
 	GetRun(ctx context.Context, id string) (*store.Run, error)
 	GetActiveRun(ctx context.Context, sessionID string) (*store.Run, error)
 	UpdateRunStatus(ctx context.Context, id string, status sessionapi.RunStatus) error

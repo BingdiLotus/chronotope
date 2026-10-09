@@ -102,12 +102,13 @@ type Deps struct {
 	// BudgetPolicy 预算策略缝（期 3 §A；nil = AllowAll）
 	BudgetPolicy BudgetPolicy
 	// ApprovalRouter 审批人路由缝（期 3 §B；nil = ManualOnly 人工）
-	ApprovalRouter policy.ApprovalRouter
-	MCP            MCPCaller // MCP 客户端（nil = 未启用）
-	Store          Store
-	Harness        Harness
-	Executor       Executor
-	Sessions       SessionSource
+	ApprovalRouter  policy.ApprovalRouter
+	SchedulerPolicy policy.SchedulerPolicy
+	MCP             MCPCaller // MCP 客户端（nil = 未启用）
+	Store           Store
+	Harness         Harness
+	Executor        Executor
+	Sessions        SessionSource
 	// ConsolidateThreshold 是记忆消化触发的消息数阈值（默认 40；测试/演示可调小）。
 	ConsolidateThreshold int
 }
