@@ -279,16 +279,16 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			reqHash := requestHashOf(req)
 			row, err := deps.Store.PutLLMCallPrepared(rc, runID, step, reqHash)
 			if err != nil {
-				return nil, fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err)
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err))
 			}
 			if row == nil {
-				return nil, fmt.Errorf("llm 账本 prepare 无行（零派发）")
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 无行（零派发）"))
 			}
 			if row.State == "result" {
 				// 合同表：同 operation 已有结果——hash 同 → 返回冻结原结果
 				//（不执行）；hash 异 → 拒绝（operation 语义冲突）
 				if row.RequestHash != "" && row.RequestHash != reqHash {
-					return nil, fmt.Errorf("llm 账本结果与请求 hash 不符（operation 冲突）")
+					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本结果与请求 hash 不符（operation 冲突）"))
 				}
 				if row.Result != "" {
 					var cached Result
@@ -296,14 +296,22 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 						return &cached, nil // 原结果——零派发
 					}
 				}
-				return nil, fmt.Errorf("llm 账本已有结果（无法回读——人工裁决）")
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本已有结果（无法回读——人工裁决）"))
 			}
 			if row.State == "unknown" {
 				// 合同表：已派发但生效未知——无法查询 receipt 时停住（人工裁决）
-				return nil, fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）")
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）"))
+			}
+			// 审计 4.1：prepared/dispatched 的 hash 校验（异 hash 拒绝——同一
+			// 不可变请求的绑定）；dispatched 无接受证据 → 不重派发（停住对账）
+			if row.State == "dispatched" {
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 无接受证据（不重派发——对账/人工裁决）"))
+			}
+			if row.RequestHash != "" && row.RequestHash != reqHash {
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本请求 hash 不符（operation 冲突）"))
 			}
 			if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
-				return nil, fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err)
+				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err))
 			}
 			r, err := deps.Harness.Call(rc, req)
 			// 结果落账（冻结结果引用 + usage——合同表的「同 operation 已有
@@ -312,11 +320,11 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 				unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
 				resultJSON, _ := json.Marshal(r)
 				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON)); lErr != nil {
-					return nil, fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr)
+					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
 				}
 			} else if err != nil {
 				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), ""); lErr != nil {
-					return nil, fmt.Errorf("llm 账本 unknown 失败: %w", lErr)
+					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
 				}
 			}
 			return r, err
@@ -333,11 +341,6 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 				"reason": runErr.Error(),
 			})
 			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
-			// 仲裁类错误（账本仲裁/停派发）terminal 化——SDK 重试循环关闭，
-			// 人工裁决入口（unknown 状态经 /calls 对账可见）
-			if strings.Contains(runErr.Error(), "停派发") || strings.Contains(runErr.Error(), "账本") {
-				return RunOutput{}, restate.ToTerminalError(runErr)
-			}
 			return RunOutput{}, runErr
 		}
 
@@ -512,9 +515,13 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
 				return RunOutput{}, restate.ToTerminalError(err)
 			}
-			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
+			if eErr := emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
 				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
-			})
+			}); eErr != nil {
+				// 审计 5.2：事件义务失败不静默（调用者等不到完成的窗口——
+				// terminal 由同身份恢复提交补发）
+				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("completed 事件写失败（终态已提交——恢复补发）: %w", eErr))
+			}
 			releaseLease()
 			// 记忆消化（run 结束后；失败不影响主流程——内部已吞错）
 			_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)

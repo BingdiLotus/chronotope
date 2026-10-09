@@ -50,11 +50,20 @@ RETURNING id, run_id, step, dispatch_seq, state, prepared_at, COALESCE(request_h
 // →result 三态完整——发送证据与结果之间的接受证据）。
 func (s *Store) MarkLLMCallDispatched(ctx context.Context, runID string, step int) error {
 	const q = `UPDATE llm_calls SET state = 'dispatched', dispatched_at = now() WHERE run_id = $1 AND step = $2 AND state = 'prepared'`
-	if _, err := s.Pool.Exec(ctx, q, runID, step); err != nil {
+	tag, err := s.Pool.Exec(ctx, q, runID, step)
+	if err != nil {
 		return fmt.Errorf("store: llm dispatched: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// 审计 4.1：已 dispatched/result 的行 0 更新——「上次已发送、结果
+		// 未确认」不得被当可再派发
+		return fmt.Errorf("store: llm dispatched: %w", ErrDispatchClaimLost)
 	}
 	return nil
 }
+
+// ErrDispatchClaimLost dispatched 转换未赢 claim（审计 4.1——0 行更新）。
+var ErrDispatchClaimLost = errors.New("dispatch claim lost (state 非 prepared)")
 
 // ListCallsForRun 对账查询（审计 A1/A2 的消费端：llm+mcp 账本行）。
 func (s *Store) ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error) {
@@ -137,27 +146,40 @@ WHERE run_id = $1 AND step = $2`
 
 // MCPCallRow 是 MCP 效果账本行（审计 A2——外部效果证据）。
 type MCPCallRow struct {
-	RunID      string
-	Step       int
-	Server     string
-	Tool       string
-	State      string
-	Err        string
-	PreparedAt time.Time
+	RunID       string
+	Step        int
+	Server      string
+	Tool        string
+	State       string
+	Err         string
+	RequestHash string
+	Result      string
+	PreparedAt  time.Time
 }
 
-// PutMCPCallPrepared 派发前落行（冲突读既存状态——仲裁合同：result/unknown
-// 不得重派发）。
-func (s *Store) PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool string) (*MCPCallRow, error) {
+// PutMCPCallPrepared 派发前落行（调用身份 = call_key——审计 4.3：同 step
+// 多工具调用的身份，工具名不是逻辑调用身份；冲突 SELECT 回读既存状态）。
+func (s *Store) PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*MCPCallRow, error) {
 	const q = `
-INSERT INTO mcp_calls (run_id, step, server, tool, state, prepared_at)
-VALUES ($1, $2, $3, $4, 'prepared', now())
-ON CONFLICT (run_id, step, server, tool) DO NOTHING
-RETURNING run_id, step, server, tool, state, prepared_at`
+INSERT INTO mcp_calls (run_id, step, server, tool, state, prepared_at, call_key, request_hash)
+VALUES ($1, $2, $3, $4, 'prepared', now(), $5, $6)
+ON CONFLICT (run_id, step, server, tool, call_key) DO NOTHING
+RETURNING run_id, step, server, tool, state, prepared_at, COALESCE(request_hash, ''), COALESCE(result::text, '')`
 	var row MCPCallRow
-	if err := s.Pool.QueryRow(ctx, q, runID, step, server, tool).Scan(&row.RunID, &row.Step, &row.Server, &row.Tool, &row.State, &row.PreparedAt); err != nil {
+	var resultRaw string
+	if err := s.Pool.QueryRow(ctx, q, runID, step, server, tool, nullIfEmpty(callKey), nullIfEmpty(requestHash)).Scan(&row.RunID, &row.Step, &row.Server, &row.Tool, &row.State, &row.PreparedAt, &row.RequestHash, &resultRaw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// 冲突（同身份已有行）——SELECT 回读
+			const gq = `SELECT run_id, step, server, tool, state, prepared_at, COALESCE(request_hash, ''), COALESCE(result::text, '') FROM mcp_calls WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4 AND call_key = $5`
+			if gErr := s.Pool.QueryRow(ctx, gq, runID, step, server, tool, callKey).Scan(&row.RunID, &row.Step, &row.Server, &row.Tool, &row.State, &row.PreparedAt, &row.RequestHash, &resultRaw); gErr != nil {
+				return nil, fmt.Errorf("store: mcp prepared readback: %w", gErr)
+			}
+			row.Result = resultRaw
+			return &row, nil
+		}
 		return nil, fmt.Errorf("store: mcp prepared: %w", err)
 	}
+	row.Result = resultRaw
 	return &row, nil
 }
 

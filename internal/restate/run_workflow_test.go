@@ -140,7 +140,7 @@ func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ in
 	return nil
 }
 
-func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _ string) (*store.MCPCallRow, error) {
+func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _, _, _ string) (*store.MCPCallRow, error) {
 	return &store.MCPCallRow{}, nil
 }
 

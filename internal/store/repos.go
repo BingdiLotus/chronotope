@@ -189,22 +189,31 @@ func (s *Store) CreateRunWithCommand(ctx context.Context, id, sessionID, input, 
 	if err != nil {
 		return false, fmt.Errorf("store: marshal run bound: %w", err)
 	}
+	// 审计 5.1（八期）：command/Run/outbox 同一 owner 事务（此前两次独立
+	// 提交的假事务——Run 失败留孤儿 pending 行；此注释与实现必须一致）
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("store: create run begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `INSERT INTO admission_outbox (run_id, state) VALUES ($1, 'pending') ON CONFLICT (run_id) DO NOTHING`, id); err != nil {
+		return false, fmt.Errorf("store: admission outbox: %w", err)
+	}
 	const q = `
 INSERT INTO runs (id, session_id, trigger, status, bound, input, topic)
 VALUES ($1, $2, $3, 'queued', $4, $5, $6)
 ON CONFLICT (id) DO NOTHING
 RETURNING id`
-	// 审计 B1：admission outbox 同行事务（pending 派发契约——重投扫描的精确源）
-	if _, err := s.Pool.Exec(ctx, `INSERT INTO admission_outbox (run_id, state) VALUES ($1, 'pending') ON CONFLICT (run_id) DO NOTHING`, id); err != nil {
-		return false, fmt.Errorf("store: admission outbox: %w", err)
-	}
 	var got string
-	err = s.Pool.QueryRow(ctx, q, id, sessionID, nullableRaw(trigger), boundJSON, nullIfEmpty(input), nullIfEmpty(topic)).Scan(&got)
+	err = tx.QueryRow(ctx, q, id, sessionID, nullableRaw(trigger), boundJSON, nullIfEmpty(input), nullIfEmpty(topic)).Scan(&got)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil // 已存在（幂等）
+		return false, nil // 已存在（幂等——outbox 的 DO NOTHING 一并回滚）
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: create run: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("store: create run commit: %w", err)
 	}
 	return true, nil
 }

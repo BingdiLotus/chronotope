@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"time"
@@ -64,6 +65,9 @@ func (s *Store) MarkDeliverableDelivered(ctx context.Context, id int64) error {
 	return nil
 }
 
+// ErrFinalizeConflict 终态提交冲突（审计 5.2——已终态或同 key 异 payload）。
+var ErrFinalizeConflict = errors.New("finalize conflict (run 已终态)")
+
 // FinalizeRun E2：终态原子性——run 终态状态 + deliverable 结果引用同事务
 // （canonical terminal 与 owner outbox 的原子提交——deliverable 失败不再被吞，
 // 终态与交付要么同存要么同无）。
@@ -84,7 +88,8 @@ WHERE id = $1`
 	const dq = `
 INSERT INTO deliverables (run_id, session_id, kind, payload)
 VALUES ($1, $2, $3, $4)
-ON CONFLICT (run_id) DO NOTHING`
+ON CONFLICT (run_id) DO UPDATE SET payload = EXCLUDED.payload
+WHERE deliverables.payload = EXCLUDED.payload`
 	if _, err := tx.Exec(ctx, dq, runID, sessionID, kind, payload); err != nil {
 		return fmt.Errorf("store: finalize deliverable: %w", err)
 	}

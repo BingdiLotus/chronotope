@@ -2,6 +2,7 @@ package restate
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -90,12 +91,17 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 	// 工具；「效果已发生、确认未存」的 receipt ledger 窗口后置标注）
 	result, callErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 		// 审计 4.1 仲裁：账本失败零派发；unknown 停派发（SDK 重试不得覆盖）
-		row, err := deps.Store.PutMCPCallPrepared(rc, runID, step, server, tool)
+		callKey := tc.ID
+		if callKey == "" {
+			callKey = fmt.Sprintf("%x", sha256.Sum256(tc.Arguments))[:16]
+		}
+		reqHash := fmt.Sprintf("%x", sha256.Sum256([]byte(server+"|"+tool+"|"+string(tc.Arguments))))[:32]
+		row, err := deps.Store.PutMCPCallPrepared(rc, runID, step, server, tool, callKey, reqHash)
 		if err != nil {
-			return "", fmt.Errorf("mcp 账本 prepare 失败（零派发）: %w", err)
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 prepare 失败（零派发）: %w", err))
 		}
 		if row == nil {
-			return "", fmt.Errorf("mcp 账本 prepare 无行（零派发）")
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 prepare 无行（零派发）"))
 		}
 		if row.State == "result" {
 			return "", fmt.Errorf("mcp 账本已有结果（不重派发）")
@@ -109,7 +115,7 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 			errMsg = err.Error()
 		}
 		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, errMsg); lErr != nil {
-			return "", fmt.Errorf("mcp 账本 result 失败: %w", lErr)
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 result 失败: %w", lErr))
 		}
 		return r, err
 	}, restate.WithName(StepName("mcp", step, tc.Name)))

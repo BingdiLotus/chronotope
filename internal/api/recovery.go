@@ -35,6 +35,22 @@ func (a *AdmissionRecovery) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (a *AdmissionRecovery) pass(ctx context.Context) error {
+	// 审计 5.1（八期）：pending outbox 是精确派发源（稳定 workflow key 重投）
+	if pending, pErr := a.Store.ListPendingAdmissions(ctx, 2*time.Minute, 20); pErr == nil {
+		for _, p := range pending {
+			var out struct {
+				RunID string `json:"run_id"`
+			}
+			if err := a.Ingress.Call(ctx, "/run_workflow/"+p.RunID+"/run", "POST",
+				map[string]any{"session_id": p.SessionID, "input": p.Input, "topic": p.Topic}, &out); err != nil {
+				if a.Logger != nil {
+					a.Logger.Warn("admission pending redeliver failed", "run_id", p.RunID, "err", err)
+				}
+				continue
+			}
+			_ = a.Store.MarkAdmissionDispatched(ctx, p.RunID)
+		}
+	}
 	runs, err := a.Store.ListStaleQueuedRuns(ctx, time.Now().Add(-a.Stale), 20)
 	if err != nil {
 		return err

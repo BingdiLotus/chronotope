@@ -52,6 +52,21 @@ func (p *ExecutorPool) clientForDriver(ctx context.Context, sandboxID, sessionID
 			if c, ok := p.client(owner); ok {
 				return c, owner, nil
 			}
+			// 审计 6（八期）：缓存未命中（worker 重启）——从 registry 按原
+			// owner 重建 client（不落候选策略——首个恢复操作不得去别的 Host）
+			if p.ListExecutors != nil {
+				if rows, lErr := p.ListExecutors(ctx); lErr == nil {
+					for _, r := range rows {
+						if r.ID == owner {
+							p.setClient(owner, NewExecutorClient(r.Endpoint))
+							if c, ok := p.client(owner); ok {
+								return c, owner, nil
+							}
+						}
+					}
+				}
+			}
+			return nil, owner, fmt.Errorf("executor owner %s 未在 registry（显式 unavailable）", owner)
 		}
 	}
 	// 候选 = 注册表新鲜行
