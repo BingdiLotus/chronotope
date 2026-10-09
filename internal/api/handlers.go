@@ -1174,8 +1174,9 @@ func (h *Handler) ackDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.MarkDeliverableDelivered(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		writeError(w, http.StatusConflict, 409, err.Error())
 		return
 	}
+	// M3：回执留痕 = delivered_at 时间戳（worker 是事件唯一写入者——api 不写）
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -18,7 +18,7 @@ for e in events:
     if isinstance(e["payload"], str):
         h.update(e["payload"].encode())
     else:
-        h.update(json.dumps(e["payload"], ensure_ascii=False).encode())
+        h.update(json.dumps(e["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
     want = h.hexdigest()
     if e.get("prev_hash", "") != prev or e.get("event_hash", "") != want:
         print(f"链断裂 @seq {e['seq']}: prev 期望 {prev} 实 {e.get('prev_hash','')} / hash 期望 {want} 实 {e.get('event_hash','')}")

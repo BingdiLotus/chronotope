@@ -40,14 +40,14 @@ RETURNING id, org_id, objective, scope, version, owner, status, state_hash`
 
 // GoalRow 目标行。
 type GoalRow struct {
-	ID        string
-	OrgID     string
-	Objective string
-	Scope     string
-	Version   int
-	Owner     string
-	Status    string
-	StateHash string
+	ID        string `json:"id"`
+	OrgID     string `json:"org_id"`
+	Objective string `json:"objective"`
+	Scope     string `json:"scope"`
+	Version   int    `json:"version"`
+	Owner     string `json:"owner"`
+	Status    string `json:"status"`
+	StateHash string `json:"state_hash"`
 }
 
 // GetGoal 读目标（含 version/hash——在过期快照上执行的检测）。

@@ -167,9 +167,13 @@ func (h *Handler) Router() chi.Router {
 
 	registerManagementRoutes(r, h) // 期 5 §A：管理面（成员/用量/配额/账单）
 	r.Route("/orgs/{orgID}", func(r chi.Router) {
-		r.Post("/agents", h.createAgent)                  // 创建/升级 agent（config 全量，version+1）
-		r.Get("/sessions", h.listSessions)                // 会话列表（控制台最小页）
-		r.Put("/budget", h.updateOrgBudget)               // org 预算（三级熔断 ②：充值入口）
+		r.Post("/agents", h.createAgent)       // 创建/升级 agent（config 全量，version+1）
+		r.Get("/sessions", h.listSessions)     // 会话列表（控制台最小页）
+		r.Put("/budget", h.updateOrgBudget)    // org 预算（三级熔断 ②：充值入口）
+		r.Put("/goals/{goalID}", h.upsertGoal) // M2 目标（慢变量 version 递增）
+		r.Get("/goals/{goalID}", h.getGoal)
+		r.Post("/goals/{goalID}/items", h.createWorkItem) // M2 工作切片
+		r.Get("/goals/{goalID}/items", h.listWorkItems)
 		r.Post("/keys", h.createAPIKey)                   // 多租户认证：生成 key（明文仅此一次）
 		r.Post("/users", h.createUser)                    // 技术主体（principal，期 3 §A）
 		r.Put("/approval-policy", h.upsertApprovalPolicy) // 审批策略（期 3 §B 参考业务层）
@@ -193,6 +197,10 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/export", h.exportSession)                     // 标准 tar 导出（W8 交付物）
 		r.Get("/usage", h.getUsage)                           // 三轴计量（活跃秒/token/计算秒，1min 桶）
 		r.Get("/memory", h.getMemory)                         // 分层记忆（主题摘要 + 长期记忆条目，W5）
+		r.Get("/audit-export", h.auditExport)                 // M1 审计导出（哈希链）
+		r.Post("/audit-hold", h.auditHold)                    // M1 法定保留
+		r.Post("/evidence", h.putEvidence)                    // M2 证据记录（新鲜度）
+		r.Get("/stale-evidence", h.staleEvidence)             // M2 过期证据查询
 		r.Get("/deliveries", h.listDeliveries)                // 交付清单（outbox，W8 后置）
 		r.Post("/deliveries/{deliveryID}/ack", h.ackDelivery) // 投递回执
 		r.Post("/subscriptions", h.subscribe)                 // 事件投递订阅（webhook/email）

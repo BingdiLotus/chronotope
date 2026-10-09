@@ -59,11 +59,19 @@ FROM deliverables WHERE session_id = $1 ORDER BY id LIMIT $2`
 // MarkDeliverableDelivered 投递回执。
 func (s *Store) MarkDeliverableDelivered(ctx context.Context, id int64) error {
 	const q = `UPDATE deliverables SET delivered_at = now() WHERE id = $1 AND delivered_at IS NULL`
-	if _, err := s.Pool.Exec(ctx, q, id); err != nil {
+	tag, err := s.Pool.Exec(ctx, q, id)
+	if err != nil {
 		return fmt.Errorf("store: mark deliverables delivered: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// 审计（M3）：不存在的 id/重复 ack 不得静默成功——投递回执的真实语义
+		return fmt.Errorf("store: delivery ack: %w", ErrDeliveryAckConflict)
 	}
 	return nil
 }
+
+// ErrDeliveryAckConflict 投递回执冲突（M3——id 不存在或已 ack）。
+var ErrDeliveryAckConflict = errors.New("delivery ack conflict")
 
 // ErrFinalizeConflict 终态提交冲突（审计 5.2——已终态或同 key 异 payload）。
 var ErrFinalizeConflict = errors.New("finalize conflict (run 已终态)")
