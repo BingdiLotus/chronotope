@@ -116,6 +116,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.6 w19 合规验收 demo（M3：Goal→审批→Evidence→审计链）
+bash test/e2e/w19-compliance.sh "$API" > /tmp/demo-w19.log 2>&1 && pass "W19 合规验收（6 项断言）" || { fail "W19 合规验收"; tail -5 /tmp/demo-w19.log; }
+
 # 13.5 w18 账本与 quiesce e2e（A-F 批的端到端固化）
 bash test/e2e/w18-ledger.sh "$API" > /tmp/demo-w18.log 2>&1 && pass "W18 账本/quiesce/unknown（4 项断言）" || { fail "W18 账本/quiesce/unknown"; tail -5 /tmp/demo-w18.log; }
 
