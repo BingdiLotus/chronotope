@@ -116,6 +116,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.5 w18 账本与 quiesce e2e（A-F 批的端到端固化）
+bash test/e2e/w18-ledger.sh "$API" > /tmp/demo-w18.log 2>&1 && pass "W18 账本/quiesce/unknown（4 项断言）" || { fail "W18 账本/quiesce/unknown"; tail -5 /tmp/demo-w18.log; }
+
 # 13. W8 后置：交付清单 outbox（run 完成 → 交付行 → 投递回执）
 bash test/e2e/w8-delivery.sh "$API" > /tmp/demo-w8d.log 2>&1 && pass "W8 后置 交付清单（3 项断言）" || { fail "W8 后置 交付清单"; tail -5 /tmp/demo-w8d.log; }
 
