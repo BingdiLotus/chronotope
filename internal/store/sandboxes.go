@@ -147,6 +147,25 @@ RETURNING idempotency_key, prepared_at`
 	return true, &pa, nil
 }
 
+// UpdateExecState 标记 exec 行状态（审计 A3：prepared 过期停派发 → unknown——
+// 查询/对账可见；管理员接管删除后重新 claim 可执行）。
+func (s *Store) UpdateExecState(ctx context.Context, idempotencyKey, state string) error {
+	const q = `UPDATE sandbox_execs SET state = $2 WHERE idempotency_key = $1`
+	if _, err := s.Pool.Exec(ctx, q, idempotencyKey, state); err != nil {
+		return fmt.Errorf("store: exec state: %w", err)
+	}
+	return nil
+}
+
+// DeleteExec 管理员接管：删除 exec 行（prepared/unknown 卡死 → 重新 claim）。
+func (s *Store) DeleteExec(ctx context.Context, idempotencyKey string) error {
+	const q = `DELETE FROM sandbox_execs WHERE idempotency_key = $1`
+	if _, err := s.Pool.Exec(ctx, q, idempotencyKey); err != nil {
+		return fmt.Errorf("store: delete exec: %w", err)
+	}
+	return nil
+}
+
 // PutExecDone 执行完成落账（状态 done；失败返回错误——调用方必须发 error 帧，
 // 不得回成功 exit，否则未知窗口内重试会双执行，评审 #1）。
 // 审计准入 #2：prepared_at 条件——旧 holder 的迟到结果（prepared 已换代）

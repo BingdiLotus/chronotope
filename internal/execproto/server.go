@@ -34,6 +34,8 @@ type SandboxStore interface {
 	// 执行状态机（评审 #1：prepared claim → done 落账）
 	PutExecPrepared(ctx context.Context, idempotencyKey, sandboxID, inputDigest string) (bool, *time.Time, error)
 	PutExecDone(ctx context.Context, idempotencyKey, sandboxID string, result json.RawMessage, preparedAt *time.Time) error
+	UpdateExecState(ctx context.Context, idempotencyKey, state string) error
+	DeleteExec(ctx context.Context, idempotencyKey string) error
 	// ComputeLease（正确性二期 ⑨）
 	AcquireLease(ctx context.Context, sandboxID, runID string, ttl time.Duration) (*store.LeaseRow, error)
 	ReleaseLease(ctx context.Context, sandboxID string, generation int64) (bool, error)
@@ -144,6 +146,8 @@ func (s *Server) Router() chi.Router {
 	r.Post("/sandboxes/{sandboxID}/lease", s.acquireLease)
 	r.Delete("/sandboxes/{sandboxID}/lease", s.releaseLease)
 	r.Post("/execute", s.execute)
+	r.Get("/execs/{key}", s.getExec)
+	r.Delete("/execs/{key}", s.deleteExec)
 	r.Get("/files/{sandboxID}/*", s.readFile)
 	r.Put("/files/{sandboxID}/*", s.writeFile)
 	r.Post("/sandboxes/{sandboxID}/freeze", s.freeze)
@@ -255,6 +259,8 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 			// = 幂等重建场景（快照恢复后的重放）；否则 unknown 停派发 409
 			sameInput := cached.InputDigest == "" || cached.InputDigest == inputDigest(req)
 			if !sameInput || cached.SandboxID != req.SandboxID {
+				// 审计 A3：行标 unknown（查询/对账可见——管理员接管删除后重试）
+				_ = s.Store.UpdateExecState(r.Context(), req.IdempotencyKey, "unknown")
 				s.Logger.Warn("exec prepared 过期且输入/沙箱不符——unknown 停派发", "key", req.IdempotencyKey)
 				writeError(w, http.StatusConflict, 409, "执行状态 unknown（输入或沙箱与在途执行不符——请对账后重试）")
 				return
@@ -461,6 +467,34 @@ func (s *Server) writeSSE(w http.ResponseWriter, fl http.Flusher, v any) {
 	raw, _ := json.Marshal(v)
 	fmt.Fprintf(w, "data: %s\n\n", raw)
 	fl.Flush()
+}
+
+// getExec 查询 exec 行（审计 A3：unknown 接管的前置——状态/结果可见）。
+func (s *Server) getExec(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	row, err := s.Store.GetExec(r.Context(), key)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, 404, "exec not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"idempotency_key": key, "state": row.State, "sandbox_id": row.SandboxID,
+		"input_digest": row.InputDigest, "result": row.Result,
+	})
+}
+
+// deleteExec 管理员接管（审计 A3：prepared/unknown 卡死 → 删除后重新 claim）。
+func (s *Server) deleteExec(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if err := s.Store.DeleteExec(r.Context(), key); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": key})
 }
 
 // externalize 把大输出写到宿主机工作区文件，返回 file:// 引用（RustFS 已落地）。

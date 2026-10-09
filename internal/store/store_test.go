@@ -1116,3 +1116,39 @@ func TestDeleteSandboxClearsLeaseTombstone(t *testing.T) {
 		t.Fatalf("delete sandbox 应清理 lease tombstone（FK 回归）: %v", err)
 	}
 }
+
+// TestEffectLedgerRoundtrip 审计 A 批：llm/mcp 账本的 prepared→result/unknown
+// 落账（对账证据——崩溃窗口的第二次闭包执行更新同一行）。
+func TestEffectLedgerRoundtrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	rid := fmt.Sprintf("r_ledger_%d", time.Now().UnixNano())
+	// A1：prepared → result（usage 落账）
+	if _, err := s.PutLLMCallPrepared(ctx, rid, 0); err != nil {
+		t.Fatalf("llm prepared: %v", err)
+	}
+	if err := s.PutLLMCallResult(ctx, rid, 0, 120, 45, false, false, ""); err != nil {
+		t.Fatalf("llm result: %v", err)
+	}
+	// 错误 → unknown（usage_unknown 账本化）
+	if _, err := s.PutLLMCallPrepared(ctx, rid, 1); err != nil {
+		t.Fatalf("llm prepared2: %v", err)
+	}
+	if err := s.PutLLMCallResult(ctx, rid, 1, 0, 0, false, true, "model 400"); err != nil {
+		t.Fatalf("llm unknown: %v", err)
+	}
+	// A2：mcp prepared → 错误 unknown
+	if err := s.PutMCPCallPrepared(ctx, rid, 0, "echo", "echo"); err != nil {
+		t.Fatalf("mcp prepared: %v", err)
+	}
+	if err := s.PutMCPCallResult(ctx, rid, 0, "echo", "echo", "dial timeout"); err != nil {
+		t.Fatalf("mcp unknown: %v", err)
+	}
+	var state string
+	if err := s.Pool.QueryRow(ctx, `SELECT state FROM llm_calls WHERE run_id=$1 AND step=1`, rid).Scan(&state); err != nil || state != "unknown" {
+		t.Fatalf("llm step1 应 unknown: %q err=%v", state, err)
+	}
+	if err := s.Pool.QueryRow(ctx, `SELECT state FROM mcp_calls WHERE run_id=$1`, rid).Scan(&state); err != nil || state != "unknown" {
+		t.Fatalf("mcp 应 unknown（网络超时可能效果已发生）: %q err=%v", state, err)
+	}
+}

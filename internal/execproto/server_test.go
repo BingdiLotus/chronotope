@@ -212,6 +212,23 @@ func (f *fakeSBStore) PutExecPrepared(_ context.Context, key, sandboxID, digest 
 	return true, &now, nil
 }
 
+func (f *fakeSBStore) UpdateExecState(_ context.Context, key, state string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if row, ok := f.execsPrepared[key]; ok {
+		row.State = state
+	}
+	return nil
+}
+
+func (f *fakeSBStore) DeleteExec(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.execsPrepared, key)
+	delete(f.execs, key)
+	return nil
+}
+
 func (f *fakeSBStore) PutExecDone(_ context.Context, key, sandboxID string, result json.RawMessage, _ *time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -32,6 +32,7 @@ type storedEvent struct {
 }
 
 type fakeStore struct {
+	llmPrepared         int
 	knowledge           []store.KnowledgeItem
 	allowlistAllowed    map[string]bool
 	allowlistConfigured map[string]bool
@@ -109,6 +110,23 @@ func (f *fakeStore) HasMCPAllowlist(_ context.Context, _ string, server string) 
 	}
 	_, ok := f.allowlistConfigured[server]
 	return ok, nil
+}
+
+func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int) (*store.LLMCallRow, error) {
+	f.llmPrepared++
+	return &store.LLMCallRow{}, nil
+}
+
+func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ int64, _, _ bool, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) PutMCPCallResult(_ context.Context, _ string, _ int, _, _, _ string) error {
+	return nil
 }
 
 func (f *fakeStore) MCPToolAllowed(_ context.Context, tenantID, server, tool string) (bool, error) {

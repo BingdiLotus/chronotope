@@ -256,7 +256,18 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (RunOut
 		// 一次 harness 调用 = 一个 journaled step（缓存键 = journal 位置，
 		// 崩溃重放直接回放缓存，不重调 harness——三条纪律之三）
 		res, runErr := restate.Run(ctx, func(rc restate.RunContext) (*Result, error) {
-			return deps.Harness.Call(rc, req)
+			// 账本（审计 A1）：派发证据先落 prepared 行（幂等按 run+step——
+			// 崩溃窗口的第二次闭包执行更新同一行，dispatch 证据供对账）
+			_, _ = deps.Store.PutLLMCallPrepared(rc, runID, step)
+			r, err := deps.Harness.Call(rc, req)
+			// 结果落账（usage 三字段 + unknown 状态——审计 #7 的账本化）
+			if r != nil {
+				unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
+				_ = deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "")
+			} else if err != nil {
+				_ = deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error())
+			}
+			return r, err
 		}, restate.WithName(StepName("harness", step, "")))
 		if res != nil && res.Usage.TokensIn == 0 && res.Usage.TokensOut == 0 && !res.Truncated {
 			// 审计 #7：usage 不确定当零——显式 usage_unknown 标注（账本第一块；
