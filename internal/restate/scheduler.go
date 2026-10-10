@@ -59,18 +59,17 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 					decision = deps.SchedulerPolicy.Decide(ctx, in.SessionID)
 				}
 				emit := &Emitter{Store: deps.Store}
-				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SessionWoken, "woken", restate.Key(ctx), map[string]any{
-					"schedule": restate.Key(ctx), "phase": "decide",
+				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SchedulerDecide, "decide", restate.Key(ctx), map[string]any{
+					"schedule": restate.Key(ctx), "hint": string(decision.Hint),
+					"reason": decision.Reason,
 				})
-
-				_, err := restate.Object[SessionState](ctx, SessionObjectName, in.SessionID, "Wake").
+				state, err := restate.Object[SessionState](ctx, SessionObjectName, in.SessionID, "Wake").
 					Request(WakeInput{Payload: in.Payload})
 				if err != nil {
 					return ScheduleOutput{}, err
 				}
-				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SchedulerDecide, "decide", restate.Key(ctx), map[string]any{
-					"schedule": restate.Key(ctx), "hint": string(decision.Hint),
-					"reason": decision.Reason,
+				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SessionWoken, "woken", restate.Key(ctx), map[string]any{
+					"schedule": restate.Key(ctx), "phase": state.Phase,
 				})
 				if decision.Hint != store.HintRun {
 					// quiet/wait/ask：不派发 child run——零 token 消耗的判定
