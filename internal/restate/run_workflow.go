@@ -271,59 +271,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		// 崩溃重放直接回放缓存，不重调 harness——三条纪律之三）
 		callStart := time.Now()
 		res, runErr := restate.Run(ctx, func(rc restate.RunContext) (*Result, error) {
-			// 审计 4.1 仲裁合同：账本写入失败 = 零次新派发；冲突读既存状态
-			reqHash := requestHashOf(req)
-			row, err := deps.Store.PutLLMCallPrepared(rc, runID, step, reqHash)
-			if err != nil {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err))
-			}
-			if row == nil {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 无行（零派发）"))
-			}
-			if row.State == "result" {
-				// 合同表：同 operation 已有结果——hash 同 → 返回冻结原结果
-				//（不执行）；hash 异 → 拒绝（operation 语义冲突）
-				if row.RequestHash != "" && row.RequestHash != reqHash {
-					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本结果与请求 hash 不符（operation 冲突）"))
-				}
-				if row.Result != "" {
-					var cached Result
-					if jErr := json.Unmarshal([]byte(row.Result), &cached); jErr == nil {
-						return &cached, nil // 原结果——零派发
-					}
-				}
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本已有结果（无法回读——人工裁决）"))
-			}
-			if row.State == "unknown" {
-				// 合同表：已派发但生效未知——无法查询 receipt 时停住（人工裁决）
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）"))
-			}
-			// 审计 4.1：prepared/dispatched 的 hash 校验（异 hash 拒绝——同一
-			// 不可变请求的绑定）；dispatched 无接受证据 → 不重派发（停住对账）
-			if row.State == "dispatched" {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 无接受证据（不重派发——对账/人工裁决）"))
-			}
-			if row.RequestHash != "" && row.RequestHash != reqHash {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本请求 hash 不符（operation 冲突）"))
-			}
-			if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
-				return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err))
-			}
-			r, err := deps.Harness.Call(rc, req)
-			// 结果落账（冻结结果引用 + usage——合同表的「同 operation 已有
-			// result」的回读源）
-			if r != nil {
-				unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
-				resultJSON, _ := json.Marshal(r)
-				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON)); lErr != nil {
-					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
-				}
-			} else if err != nil {
-				if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), ""); lErr != nil {
-					return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
-				}
-			}
-			return r, err
+			return harnessCallClosure(rc, deps, runID, step, req)
 		}, restate.WithName(StepName("harness", step, "")))
 		if res != nil && res.Usage.TokensIn == 0 && res.Usage.TokensOut == 0 && !res.Truncated {
 			// 审计 #7：usage 不确定当零——显式 usage_unknown 标注（账本第一块；
@@ -489,38 +437,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		}
 
 		if res.Done {
-			// 结构化输出契约（正式版架构 期 1）：final 必须符合 cfg.OutputSchema
-			if len(cfg.OutputSchema) > 0 {
-				if vErr := validateOutputSchema(cfg.OutputSchema, res.Final); vErr != nil {
-					failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "output_schema_violation", vErr.Error(), "")
-					return RunOutput{}, restate.ToTerminalError(fmt.Errorf("output schema violation: %w", vErr))
-				}
-			}
-			content, _ := json.Marshal(res.Final)
-			if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "assistant", content); err != nil {
-				return RunOutput{}, restate.ToTerminalError(err)
-			}
-			// E2+审计 5.2：canonical terminal 先提交（终态+deliverable 同事务）
-			// ——提交成功后才发布 completed 事件与释放 claim（事件不得早于
-			// 终态提交确认——观察者不得先见未获确认的成功）
-			payload, _ := json.Marshal(map[string]any{
-				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
-				"tokens_in": accTokens, "compute_seconds": accCompute,
-			})
-			if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
-				return RunOutput{}, restate.ToTerminalError(err)
-			}
-			if eErr := emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
-				"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
-			}); eErr != nil {
-				// 审计 5.2：事件义务失败不静默（调用者等不到完成的窗口——
-				// terminal 由同身份恢复提交补发）
-				return RunOutput{}, restate.ToTerminalError(fmt.Errorf("completed 事件写失败（终态已提交——恢复补发）: %w", eErr))
-			}
-			releaseLease()
-			// 记忆消化（run 结束后；失败不影响主流程——内部已吞错）
-			_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
-			return RunOutput{Final: res.Final, Steps: step + 1}, nil
+			return finalizeCompleted(ctx, deps, emit, in, cfg, runID, step, res, accTokens, accCompute, releaseLease)
 		}
 	}
 
@@ -545,6 +462,95 @@ func failRun(ctx context.Context, emit *Emitter, st Store, sessionID, runID stri
 	if detail != "" {
 		slog.Default().Warn("run failed", "run", runID, "reason", reason, "detail", detail)
 	}
+}
+
+// finalizeCompleted 完成终态提交（可信度专项 runLoop 拆分——Done 分支的
+// 纯函数；schema 校验 → assistant 落账 → 终态事务 → completed 事件 → 释放
+// claim → 记忆消化——顺序与语义不变）。
+func finalizeCompleted(ctx restate.Context, deps *Deps, emit *Emitter, in RunInput, cfg sessionapi.AgentConfig, runID string, step int, res *Result, accTokens int64, accCompute float64, releaseLease func()) (RunOutput, error) {
+	if len(cfg.OutputSchema) > 0 {
+		if vErr := validateOutputSchema(cfg.OutputSchema, res.Final); vErr != nil {
+			failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "output_schema_violation", vErr.Error(), "")
+			return RunOutput{}, restate.ToTerminalError(fmt.Errorf("output schema violation: %w", vErr))
+		}
+	}
+	content, _ := json.Marshal(res.Final)
+	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "assistant", content); err != nil {
+		return RunOutput{}, restate.ToTerminalError(err)
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
+		"tokens_in": accTokens, "compute_seconds": accCompute,
+	})
+	if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
+		return RunOutput{}, restate.ToTerminalError(err)
+	}
+	if eErr := emit.Emit(ctx, in.SessionID, runID, step, event.RunCompleted, "", "", map[string]any{
+		"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
+	}); eErr != nil {
+		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("completed 事件写失败（终态已提交——恢复补发）: %w", eErr))
+	}
+	releaseLease()
+	_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
+	return RunOutput{Final: res.Final, Steps: step + 1}, nil
+}
+
+// harnessCallClosure 模型调用的仲裁合同闭包（可信度专项 runLoop 拆分——
+// 55 行闭包 → 纯函数；账本仲裁/结果回读/零派发语义不变）。
+func harnessCallClosure(rc restate.RunContext, deps *Deps, runID string, step int, req *runs.Request) (*Result, error) {
+	// 审计 4.1 仲裁合同：账本写入失败 = 零次新派发；冲突读既存状态
+	reqHash := requestHashOf(req)
+	row, err := deps.Store.PutLLMCallPrepared(rc, runID, step, reqHash)
+	if err != nil {
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 失败（零派发）: %w", err))
+	}
+	if row == nil {
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 prepare 无行（零派发）"))
+	}
+	if row.State == "result" {
+		// 合同表：同 operation 已有结果——hash 同 → 返回冻结原结果
+		//（不执行）；hash 异 → 拒绝（operation 语义冲突）
+		if row.RequestHash != "" && row.RequestHash != reqHash {
+			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本结果与请求 hash 不符（operation 冲突）"))
+		}
+		if row.Result != "" {
+			var cached Result
+			if jErr := json.Unmarshal([]byte(row.Result), &cached); jErr == nil {
+				return &cached, nil // 原结果——零派发
+			}
+		}
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本已有结果（无法回读——人工裁决）"))
+	}
+	if row.State == "unknown" {
+		// 合同表：已派发但生效未知——无法查询 receipt 时停住（人工裁决）
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 停派发（需人工裁决）"))
+	}
+	// 审计 4.1：prepared/dispatched 的 hash 校验（异 hash 拒绝——同一
+	// 不可变请求的绑定）；dispatched 无接受证据 → 不重派发（停住对账）
+	if row.State == "dispatched" {
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 无接受证据（不重派发——对账/人工裁决）"))
+	}
+	if row.RequestHash != "" && row.RequestHash != reqHash {
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本请求 hash 不符（operation 冲突）"))
+	}
+	if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
+		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err))
+	}
+	r, err := deps.Harness.Call(rc, req)
+	// 结果落账（冻结结果引用 + usage——合同表的「同 operation 已有
+	// result」的回读源）
+	if r != nil {
+		unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
+		resultJSON, _ := json.Marshal(r)
+		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON)); lErr != nil {
+			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
+		}
+	} else if err != nil {
+		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), ""); lErr != nil {
+			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
+		}
+	}
+	return r, err
 }
 
 // requestHashOf 冻结请求的 hash（仲裁合同——同 operation 结果校验）。
