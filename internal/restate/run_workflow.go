@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -329,6 +330,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			}
 			return r, err
 		}, restate.WithName(StepName("harness", step, "")))
+		callStart := time.Now()
 		if res != nil && res.Usage.TokensIn == 0 && res.Usage.TokensOut == 0 && !res.Truncated {
 			// 审计 #7：usage 不确定当零——显式 usage_unknown 标注（账本第一块；
 			// 完整 prepared/dispatch/result 状态机后置）
@@ -346,7 +348,8 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 
 		if err := emit.Emit(ctx, in.SessionID, runID, step, event.LLMCall, "llm", "", map[string]any{
 			"step": step, "usage": res.Usage,
-			"msgs": len(req.Messages), // 组装消息数（分层记忆注入的 e2e 可观测性）
+			"msgs":        len(req.Messages),                    // 组装消息数（分层记忆注入的 e2e 可观测性）
+			"duration_ms": time.Since(callStart).Milliseconds(), // 可信度专项 ②：compute 账本数据源
 		}); err != nil {
 			return RunOutput{}, restate.ToTerminalError(err)
 		}
