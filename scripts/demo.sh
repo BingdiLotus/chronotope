@@ -117,6 +117,8 @@ kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
 # 13.8 w21 信任拓扑（期 6 ②：MCP 注入 untrusted 标记 + class 2 不执行）
+nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/demo-mcp-fixture.log 2>&1 &
+sleep 2
 bash test/e2e/w21-trust.sh "$API" > /tmp/demo-w21.log 2>&1 && pass "W21 信任拓扑（3 项断言）" || { fail "W21 信任拓扑"; tail -5 /tmp/demo-w21.log; }
 
 # 13.7 w20 WaitFor + intent（期 6 ①：等待注册/解决/审批意图落账）
