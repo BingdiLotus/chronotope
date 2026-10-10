@@ -173,10 +173,13 @@ func (h *Handler) Router() chi.Router {
 
 	registerManagementRoutes(r, h) // 期 5 §A：管理面（成员/用量/配额/账单）
 	r.Route("/orgs/{orgID}", func(r chi.Router) {
-		r.Post("/agents", h.createAgent)       // 创建/升级 agent（config 全量，version+1）
-		r.Get("/sessions", h.listSessions)     // 会话列表（控制台最小页）
-		r.Put("/budget", h.updateOrgBudget)    // org 预算（三级熔断 ②：充值入口）
-		r.Put("/goals/{goalID}", h.upsertGoal) // M2 目标（慢变量 version 递增）
+		r.Post("/agents", h.createAgent)                              // 创建/升级 agent（config 全量，version+1）
+		r.Get("/sessions", h.listSessions)                            // 会话列表（控制台最小页）
+		r.Put("/budget", h.updateOrgBudget)                           // org 预算（三级熔断 ②：充值入口）
+		r.Put("/goals/{goalID}", h.upsertGoal)                        // M2 目标（慢变量 version 递增）
+		r.Post("/harnesses", h.registerHarness)                       // Harness 装配：注册/心跳
+		r.Get("/harnesses", h.listHarnesses)                          // Harness 装配：列表
+		r.Put("/harnesses/{name}/{version}/state", h.setHarnessState) // 切 active/draining/retire
 		r.Get("/goals/{goalID}", h.getGoal)
 		r.Post("/goals/{goalID}/items", h.createWorkItem) // M2 工作切片
 		r.Get("/goals/{goalID}/items", h.listWorkItems)

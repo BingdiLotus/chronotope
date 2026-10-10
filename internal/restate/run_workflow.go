@@ -495,6 +495,17 @@ func finalizeCompleted(ctx restate.Context, deps *Deps, emit *Emitter, in RunInp
 	return RunOutput{Final: res.Final, Steps: step + 1}, nil
 }
 
+// harnessFor 按 run 快照解析 harness 客户端（装配阶段 2——同 run 各 step
+// 打同一 endpoint；快照冻结的替换语义）。
+func harnessFor(deps *Deps, ctx context.Context, runID string) Harness {
+	if deps.HarnessForRun != nil {
+		if h := deps.HarnessForRun(ctx, runID); h != nil {
+			return h
+		}
+	}
+	return deps.Harness
+}
+
 // harnessCallClosure 模型调用的仲裁合同闭包（可信度专项 runLoop 拆分——
 // 55 行闭包 → 纯函数；账本仲裁/结果回读/零派发语义不变）。
 func harnessCallClosure(rc restate.RunContext, deps *Deps, runID string, step int, req *runs.Request) (*Result, error) {

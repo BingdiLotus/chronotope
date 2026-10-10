@@ -149,6 +149,11 @@ type Deps struct {
 	// HarnessEndpoint 是 worker 级 harness 地址（装配阶段 1：run 快照冻结
 	// 的全局 fallback——解析链在阶段 2）。
 	HarnessEndpoint string
+	// HarnessResolver 是解析链（装配阶段 2：agent 绑定 → org 默认 → 全局）。
+	HarnessResolver policy.HarnessResolver
+	// HarnessForRun 按 run 快照解析 harness 客户端（bound.harness_endpoint
+	// 非全局 → 快照客户端；升级后旧 run 沿旧 endpoint）。
+	HarnessForRun func(ctx context.Context, runID string) Harness
 }
 
 // RestateSessionSource 是生产实现：经 Restate virtual object 调用读写会话状态。

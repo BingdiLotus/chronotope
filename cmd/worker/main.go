@@ -53,9 +53,24 @@ func main() {
 		}
 	}
 	deps := &restate.Deps{
-		Store:                st,
-		Harness:              restate.NewHarnessClient(*harnessURL),
-		HarnessEndpoint:      *harnessURL,
+		Store:           st,
+		Harness:         restate.NewHarnessClient(*harnessURL),
+		HarnessEndpoint: *harnessURL,
+		// 装配阶段 2：解析链（agent 绑定 → org active → 全局 fallback）
+		HarnessForRun: func(ctx context.Context, runID string) restate.Harness {
+			r, err := st.GetRun(ctx, runID)
+			if err != nil || r == nil {
+				return nil
+			}
+			if ep, ok := r.Bound["harness_endpoint"].(string); ok && ep != "" && ep != *harnessURL {
+				return restate.NewHarnessClient(ep)
+			}
+			return nil // 全局 fallback（harnessFor 回落到 deps.Harness）
+		},
+		HarnessResolver: &policy.DefaultResolver{
+			Lookup:    harnessLookupOf(st),
+			GlobalURL: *harnessURL,
+		},
 		Executor:             executorPoolOf(st, *executorURL),
 		MCP:                  restate.NewHTTPMCPClient(),
 		Sessions:             restate.RestateSessionSource{},
@@ -162,3 +177,17 @@ func envOr(key, fallback string) string {
 	}
 	return fallback
 }
+
+// harnessLookupOf 是 DefaultResolver 的数据视图（store.GetActiveHarness 的
+// 适配——装配阶段 2）。
+type harnessLookup struct{ st *store.Store }
+
+func (h harnessLookup) ActiveHarness(ctx context.Context, orgID, name string) (string, string, error) {
+	row, err := h.st.GetActiveHarness(ctx, orgID, name)
+	if err != nil {
+		return "", "", err
+	}
+	return row.Endpoint, row.Version, nil
+}
+
+func harnessLookupOf(st *store.Store) policy.HarnessLookup { return harnessLookup{st: st} }

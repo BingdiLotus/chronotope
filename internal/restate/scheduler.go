@@ -91,11 +91,17 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 					return ScheduleOutput{}, err
 				}
 				runID := "r_" + suffix
+				// Harness 装配阶段 2：解析链（agent 绑定 → org 默认 → 全局）
+				// ——run 快照冻结解析结果（升级后旧 run 沿旧 endpoint）
+				harnessEP, harnessV := deps.HarnessEndpoint, "global"
+				if deps.HarnessResolver != nil {
+					if hr, rErr := deps.HarnessResolver.Resolve(ctx, "", nil); rErr == nil {
+						harnessEP, harnessV = hr.Endpoint, hr.Version
+					}
+				}
 				if _, err := deps.Store.CreateRun(ctx, runID, in.SessionID, nil, map[string]any{
 					"trigger": "schedule", "schedule_id": restate.Key(ctx),
-					// Harness 装配阶段 1：run 快照冻结（默认全局 fallback——
-					// 升级后旧 run 沿旧 endpoint；解析链在阶段 2）
-					"harness_endpoint": deps.HarnessEndpoint, "harness_version": "global",
+					"harness_endpoint": harnessEP, "harness_version": harnessV,
 				}); err != nil {
 					return ScheduleOutput{}, err
 				}

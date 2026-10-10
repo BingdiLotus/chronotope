@@ -116,7 +116,10 @@ AgentConfig.harness_ref = { name, version? }   // 空 = org 默认（全局 fall
    GetActiveHarness/SetHarnessState + POST/GET/PUT 三端点 + AgentConfig.HarnessRef
    进 spec digest + run 快照 bound.harness_endpoint/version 冻结——默认全局
    fallback 零行为变化；TestHarnessRegistryRoundtrip 反例固化）
-2. **替换**：解析链（agent→org→全局）+ active 切换 + 管理面（draining/retire）
+2. **替换** ✅ 已落地（2026-10-11——policy.HarnessResolver 策略缝 +
+   DefaultResolver 解析链（agent 绑定→org active→全局 fallback）+
+   HarnessForRun 快照客户端（bound.harness_endpoint 非全局→快照）+
+   w22 e2e 3/3：注册/绑定进 digest/升级切态）
 3. **升级**：同 name 多版本 + 新 run 走新版本 + 旧 run 沿旧（e2e：升级后旧 run
    继续完成、新 run 用新 harness）
 4. **第三方接入验证**：一个真实第三方 harness（Pi/OpenAI SDK 适配）走注册表

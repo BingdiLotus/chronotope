@@ -116,6 +116,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.9 w22 Harness 替换（装配阶段 2：注册/绑定/升级切态）
+bash test/e2e/w22-harness-swap.sh "$API" > /tmp/demo-w22.log 2>&1 && pass "W22 Harness 替换（3 项断言）" || { fail "W22 Harness 替换"; tail -5 /tmp/demo-w22.log; }
+
 # 13.8 w21 信任拓扑（期 6 ②：MCP 注入 untrusted 标记 + class 2 不执行）
 nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/demo-mcp-fixture.log 2>&1 &
 sleep 2
