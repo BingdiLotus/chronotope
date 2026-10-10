@@ -33,7 +33,7 @@ AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: applica
   -d '{"name":"refund-agent","config":{"model":"m","instructions":"你是退款工单处理助手。","tools":["bash"],"tool_classes":{"bash":2},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"bash","arguments":{"command":"echo idempotency-key-added"}}},{"final":"退款回调幂等键已补充。"}]' \
-  docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
+  docker compose -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
 sleep 4
 curl -fsS -N "$API/sessions/$SID/events?after=0" > /tmp/cmp-sse.out 2>&1 &
 SSE=$!

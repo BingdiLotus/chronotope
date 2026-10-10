@@ -11,7 +11,7 @@ fail() { echo -e "  \033[1;31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
 assert() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 psqlx() { docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "$1" 2>/dev/null | tr -d '[:space:]'; }
 fake_harness() { HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT="$1" \
-  docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1; sleep 4; }
+  docker compose -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1; sleep 4; }
 new_agent() { curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
   -d "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])'; }
 

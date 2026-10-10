@@ -17,7 +17,7 @@ AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: applica
   -d '{"name":"w20","config":{"model":"m","instructions":"i","tools":[],"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"final":"ok"}]' \
-  docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
+  docker compose -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
 sleep 4
 curl -fsS -X POST "$API/sessions/$SID/schedules" -H 'content-type: application/json' \
   -d "{\"delay_ms\":6000,\"payload\":{\"input\":\"hi\",\"schedule_id\":\"$RUN_ID-sch\"}}" >/dev/null
@@ -33,7 +33,7 @@ AID2=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: applic
   -d '{"name":"w20-ap","config":{"model":"m","instructions":"i","tools":["bash"],"tool_classes":{"bash":2},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID2=$(curl -fsS -X POST "$API/agents/$AID2/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"bash","arguments":{"command":"echo x"}}},{"final":"done"}]' \
-  docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
+  docker compose -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
 sleep 4
 curl -fsS -m 30 -X POST "$API/sessions/$SID2/runs" -H 'content-type: application/json' \
   -H "Idempotency-Key: $RUN_ID-ap-1" -d '{"input":"do it"}' > /dev/null 2>&1 || true
