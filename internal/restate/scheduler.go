@@ -93,6 +93,9 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				runID := "r_" + suffix
 				if _, err := deps.Store.CreateRun(ctx, runID, in.SessionID, nil, map[string]any{
 					"trigger": "schedule", "schedule_id": restate.Key(ctx),
+					// Harness 装配阶段 1：run 快照冻结（默认全局 fallback——
+					// 升级后旧 run 沿旧 endpoint；解析链在阶段 2）
+					"harness_endpoint": deps.HarnessEndpoint, "harness_version": "global",
 				}); err != nil {
 					return ScheduleOutput{}, err
 				}

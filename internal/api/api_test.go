@@ -180,6 +180,18 @@ func (f *fakeStore) AppendEvent(_ context.Context, _, _ string, _ event.Type, _ 
 	return 0, nil
 }
 
+func (f *fakeStore) RegisterHarness(_ context.Context, _, _, _, _ string, _ []string) error {
+	return nil
+}
+
+func (f *fakeStore) ListHarnesses(_ context.Context, _ string) ([]store.HarnessRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) SetHarnessState(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) ListEventsWithChain(_ context.Context, _ string, _ int) ([]map[string]any, error) {
 	return nil, nil
 }

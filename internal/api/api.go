@@ -43,6 +43,9 @@ type Store interface {
 	SetAuditHold(ctx context.Context, sessionID string) error
 	ListCompletedWithoutEvent(ctx context.Context, limit int) ([]store.CompletedOrphan, error)
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error)
+	RegisterHarness(ctx context.Context, orgID, name, endpoint, version string, capabilities []string) error
+	ListHarnesses(ctx context.Context, orgID string) ([]store.HarnessRow, error)
+	SetHarnessState(ctx context.Context, orgID, name, version, state string) error
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
 	CreateWorkItem(ctx context.Context, id, goalID, description, taskClass string, priority int, dependencies string) error

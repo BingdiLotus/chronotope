@@ -64,6 +64,10 @@ type AgentConfig struct {
 	Skills       []string        `json:"skills,omitempty"`
 	Environment  Environment     `json:"environment,omitempty"`
 	Budget       map[string]any  `json:"budget,omitempty"`
+	// HarnessRef 是 harness 绑定（装配设计 §2.3）：name + 可选 version；
+	// 空 = org 默认 → 全局 fallback。绑定进 spec digest——绑定变更 =
+	// digest 变更 = 新 run 走新绑定（旧 run 沿旧快照）。
+	HarnessRef *HarnessBinding `json:"harness_ref,omitempty"`
 	// ToolClasses 是工具风险分级覆盖表（边界语义 §2）：name → 0/1/2；
 	// 缺省按内置词汇分级（read_file/list_files=0 只读，其余=1 敏感）。
 	// class 2（危险）→ 强制 request_approval，永不自动执行。
@@ -117,4 +121,10 @@ type ActionRequest struct {
 type CreateAgentRequest struct {
 	Name   string      `json:"name"`
 	Config AgentConfig `json:"config"`
+}
+
+// HarnessBinding 是 agent 的 harness 绑定（装配设计 §2.3）。
+type HarnessBinding struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"` // 空 = org 默认的最新 active
 }

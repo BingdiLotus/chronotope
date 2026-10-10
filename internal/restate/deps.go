@@ -146,6 +146,9 @@ type Deps struct {
 	Sessions        SessionSource
 	// ConsolidateThreshold 是记忆消化触发的消息数阈值（默认 40；测试/演示可调小）。
 	ConsolidateThreshold int
+	// HarnessEndpoint 是 worker 级 harness 地址（装配阶段 1：run 快照冻结
+	// 的全局 fallback——解析链在阶段 2）。
+	HarnessEndpoint string
 }
 
 // RestateSessionSource 是生产实现：经 Restate virtual object 调用读写会话状态。

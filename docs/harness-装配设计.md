@@ -112,8 +112,10 @@ AgentConfig.harness_ref = { name, version? }   // 空 = org 默认（全局 fall
 
 ## 七、分阶段落地（设计后执行时按此序）
 
-1. **装配**：harness_registry 表 + HarnessRef 存储 + 注册 REST + agent 绑定
-   字段（spec digest 含绑定）+ run 快照冻结——**默认仍走全局 fallback（零行为变化）**
+1. **装配** ✅ 已落地（2026-10-11——029 注册表 + RegisterHarness/ListHarnesses/
+   GetActiveHarness/SetHarnessState + POST/GET/PUT 三端点 + AgentConfig.HarnessRef
+   进 spec digest + run 快照 bound.harness_endpoint/version 冻结——默认全局
+   fallback 零行为变化；TestHarnessRegistryRoundtrip 反例固化）
 2. **替换**：解析链（agent→org→全局）+ active 切换 + 管理面（draining/retire）
 3. **升级**：同 name 多版本 + 新 run 走新版本 + 旧 run 沿旧（e2e：升级后旧 run
    继续完成、新 run 用新 harness）

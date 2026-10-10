@@ -1003,6 +1003,55 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// registerHarness Harness 装配阶段 1：注册/心跳（org+name+version 幂等覆盖）。
+func (h *Handler) registerHarness(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	var req struct {
+		Name         string   `json:"name"`
+		Endpoint     string   `json:"endpoint"`
+		Version      string   `json:"version"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Endpoint == "" || req.Version == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "name/endpoint/version 必填")
+		return
+	}
+	if err := h.Store.RegisterHarness(r.Context(), orgID, req.Name, req.Endpoint, req.Version, req.Capabilities); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"registered": true, "name": req.Name, "version": req.Version})
+}
+
+// listHarnesses Harness 装配阶段 1：org 的注册列表。
+func (h *Handler) listHarnesses(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Store.ListHarnesses(r.Context(), chi.URLParam(r, "orgID"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"harnesses": rows})
+}
+
+// setHarnessState Harness 装配阶段 1：切 active/draining/retire（升级生命周期）。
+func (h *Handler) setHarnessState(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	name := chi.URLParam(r, "name")
+	version := chi.URLParam(r, "version")
+	var req struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.State != "active" && req.State != "draining" && req.State != "retired") {
+		writeError(w, http.StatusUnprocessableEntity, 422, "state 必为 active|draining|retired")
+		return
+	}
+	if err := h.Store.SetHarnessState(r.Context(), orgID, name, version, req.State); err != nil {
+		writeError(w, http.StatusNotFound, 404, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "version": version, "state": req.State})
+}
+
 // upsertGoal M2：目标写入（version 递增 + state_hash——慢变量）。
 func (h *Handler) upsertGoal(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")

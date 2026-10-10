@@ -55,6 +55,7 @@ func main() {
 	deps := &restate.Deps{
 		Store:                st,
 		Harness:              restate.NewHarnessClient(*harnessURL),
+		HarnessEndpoint:      *harnessURL,
 		Executor:             executorPoolOf(st, *executorURL),
 		MCP:                  restate.NewHTTPMCPClient(),
 		Sessions:             restate.RestateSessionSource{},

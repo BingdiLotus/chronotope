@@ -1240,3 +1240,40 @@ func TestGoalModelRoundtrip(t *testing.T) {
 		t.Fatal("活跃 claim 的异 agent 接管应拒绝")
 	}
 }
+
+// TestHarnessRegistryRoundtrip Harness 装配阶段 1：注册/心跳/列表/active
+// 查询/切态——与 executor 注册表同款的生命周期。
+func TestHarnessRegistryRoundtrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	oid := fmt.Sprintf("org_hr_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, oid, "o")
+	if err := s.RegisterHarness(ctx, oid, "claude", "http://h1:8000", "v1", []string{"claude-sonnet-4-6"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// 心跳 upsert 同版本不新增
+	if err := s.RegisterHarness(ctx, oid, "claude", "http://h1:8000", "v1", []string{"claude-sonnet-4-6"}); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	rows, err := s.ListHarnesses(ctx, oid)
+	if err != nil || len(rows) != 1 || rows[0].State != "active" {
+		t.Fatalf("list: %+v err=%v", rows, err)
+	}
+	// active 查询（同 name 新版本注册后仍返回原 active）
+	if err := s.RegisterHarness(ctx, oid, "claude", "http://h2:8000", "v2", nil); err != nil {
+		t.Fatalf("v2: %v", err)
+	}
+	h, err := s.GetActiveHarness(ctx, oid, "claude")
+	if err != nil || h.Endpoint != "http://h2:8000" || h.Version != "v2" {
+		t.Fatalf("active: %+v err=%v", h, err)
+	}
+	// 切态
+	if err := s.SetHarnessState(ctx, oid, "claude", "v2", "draining"); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	// v2 draining 后回退 v1（升级回滚的自然语义——active 版本链）
+	h2, err := s.GetActiveHarness(ctx, oid, "claude")
+	if err != nil || h2.Version != "v1" {
+		t.Fatalf("draining 后应回退 v1: %+v err=%v", h2, err)
+	}
+}
