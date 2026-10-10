@@ -55,6 +55,37 @@ func (q QuietWhenIdle) Decide(ctx context.Context, sessionID string) store.Decis
 	return store.Decision{Hint: store.HintRun, Reason: "evidence fresh"}
 }
 
+// WaitHandleDecide 可判定版本（期 6 ①）：查 session_waits——「现在在等什么、
+// 条件满足了吗」。有活跃等待 → wait（不 quiet——等待中的会话不该被判空转）；
+// 无等待 → 交给启发式（QuietWhenIdle 同款）。
+type WaitHandleDecide struct {
+	ActiveWaits     func(ctx context.Context, sessionID string) ([]map[string]any, error)
+	HasActiveRun    func(ctx context.Context, sessionID string) (bool, error)
+	RecentCompleted func(ctx context.Context, sessionID string, within time.Duration) (bool, error)
+}
+
+func (w WaitHandleDecide) Decide(ctx context.Context, sessionID string) store.Decision {
+	if w.ActiveWaits != nil {
+		if waits, err := w.ActiveWaits(ctx, sessionID); err == nil && len(waits) > 0 {
+			// 有活跃等待：在等 CI/审批/外部事件——不是空转（可判定：wait
+			// 而非 quiet——唤醒路径查 WaitHandle 再判定）
+			kind, _ := waits[0]["kind"].(string)
+			return store.Decision{Hint: store.HintWait, Reason: "waiting: " + kind}
+		}
+	}
+	if w.HasActiveRun != nil {
+		if active, err := w.HasActiveRun(ctx, sessionID); err == nil && active {
+			return store.Decision{Hint: store.HintWait, Reason: "active run in progress"}
+		}
+	}
+	if w.RecentCompleted != nil {
+		if recent, err := w.RecentCompleted(ctx, sessionID, 10*time.Minute); err == nil && !recent {
+			return store.Decision{Hint: store.HintQuiet, Reason: "no new evidence in 10m"}
+		}
+	}
+	return store.Decision{Hint: store.HintRun, Reason: "evidence fresh"}
+}
+
 func (RoundRobin) Pick(_ context.Context, sessionID string, candidates []ExecutorCandidate) ExecutorCandidate {
 	if len(candidates) == 0 {
 		return ExecutorCandidate{}

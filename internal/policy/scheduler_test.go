@@ -35,3 +35,24 @@ func TestQuietWhenIdle(t *testing.T) {
 		t.Fatalf("证据新鲜应 run: %+v", d)
 	}
 }
+
+// TestWaitHandleDecide 期 6 ①：可判定 DECIDE——有活跃等待（在等 CI/审批）
+// 的会话判 wait 非 quiet（QuietWhenIdle 启发式会误判的空转关闭）。
+func TestWaitHandleDecide(t *testing.T) {
+	w := WaitHandleDecide{
+		ActiveWaits: func(context.Context, string) ([]map[string]any, error) {
+			return []map[string]any{{"kind": "operator_input", "intent": "审批请求", "expect": "approve|reject"}}, nil
+		},
+	}
+	if d := w.Decide(context.Background(), "s1"); d.Hint != store.HintWait {
+		t.Fatalf("有活跃等待应 wait 非 quiet: %+v", d)
+	}
+	// 无等待 → 启发式（10 分钟无证据 → quiet）
+	w2 := WaitHandleDecide{
+		ActiveWaits:     func(context.Context, string) ([]map[string]any, error) { return nil, nil },
+		RecentCompleted: func(context.Context, string, time.Duration) (bool, error) { return false, nil },
+	}
+	if d := w2.Decide(context.Background(), "s1"); d.Hint != store.HintQuiet {
+		t.Fatalf("无等待且无新证据应 quiet: %+v", d)
+	}
+}

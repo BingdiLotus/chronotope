@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/store"
 	"strings"
 	"time"
 
@@ -244,6 +245,11 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall, emit *Emitter, riskClass int) (string, error) {
 	awakeable := restate.Awakeable[string](ctx)
 	digest := approvalDigest(runID, step, tc)
+	// 期 6 ①：operator_input 等待注册 intent/expect（为什么停 + 期待条件——
+	// 恢复时「上次为什么停」进 causal slice）
+	_ = deps.Store.RegisterWait(ctx, in.SessionID, store.WaitOperatorInput, awakeable.Id(),
+		fmt.Sprintf("审批请求：%s", tc.Name), "expect=approve|reject")
+
 	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest, tc.Name); err != nil {
 		// 审计 #8 修复后 GitHub 实证：非 terminal 错误 → SDK 重试 → 新
 		// awakeable id → 批准打到旧槽 → 新挂起无人批 → 拒绝级联。

@@ -131,6 +131,18 @@ func (f *fakeStore) FinalizeRun(_ context.Context, runID, sessionID string, stat
 	return nil
 }
 
+func (f *fakeStore) RegisterWait(_ context.Context, _ string, _ store.WaitKind, _, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ store.WaitKind, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) ActiveWaits(_ context.Context, _ string) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int, _ string) (*store.LLMCallRow, error) {
 	f.llmPrepared++
 	return &store.LLMCallRow{}, nil

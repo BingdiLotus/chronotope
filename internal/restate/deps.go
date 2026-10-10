@@ -64,6 +64,9 @@ type Store interface {
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error
+	RegisterWait(ctx context.Context, sessionID string, kind store.WaitKind, handle, intent, expect string) error
+	ResolveWait(ctx context.Context, sessionID string, kind store.WaitKind, handle string) error
+	ActiveWaits(ctx context.Context, sessionID string) ([]map[string]any, error)
 	HasMCPAllowlist(ctx context.Context, tenantID, server string) (bool, error)
 	// 共享知识检索（期 3 §D：tenant 级 pgvector）
 	RetrieveKnowledge(ctx context.Context, tenantID string, embedding []float32, topK int) ([]store.KnowledgeItem, error)

@@ -550,6 +550,17 @@ func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, runI
 		return nil, err
 	}
 	msgs := []runs.Message{{Role: "system", Content: cfg.Instructions, Source: "trusted"}}
+	// 期 6 ①：causal slice 注入——「上次为什么停 + 在等什么」（intent 一等
+	// 对象——恢复时模型无需从历史推导为什么停；决策蒸发关闭）
+	if waits, wErr := st.ActiveWaits(ctx, in.SessionID); wErr == nil && len(waits) > 0 {
+		var sb strings.Builder
+		sb.WriteString("当前等待中的意图（上次为什么停）：")
+		for _, w := range waits {
+			sb.WriteString(fmt.Sprintf(" [%s] 意图: %s；期待条件: %s",
+				w["kind"], w["intent"], w["expect"]))
+		}
+		msgs = append(msgs, runs.Message{Role: "system", Content: sb.String(), Source: "trusted"})
+	}
 	// 已装技能提示（§11：模型经 read_file 使用 skills/<name>/SKILL.md）
 	if len(skills) > 0 {
 		msgs = append(msgs, runs.Message{Role: "system", Source: "trusted",

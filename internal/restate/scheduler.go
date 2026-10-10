@@ -3,6 +3,7 @@ package restate
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"github.com/bingdilotus/chronotope/internal/store"
 	"time"
 
@@ -40,6 +41,12 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 	return restate.NewWorkflow(SchedulerName).
 		Handler("run", restate.NewWorkflowHandler[ScheduleInput, ScheduleOutput](
 			func(ctx restate.WorkflowContext, in ScheduleInput) (ScheduleOutput, error) {
+				// 期 6 ①：WaitFor 收敛——timer 等待注册 intent/expect（为什么停 +
+				// 等什么条件——DECIDE 可判定的地基）
+				_ = deps.Store.RegisterWait(ctx, in.SessionID, store.WaitTimer, restate.Key(ctx),
+					"定时唤醒", fmt.Sprintf("delay=%dms payload=%s", in.DelayMs, in.Payload["schedule_id"]))
+				defer func() { _ = deps.Store.ResolveWait(ctx, in.SessionID, store.WaitTimer, restate.Key(ctx)) }()
+
 				// 到点唤醒：durable timer（跨重启存活）
 				if err := restate.Sleep(ctx, time.Duration(in.DelayMs)*time.Millisecond); err != nil {
 					return ScheduleOutput{}, err

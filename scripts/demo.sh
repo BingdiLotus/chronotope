@@ -116,6 +116,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.7 w20 WaitFor + intent（期 6 ①：等待注册/解决/审批意图落账）
+bash test/e2e/w20-waitfor.sh "$API" > /tmp/demo-w20.log 2>&1 && pass "W20 WaitFor 等待收敛（3 项断言）" || { fail "W20 WaitFor"; tail -5 /tmp/demo-w20.log; }
+
 # 13.6 w19 合规验收 demo（M3：Goal→审批→Evidence→审计链）
 bash test/e2e/w19-compliance.sh "$API" > /tmp/demo-w19.log 2>&1 && pass "W19 合规验收（6 项断言）" || { fail "W19 合规验收"; tail -5 /tmp/demo-w19.log; }
 
