@@ -182,18 +182,12 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		_ = emit.Emit(ctx, in.SessionID, runID, step, event.BudgetExceeded, "budget", "", map[string]any{
 			"run_id": runID, "key": key,
 		})
-		_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
-			"reason": "budget_exceeded", "key": key,
-		})
-		_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+		failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "budget_exceeded", key, "")
 		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("budget exceeded: %s", key))
 	}
 	failNoProgress := func(step int) (RunOutput, error) {
 		releaseLease()
-		_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
-			"reason": "no_progress", "streak": noProgressStreak,
-		})
-		_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+		failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "no_progress", fmt.Sprintf("%d 轮指纹不变", noProgressStreak), "")
 		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("no progress: %d 轮指纹不变", noProgressStreak))
 	}
 
@@ -275,6 +269,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 
 		// 一次 harness 调用 = 一个 journaled step（缓存键 = journal 位置，
 		// 崩溃重放直接回放缓存，不重调 harness——三条纪律之三）
+		callStart := time.Now()
 		res, runErr := restate.Run(ctx, func(rc restate.RunContext) (*Result, error) {
 			// 审计 4.1 仲裁合同：账本写入失败 = 零次新派发；冲突读既存状态
 			reqHash := requestHashOf(req)
@@ -330,7 +325,6 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			}
 			return r, err
 		}, restate.WithName(StepName("harness", step, "")))
-		callStart := time.Now()
 		if res != nil && res.Usage.TokensIn == 0 && res.Usage.TokensOut == 0 && !res.Truncated {
 			// 审计 #7：usage 不确定当零——显式 usage_unknown 标注（账本第一块；
 			// 完整 prepared/dispatch/result 状态机后置）
@@ -339,10 +333,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			})
 		}
 		if runErr != nil {
-			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "harness", "", map[string]any{
-				"reason": runErr.Error(),
-			})
-			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+			failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "harness_error", runErr.Error(), "500")
 			return RunOutput{}, runErr
 		}
 
@@ -374,10 +365,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 
 		if res.ErrCode != "" { // harness 失败终态（error 帧）
 			releaseLease()
-			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
-				"code": res.ErrCode, "message": res.ErrMsg,
-			})
-			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+			failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "harness_error", fmt.Sprintf("%s: %s", res.ErrCode, res.ErrMsg), res.ErrCode)
 			return RunOutput{}, restate.ToTerminalError(fmt.Errorf("harness: %s: %s", res.ErrCode, res.ErrMsg))
 		}
 
@@ -444,7 +432,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 								_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
 									"step": step, "tool": tc.Name, "risk_class": 2, "reason": "approver_revoked",
 								})
-								_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+								failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "approver_revoked", tc.Name, "")
 								return RunOutput{}, restate.ToTerminalError(fmt.Errorf("工具 %s 的审批人已撤权（派发前重验）", tc.Name))
 							}
 						}
@@ -453,10 +441,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 						_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
 							"step": step, "tool": tc.Name, "risk_class": 2,
 						})
-						_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
-							"reason": "tool_denied", "tool": tc.Name,
-						})
-						_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+						failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "tool_denied", tc.Name, "")
 						return RunOutput{}, restate.ToTerminalError(fmt.Errorf("工具 %s 的 class 2 审批被拒绝", tc.Name))
 					}
 				}
@@ -507,10 +492,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			// 结构化输出契约（正式版架构 期 1）：final 必须符合 cfg.OutputSchema
 			if len(cfg.OutputSchema) > 0 {
 				if vErr := validateOutputSchema(cfg.OutputSchema, res.Final); vErr != nil {
-					_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunFailed, "", "", map[string]any{
-						"reason": "output_schema_violation", "message": vErr.Error(),
-					})
-					_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+					failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "output_schema_violation", vErr.Error(), "")
 					return RunOutput{}, restate.ToTerminalError(fmt.Errorf("output schema violation: %w", vErr))
 				}
 			}
@@ -547,6 +529,22 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 	})
 	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
 	return RunOutput{}, restate.ToTerminalError(fmt.Errorf("max steps (%d) exceeded", maxSteps))
+}
+
+// failRun 终态失败路径的显式记账（可信度专项 ③：事件发射与终态写失败不得
+// 静默——审计系统丢审计记录恰好摧毁价值主张；失败记 WARN 但流程继续终态）。
+func failRun(ctx context.Context, emit *Emitter, st Store, sessionID, runID string, step int, reason, detail, code string) {
+	if eErr := emit.Emit(ctx, sessionID, runID, step, event.RunFailed, "", "", map[string]any{
+		"reason": reason, "code": code,
+	}); eErr != nil {
+		slog.Default().Warn("run.failed 事件发射失败", "run", runID, "err", eErr)
+	}
+	if uErr := st.UpdateRunStatus(ctx, runID, sessionapi.RunFailed); uErr != nil {
+		slog.Default().Warn("run 终态写失败", "run", runID, "err", uErr)
+	}
+	if detail != "" {
+		slog.Default().Warn("run failed", "run", runID, "reason", reason, "detail", detail)
+	}
 }
 
 // requestHashOf 冻结请求的 hash（仲裁合同——同 operation 结果校验）。

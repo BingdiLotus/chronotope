@@ -3,7 +3,9 @@
 # + scheduler_hint 节省估算。用法: bash scripts/econ-project.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-# 价格参数（公开参考价——用真实供应商价目替换）
+# 价格参数（claude-sonnet-4-6 公开价目：in $3/M、out $15/M；E2B 计算
+# $0.00003/s；S3 $0.023/GB/月——可信度专项 ② 的来源标注；定价 $0.08/
+# session-hour 是产品假设非供应商价）
 MODEL_IN_PER_M="${1:-3.00}"     # $/M tokens in
 MODEL_OUT_PER_M="${2:-15.00}"   # $/M tokens out
 COMPUTE_PER_SEC="${3:-0.00003}" # $/计算秒（E2B 类沙箱）
