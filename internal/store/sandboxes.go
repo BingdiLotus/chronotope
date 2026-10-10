@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/sandbox"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,21 +13,8 @@ import (
 )
 
 // SandboxRow 是 sandboxes 表行（契约规范 §4：沙箱事实状态在 PG，不随进程死）。
-type SandboxRow struct {
-	SandboxID     string
-	OrgID         string
-	SessionID     string
-	Driver        string
-	ContainerRef  *string
-	Image         string
-	Limits        map[string]string
-	Tier          int
-	SnapshotRef   *string
-	FileSyncState string
-	Status        string
-	TTL           *time.Duration
-	CreatedAt     time.Time
-}
+// SandboxRow（期 7 下沉：core/sandbox）。
+type SandboxRow = sandbox.SandboxRow
 
 // UpsertSandbox 记录/更新沙箱事实状态。
 func (s *Store) UpsertSandbox(ctx context.Context, sb *SandboxRow) error {

@@ -4,28 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/ledger"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // LLMCallRow 是 ModelCall 账本行（审计 A1——Provider 接受证据 + usage 对账事实）。
-type LLMCallRow struct {
-	RunID        string
-	Step         int
-	DispatchSeq  int
-	State        string
-	RequestHash  string
-	Result       string
-	TokensIn     int64
-	TokensOut    int64
-	UsagePartial bool
-	UsageUnknown bool
-	Err          string
-	PreparedAt   time.Time
-	DispatchedAt *time.Time
-	ResultAt     *time.Time
-}
+// LLMCallRow（期 7 下沉：core/ledger）。
+type LLMCallRow = ledger.LLMCallRow
 
 // PutLLMCallPrepared 派发前落 prepared 行（幂等按 run+step：重放/崩溃窗口
 // 的第二次闭包执行更新同一行——dispatch 证据保留供对账）。
@@ -145,17 +132,8 @@ WHERE run_id = $1 AND step = $2`
 }
 
 // MCPCallRow 是 MCP 效果账本行（审计 A2——外部效果证据）。
-type MCPCallRow struct {
-	RunID       string
-	Step        int
-	Server      string
-	Tool        string
-	State       string
-	Err         string
-	RequestHash string
-	Result      string
-	PreparedAt  time.Time
-}
+// MCPCallRow（期 7 下沉：core/ledger）。
+type MCPCallRow = ledger.MCPCallRow
 
 // PutMCPCallPrepared 派发前落行（调用身份 = call_key——审计 4.3：同 step
 // 多工具调用的身份，工具名不是逻辑调用身份；冲突 SELECT 回读既存状态）。

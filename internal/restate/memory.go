@@ -3,6 +3,7 @@ package restate
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
-	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 // 分层记忆常量（边界语义设计 §7；MVP 无嵌入，检索按 topic 作用域 + recency）。
@@ -39,7 +39,7 @@ func thresholdOf(deps *Deps) int {
 }
 
 // buildTranscript 把消息全量拼成消化转录（user/assistant 纯文本行）。
-func buildTranscript(msgs []store.Message) string {
+func buildTranscript(msgs []memory.Message) string {
 	var b strings.Builder
 	for _, m := range msgs {
 		var text string
@@ -52,7 +52,7 @@ func buildTranscript(msgs []store.Message) string {
 }
 
 // recentUserMessages 取最近 limit 条消息中的 user 纯文本（条目抽取候选）。
-func recentUserMessages(msgs []store.Message, limit int) []string {
+func recentUserMessages(msgs []memory.Message, limit int) []string {
 	if len(msgs) > limit {
 		msgs = msgs[len(msgs)-limit:]
 	}
@@ -114,7 +114,7 @@ func consolidate(ctx restate.Context, deps *Deps, sessionID, runID, topic string
 		if strings.TrimSpace(summary) == "" {
 			return struct{}{}, nil // 摘要失败：跳过消化（下次 run 结束再试）
 		}
-		if _, err := deps.Store.CreateSummary(ctx, store.Summary{
+		if _, err := deps.Store.CreateSummary(ctx, memory.Summary{
 			SessionID: sessionID, Topic: topic, Version: version,
 			Summary: summary, Diff: "full", CreatedByRun: runID,
 		}); err != nil {
@@ -123,7 +123,7 @@ func consolidate(ctx restate.Context, deps *Deps, sessionID, runID, topic string
 		// 条目抽取：最近 threshold 条中的用户消息（哈希去重 + 来源引用）
 		added := 0
 		for _, text := range recentUserMessages(msgs, threshold) {
-			ok, _ := deps.Store.CreateMemoryItem(ctx, store.MemoryItem{
+			ok, _ := deps.Store.CreateMemoryItem(ctx, memory.MemoryItem{
 				SessionID: sessionID, Topic: topic, Kind: "long_term",
 				Content: text, SourceRunID: runID, Version: version,
 			})

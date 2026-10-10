@@ -5,17 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/session"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // Org 是 orgs 行（quotas 为原样 map；预算键见 OrgQuotaKeys）。
-type Org struct {
-	ID     string
-	Name   string
-	Quotas map[string]any
-}
+// Org（期 7 下沉：core/session）。
+type Org = session.Org
 
 func isNoRowsErr(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)

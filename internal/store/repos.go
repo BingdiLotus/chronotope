@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/memory"
+	"github.com/bingdilotus/chronotope/internal/core/session"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
@@ -27,14 +28,8 @@ func (s *Store) CreateOrg(ctx context.Context, id, name string) error {
 }
 
 // Agent 是 agents 表行（config 版本化：每次变更 version+1，run 启动时绑定）。
-type Agent struct {
-	ID         string
-	OrgID      string
-	Name       string
-	Config     sessionapi.AgentConfig
-	Version    int
-	SpecDigest string // canonical JSON(Config) 的 sha256（正确性二期 ⑩）
-}
+// Agent（期 7 下沉：core/session）。
+type Agent = session.Agent
 
 // CreateAgent 创建 agent（id 由调用方生成，保证「api 生成 id」的单一职责）。
 // SpecDigestOf 计算 config 的规范哈希（encoding/json 对 map 键排序、struct
@@ -84,18 +79,8 @@ func (s *Store) GetAgent(ctx context.Context, id string) (*Agent, error) {
 }
 
 // Session 是 sessions 表行。
-type Session struct {
-	ID                string
-	OrgID             string
-	AgentID           string
-	Status            sessionapi.SessionPhase
-	RestateKey        *string
-	LastActiveAt      *time.Time
-	DeletedAt         *time.Time
-	ArchivedAt        *time.Time // 冷层归档标记（期 2 §B）
-	ForkedFromSession string     // 分支血缘（期 2 §C 面包屑；fork 时记录）
-	ForkedAtSeq       int64      // 分支点位（父会话事件水位）
-}
+// Session（期 7 下沉：core/session）。
+type Session = session.Session
 
 // CreateSession 创建 session（id 由调用方生成；status=created，沙箱懒创建完成后 → ready）。
 func (s *Store) CreateSession(ctx context.Context, id, orgID, agentID string) error {
@@ -168,14 +153,8 @@ VALUES ($1, $2, $3, '', now() + ($4::text || ' milliseconds')::interval, $5)`
 }
 
 // Run 是 runs 表行；Bound 是 run 启动绑定的 {agent_config_version, protocol_version, model}。
-type Run struct {
-	ID        string
-	Input     string // 不可变 command（审计 #3 修复——重投按行重放）
-	Topic     string
-	SessionID string
-	Status    sessionapi.RunStatus
-	Bound     map[string]any
-}
+// Run（期 7 下沉：core/session）。
+type Run = session.Run
 
 // CreateRun 幂等创建 run 行（Idempotency-Key → run_id 去重）。
 // 已存在时返回 false，不覆盖。

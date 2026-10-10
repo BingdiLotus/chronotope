@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/bingdilotus/chronotope/internal/store"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"time"
 
 	restate "github.com/restatedev/sdk-go"
@@ -43,9 +43,9 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 			func(ctx restate.WorkflowContext, in ScheduleInput) (ScheduleOutput, error) {
 				// 期 6 ①：WaitFor 收敛——timer 等待注册 intent/expect（为什么停 +
 				// 等什么条件——DECIDE 可判定的地基）
-				_ = deps.Store.RegisterWait(ctx, in.SessionID, store.WaitTimer, restate.Key(ctx),
+				_ = deps.Store.RegisterWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx),
 					"定时唤醒", fmt.Sprintf("delay=%dms payload=%s", in.DelayMs, in.Payload["schedule_id"]))
-				defer func() { _ = deps.Store.ResolveWait(ctx, in.SessionID, store.WaitTimer, restate.Key(ctx)) }()
+				defer func() { _ = deps.Store.ResolveWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx)) }()
 
 				// 到点唤醒：durable timer（跨重启存活）
 				if err := restate.Sleep(ctx, time.Duration(in.DelayMs)*time.Millisecond); err != nil {
@@ -53,12 +53,12 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				}
 				// 到点即自己的等待结束——先解决再判定（自己的 timer 不算活跃
 				// 等待——否则自杀判定 wait）
-				_ = deps.Store.ResolveWait(ctx, in.SessionID, store.WaitTimer, restate.Key(ctx))
+				_ = deps.Store.ResolveWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx))
 
 				// M2 DECIDE 先行：先判定本轮是否值得运行（run/wait/quiet——
 				// 定时器到点不再直接等价「必须让 Agent 工作」）；判定 journaled
 				// ——「不作为的可问责性」（每次不运行都有依据与记录）
-				decision := store.Decision{Hint: store.HintRun, Reason: "no policy"}
+				decision := wait.Decision{Hint: wait.HintRun, Reason: "no policy"}
 				if deps.SchedulerPolicy != nil {
 					decision = deps.SchedulerPolicy.Decide(ctx, in.SessionID)
 				}
@@ -75,7 +75,7 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SessionWoken, "woken", restate.Key(ctx), map[string]any{
 					"schedule": restate.Key(ctx), "phase": state.Phase,
 				})
-				if decision.Hint != store.HintRun {
+				if decision.Hint != wait.HintRun {
 					// quiet/wait/ask：不派发 child run——零 token 消耗的判定
 					//（经济学基线的 DECIDE 节省实证）
 					return ScheduleOutput{Decided: string(decision.Hint), Reason: decision.Reason}, nil

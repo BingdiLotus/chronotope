@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/bingdilotus/chronotope/internal/core/checkpoint"
+	"github.com/bingdilotus/chronotope/internal/core/ledger"
 	"github.com/bingdilotus/chronotope/internal/core/memory"
+	"github.com/bingdilotus/chronotope/internal/core/sandbox"
+	"github.com/bingdilotus/chronotope/internal/core/session"
 	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"time"
 
@@ -13,7 +16,6 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/policy"
-	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 // Store 是 worker 侧 store 的最小接口（消费者侧定义，测试以 fake 替换；
@@ -39,26 +41,26 @@ type CheckpointStore interface {
 	ListCheckpoints(ctx context.Context, sessionID string, limit int) ([]checkpoint.Checkpoint, error)
 	ForkSession(ctx context.Context, newSessionID, parentSessionID string, atSeq int64, atCheckpoint string) error
 	RollbackSession(ctx context.Context, sessionID string, cp *checkpoint.Checkpoint) error
-	DiffSessions(ctx context.Context, a, b string, limit int) (*store.SessionDiff, error)
+	DiffSessions(ctx context.Context, a, b string, limit int) (*session.SessionDiff, error)
 }
 
 // UsageLedger 预算与配额（org 级熔断 + 当日消费）。
 type UsageLedger interface {
-	GetOrg(ctx context.Context, orgID string) (*store.Org, error)
+	GetOrg(ctx context.Context, orgID string) (*session.Org, error)
 	OrgDailyUsage(ctx context.Context, orgID string, day time.Time) (tokens int64, computeSeconds float64, err error)
 	IsMember(ctx context.Context, orgID, userID string) (bool, error)
 }
 
 // SessionRegistry 会话/run 的注册与终态（worker 是终态记账者）。
 type SessionRegistry interface {
-	GetRun(ctx context.Context, runID string) (*store.Run, error)
-	GetSession(ctx context.Context, sessionID string) (*store.Session, error)
-	GetAgent(ctx context.Context, agentID string) (*store.Agent, error)
+	GetRun(ctx context.Context, runID string) (*session.Run, error)
+	GetSession(ctx context.Context, sessionID string) (*session.Session, error)
+	GetAgent(ctx context.Context, agentID string) (*session.Agent, error)
 	CreateSession(ctx context.Context, id, orgID, agentID string) error
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
 	FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error
-	GetSandboxBySession(ctx context.Context, sessionID string) (*store.SandboxRow, error)
+	GetSandboxBySession(ctx context.Context, sessionID string) (*sandbox.SandboxRow, error)
 	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]memory.WorkspaceFile, error)
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	RegisterWait(ctx context.Context, sessionID string, kind wait.Kind, handle, intent, expect string) error
@@ -68,10 +70,10 @@ type SessionRegistry interface {
 
 // CallLedger 效果账本（LLM/MCP 的 prepared/dispatched/result/unknown 仲裁）。
 type CallLedger interface {
-	PutLLMCallPrepared(ctx context.Context, runID string, step int, requestHash string) (*store.LLMCallRow, error)
+	PutLLMCallPrepared(ctx context.Context, runID string, step int, requestHash string) (*ledger.LLMCallRow, error)
 	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error
 	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
-	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*store.MCPCallRow, error)
+	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*ledger.MCPCallRow, error)
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, errMsg string) error
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 }

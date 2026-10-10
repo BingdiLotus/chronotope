@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/session"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
@@ -71,15 +72,8 @@ SELECT $1, $2, target FROM subscriptions WHERE session_id = $1`, sessionID, even
 }
 
 // EventRow 是 events 表的查询结果行。
-type EventRow struct {
-	ID        int64
-	SessionID string
-	RunID     string
-	Seq       int64
-	Type      event.Type
-	Payload   json.RawMessage
-	At        time.Time
-}
+// EventRow（期 7 下沉：core/session）。
+type EventRow = session.EventRow
 
 // LatestEventSeq 会话事件水位（时间旅行 checkpoint 的 seq 指针）。
 func (s *Store) LatestEventSeq(ctx context.Context, sessionID string) (int64, error) {

@@ -3,13 +3,13 @@ package restate
 import (
 	"context"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/sandbox"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/execproto"
 	"github.com/bingdilotus/chronotope/internal/policy"
-	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 // ExecutorPool 是多宿主池（期 4 §B）：实现 Executor 接口——沙箱归属路由
@@ -26,7 +26,7 @@ type ExecutorPool struct {
 
 	// 依赖注入（worker 装配）
 	OrgOf           func(ctx context.Context, sessionID string) (string, error) // 会话 org（审计 P0-4：候选 org 过滤）
-	ListExecutors   func(ctx context.Context) ([]store.ExecutorRow, error)
+	ListExecutors   func(ctx context.Context) ([]sandbox.ExecutorRow, error)
 	SandboxOwner    func(ctx context.Context, sandboxID string) (string, error) // 沙箱归属 executor_id（无 → ""）
 	SetSandboxOwner func(ctx context.Context, sandboxID, executorID string) error
 }

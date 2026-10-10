@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/checkpoint"
+	"github.com/bingdilotus/chronotope/internal/core/session"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -148,11 +149,8 @@ VALUES ($1, '', 'session.rolled_back', $2, NULL)`, sessionID, json.RawMessage(fm
 }
 
 // SessionDiff 是两会话时间轴的差集：公共前缀长度 + 各自后缀事件。
-type SessionDiff struct {
-	CommonPrefix int64      `json:"common_prefix"` // 公共事件数（以 A 为基准）
-	OnlyA        []EventRow `json:"only_a"`
-	OnlyB        []EventRow `json:"only_b"`
-}
+// SessionDiff（期 7 下沉：core/session）。
+type SessionDiff = session.SessionDiff
 
 // DiffSessions 事件差集（时间旅行 期 2：分支对比）。
 func (s *Store) DiffSessions(ctx context.Context, a, b string, limit int) (*SessionDiff, error) {

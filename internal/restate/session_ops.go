@@ -2,11 +2,11 @@ package restate
 
 import (
 	"encoding/json"
+	"github.com/bingdilotus/chronotope/internal/core/checkpoint"
 
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
-	"github.com/bingdilotus/chronotope/internal/store"
 )
 
 // session_ops 工作流：api 侧触发的会话运维动作（MCP 连接 / skill 安装）。
@@ -62,7 +62,7 @@ func createCheckpointWorkflow(ctx restate.Context, deps *Deps, in createCheckpoi
 	if _, err := deps.Store.AppendEvent(ctx, in.SessionID, "", event.SessionCheckpoint, payload, in.SessionID+":checkpoint:"+in.CheckpointID); err != nil {
 		return err
 	}
-	_, err = deps.Store.CreateCheckpoint(ctx, store.Checkpoint{
+	_, err = deps.Store.CreateCheckpoint(ctx, checkpoint.Checkpoint{
 		ID: in.CheckpointID, SessionID: in.SessionID, Seq: seq, SnapshotRef: snapshotRef,
 	})
 	return err

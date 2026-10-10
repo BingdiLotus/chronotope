@@ -3,18 +3,13 @@ package store
 import (
 	"context"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/sandbox"
 	"time"
 )
 
 // ExecutorRow 是 executor 注册行（期 4 §B：多宿主池的心跳/能力注册）。
-type ExecutorRow struct {
-	ID           string    `json:"id"`
-	OrgID        string    `json:"org_id"`
-	Kind         string    `json:"kind"` // docker | e2b_selfhosted
-	Endpoint     string    `json:"endpoint"`
-	HeartbeatAt  time.Time `json:"heartbeat_at"`
-	Capabilities []byte    `json:"-"`
-}
+// ExecutorRow（期 7 下沉：core/sandbox）。
+type ExecutorRow = sandbox.ExecutorRow
 
 // UpsertExecutor 注册/心跳（幂等覆盖；heartbeat 推进）。
 func (s *Store) UpsertExecutor(ctx context.Context, e ExecutorRow) error {
