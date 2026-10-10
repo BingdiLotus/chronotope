@@ -170,9 +170,10 @@ ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-r
 for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
 # PITR 演练重启过 rustfs——GitHub 初始化慢于归档上传（exit 22 实证）：
 # 等 rustfs 容器 healthy（S3 根响应）
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
   # S3 根任意 HTTP 响应即就绪（rustfs 容器内 healthcheck 依赖 curl——
-  # GitHub 镜像可能无 curl 致 healthy 永假——宿主直测端口）
+  # GitHub 镜像可能无 curl 致 healthy 永假——宿主直测端口）；GitHub 的
+  # PITR 后数据目录初始化实测 >60s——120s 上限
   curl -sS -o /dev/null -m 3 http://localhost:9000/ 2>/dev/null && break
   sleep 1
 done
