@@ -89,20 +89,64 @@ func (s *Store) FinalizeRun(ctx context.Context, runID, sessionID string, status
 UPDATE runs SET status = $2,
   started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
   finished_at = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END
-WHERE id = $1`
-	if _, err := tx.Exec(ctx, q, runID, string(status)); err != nil {
+WHERE id = $1
+  AND status NOT IN ('completed','failed','cancelled')`
+	tag, err := tx.Exec(ctx, q, runID, string(status))
+	if err != nil {
 		return fmt.Errorf("store: finalize status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// 审计 4.2（九期）：expected 状态校验——已终态的 run 重复提交 0 行
+		// 不得静默成功
+		return fmt.Errorf("store: finalize: %w", ErrFinalizeConflict)
 	}
 	const dq = `
 INSERT INTO deliverables (run_id, session_id, kind, payload)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (run_id) DO UPDATE SET payload = EXCLUDED.payload
 WHERE deliverables.payload = EXCLUDED.payload`
-	if _, err := tx.Exec(ctx, dq, runID, sessionID, kind, payload); err != nil {
+	dtag, err := tx.Exec(ctx, dq, runID, sessionID, kind, payload)
+	if err != nil {
 		return fmt.Errorf("store: finalize deliverable: %w", err)
+	}
+	if dtag.RowsAffected() == 0 {
+		// 审计 4.2（九期）：payload 冲突的 0 行不得提交成功（同 key 异 payload
+		// 的覆盖关闭）
+		return fmt.Errorf("store: finalize deliverable: %w", ErrFinalizeConflict)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("store: finalize commit: %w", err)
 	}
 	return nil
+}
+
+// CompletedOrphan 已完成但无 completed 事件（终态通知补交的扫描源）。
+type CompletedOrphan struct {
+	RunID     string
+	SessionID string
+}
+
+// ListCompletedWithoutEvent 审计 4.2（九期）：run 已 completed 但无
+// run.completed 事件的孤儿——补交义务的精确源。
+func (s *Store) ListCompletedWithoutEvent(ctx context.Context, limit int) ([]CompletedOrphan, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT r.id, r.session_id FROM runs r
+WHERE r.status = 'completed' AND NOT EXISTS (
+  SELECT 1 FROM events e WHERE e.session_id = r.session_id AND e.type = 'run.completed' AND e.run_id = r.id
+) ORDER BY r.finished_at LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: completed orphans: %w", err)
+	}
+	defer rows.Close()
+	var out []CompletedOrphan
+	for rows.Next() {
+		var o CompletedOrphan
+		if err := rows.Scan(&o.RunID, &o.SessionID); err != nil {
+			return nil, fmt.Errorf("store: scan completed orphan: %w", err)
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }

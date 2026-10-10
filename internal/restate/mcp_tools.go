@@ -104,17 +104,29 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 prepare 无行（零派发）"))
 		}
 		if row.State == "result" {
-			return "", fmt.Errorf("mcp 账本已有结果（不重派发）")
+			// 审计 4.1（九期）：result 分支回读冻结原结果（hash 同 → 原值；
+			// hash 异 → operation 冲突拒绝——不再普通 error 进 SDK retryable）
+			if row.RequestHash != "" && row.RequestHash != reqHash {
+				return "", restate.ToTerminalError(fmt.Errorf("mcp 账本结果与请求 hash 不符（operation 冲突）"))
+			}
+			if row.Result != "" {
+				return row.Result, nil // 冻结原结果——零派发
+			}
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本已有结果（无法回读——人工裁决）"))
 		}
 		if row.State == "unknown" {
-			return "", fmt.Errorf("mcp 账本 unknown 停派发（需人工裁决）")
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 unknown 停派发（需人工裁决）"))
 		}
 		r, err := deps.MCP.Call(rc, url, tool, json.RawMessage(tc.Arguments))
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
 		}
-		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, errMsg); lErr != nil {
+		resultJSON := ""
+		if err == nil {
+			resultJSON = r
+		}
+		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, callKey, reqHash, resultJSON, errMsg); lErr != nil {
 			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 result 失败: %w", lErr))
 		}
 		return r, err

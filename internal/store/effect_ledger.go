@@ -162,16 +162,23 @@ RETURNING run_id, step, server, tool, state, prepared_at, COALESCE(request_hash,
 }
 
 // PutMCPCallResult 结果落账（错误 → unknown——网络超时可能效果已发生）。
-func (s *Store) PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, errMsg string) error {
+func (s *Store) PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string) error {
 	state := "result"
 	if errMsg != "" {
 		state = "unknown"
 	}
 	const q = `
-UPDATE mcp_calls SET state = $5, err = $6, result_at = now()
-WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4`
-	if _, err := s.Pool.Exec(ctx, q, runID, step, server, tool, state, nullIfEmpty(errMsg)); err != nil {
+UPDATE mcp_calls SET state = $5, err = $6, result_at = now(),
+    result = COALESCE($7::jsonb, result), request_hash = COALESCE($8, request_hash)
+WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4 AND call_key = $5`
+	tag, err := s.Pool.Exec(ctx, q, runID, step, server, tool, nullIfEmpty(callKey), state, nullIfEmpty(errMsg), nullIfEmpty(resultJSON), nullIfEmpty(requestHash))
+	if err != nil {
 		return fmt.Errorf("store: mcp result: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// 审计 4.1（九期）：同身份 0 行——结果合同不得静默（旧四列范围的
+		// 多行污染关闭）
+		return fmt.Errorf("store: mcp result: %w", ErrDispatchClaimLost)
 	}
 	return nil
 }

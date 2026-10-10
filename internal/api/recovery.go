@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/event"
 	"time"
 )
 
@@ -49,6 +52,19 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 				continue
 			}
 			_ = a.Store.MarkAdmissionDispatched(ctx, p.RunID)
+		}
+	}
+	// 审计 4.2（九期）：completed 事件的补交——终态已提交但事件写失败的
+	// run（观察者等不到完成）按原身份补发（持久修复义务）
+	if orphans, oErr := a.Store.ListCompletedWithoutEvent(ctx, 20); oErr == nil {
+		for _, o := range orphans {
+			if _, err := a.Store.AppendEvent(ctx, o.SessionID, o.RunID, event.RunCompleted,
+				json.RawMessage(fmt.Sprintf(`{"run_id":%q,"recovered":true}`, o.RunID)),
+				fmt.Sprintf("completed-recover:%s", o.RunID)); err != nil {
+				if a.Logger != nil {
+					a.Logger.Warn("completed 补交失败", "run_id", o.RunID, "err", err)
+				}
+			}
 		}
 	}
 	runs, err := a.Store.ListStaleQueuedRuns(ctx, time.Now().Add(-a.Stale), 20)

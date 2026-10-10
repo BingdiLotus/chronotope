@@ -157,7 +157,7 @@ func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _,
 	return &store.MCPCallRow{}, nil
 }
 
-func (f *fakeStore) PutMCPCallResult(_ context.Context, _ string, _ int, _, _, _ string) error {
+func (f *fakeStore) PutMCPCallResult(_ context.Context, _ string, _ int, _, _, _, _, _, _ string) error {
 	return nil
 }
 

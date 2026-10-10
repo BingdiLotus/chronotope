@@ -172,6 +172,14 @@ func (f *fakeStore) StaleEvidence(_ context.Context, _ string) ([]map[string]any
 	return nil, nil
 }
 
+func (f *fakeStore) ListCompletedWithoutEvent(_ context.Context, _ int) ([]store.CompletedOrphan, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) AppendEvent(_ context.Context, _, _ string, _ event.Type, _ json.RawMessage, _ string) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeStore) ListEventsWithChain(_ context.Context, _ string, _ int) ([]map[string]any, error) {
 	return nil, nil
 }

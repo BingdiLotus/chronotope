@@ -249,6 +249,9 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	// 恢复时「上次为什么停」进 causal slice）
 	_ = deps.Store.RegisterWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id(),
 		fmt.Sprintf("审批请求：%s", tc.Name), "expect=approve|reject")
+	// 审计 5.1（九期）：批准/拒绝/取消/超时解除匹配 handle——awaitApproval 的
+	// 每个返回路径都 ResolveWait（后续调度的 DECIDE 不再被已结束的审批拦截）
+	defer func() { _ = deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id()) }()
 
 	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest, tc.Name); err != nil {
 		// 审计 #8 修复后 GitHub 实证：非 terminal 错误 → SDK 重试 → 新

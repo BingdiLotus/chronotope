@@ -45,9 +45,9 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				// 等什么条件——DECIDE 可判定的地基）
 				_ = deps.Store.RegisterWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx),
 					"定时唤醒", fmt.Sprintf("delay=%dms payload=%s", in.DelayMs, in.Payload["schedule_id"]))
-				defer func() { _ = deps.Store.ResolveWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx)) }()
-
-				// 到点唤醒：durable timer（跨重启存活）
+				// 到点唤醒：durable timer（跨重启存活）——defer 去除（审计 5.1：
+				// suspension 的 Go 栈展开会执行 defer 提前解除——durable 业务
+				// 完成不得用 Go defer 表达；显式解决在 decide 前）
 				if err := restate.Sleep(ctx, time.Duration(in.DelayMs)*time.Millisecond); err != nil {
 					return ScheduleOutput{}, err
 				}

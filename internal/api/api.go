@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/event"
 	"log/slog"
 	"time"
 
@@ -40,6 +41,8 @@ type Store interface {
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	ListEventsWithChain(ctx context.Context, sessionID string, limit int) ([]map[string]any, error)
 	SetAuditHold(ctx context.Context, sessionID string) error
+	ListCompletedWithoutEvent(ctx context.Context, limit int) ([]store.CompletedOrphan, error)
+	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
 	CreateWorkItem(ctx context.Context, id, goalID, description, taskClass string, priority int, dependencies string) error

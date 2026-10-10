@@ -138,20 +138,32 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	// 孤儿 GC（W8）：周期扫描 ttl 过期沙箱 → 销毁容器（尽力）+ 删行
+	// 孤儿 GC（W8）：周期扫描 ttl 过期沙箱 → 销毁容器（尽力）+ 删行。
+	// 审计 4.3（九期）：0/off 显式禁用——等待实例不被自动销毁（工作态未
+	// 完整保存前不得回收）
 	gcInterval := 5 * time.Minute
+	gcDisabled := false
 	if v := os.Getenv("EXECUTOR_GC_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		if v == "0" || v == "off" {
+			gcDisabled = true
+		} else if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			gcInterval = d
 		}
 	}
-	// 启动 sweep（生命周期闭环 D2）：清崩溃窗口残留（失败仅告警——GC 兜底）
-	if n, err := server.Sweep(ctx); err != nil {
-		slog.Warn("boot sweep failed（GC 兜底）", "err", err)
-	} else if n > 0 {
-		slog.Info("boot sweep", "cleaned", n)
+	// 启动 sweep（生命周期闭环 D2）：清崩溃窗口残留（失败仅告警——GC 兜底）；
+	// 审计 4.3（九期）：EXECUTOR_SWEEP=off 禁用启动 sweep——首发禁用破坏性
+	// 回收的实际开关
+	if os.Getenv("EXECUTOR_SWEEP") != "off" {
+		if n, err := server.Sweep(ctx); err != nil {
+			slog.Warn("boot sweep failed（GC 兜底）", "err", err)
+		} else if n > 0 {
+			slog.Info("boot sweep", "cleaned", n)
+		}
 	}
 	go func() {
+		if gcDisabled {
+			return // 审计 4.3（九期）：GC 禁用——等待实例不被自动销毁
+		}
 		ticker := time.NewTicker(gcInterval)
 		defer ticker.Stop()
 		for {

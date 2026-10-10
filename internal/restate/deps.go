@@ -74,7 +74,7 @@ type CallLedger interface {
 	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error
 	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*ledger.MCPCallRow, error)
-	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, errMsg string) error
+	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string) error
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 }
 
