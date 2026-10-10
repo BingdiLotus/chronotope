@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -54,5 +56,62 @@ func TestWaitHandleDecide(t *testing.T) {
 	}
 	if d := w2.Decide(context.Background(), "s1"); d.Hint != store.HintRun {
 		t.Fatalf("无活跃等待应 run: %+v", d)
+	}
+}
+
+// TestWaitHandleDecidePickDelegation 期 7：Pick 委托 RoundRobin（接口完整性
+// ——SchedulerPolicy 的装箱选择与判定分离）。
+func TestWaitHandleDecidePickDelegation(t *testing.T) {
+	w := WaitHandleDecide{}
+	cands := []ExecutorCandidate{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	// RoundRobin 是同会话哈希稳定位（非真轮转——重放确定性要求）
+	first := w.Pick(context.Background(), "s1", cands)
+	if first.ID == "" {
+		t.Fatalf("候选选择不得为空")
+	}
+	for i := 0; i < 20; i++ {
+		if p := w.Pick(context.Background(), "s1", cands); p.ID != first.ID {
+			t.Fatalf("同会话应稳定: %s != %s", p.ID, first.ID)
+		}
+	}
+	// 不同会话分布（哈希打散）
+	seen := map[string]bool{}
+	for _, sid := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		seen[w.Pick(context.Background(), sid, cands).ID] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("不同会话应打散: %v", seen)
+	}
+}
+
+// TestWaitHandleDecideEmptyCandidates 空候选（无 executor 注册——不 panic）。
+func TestWaitHandleDecideEmptyCandidates(t *testing.T) {
+	w := WaitHandleDecide{}
+	if p := w.Pick(context.Background(), "s1", nil); p.ID != "" {
+		t.Fatalf("空候选应返回零值: %+v", p)
+	}
+}
+
+// TestQuietWhenIdleActiveRunError 活跃 run 查询失败（fail-open 语义——错误
+// 时不应判定 quiet 而应 run——可判定性的保守侧）。
+func TestQuietWhenIdleActiveRunError(t *testing.T) {
+	q := QuietWhenIdle{
+		HasActiveRun: func(context.Context, string) (bool, error) { return false, fmt.Errorf("db down") },
+	}
+	if d := q.Decide(context.Background(), "s1"); d.Hint != store.HintRun {
+		t.Fatalf("活跃查询失败应保守 run: %+v", d)
+	}
+}
+
+// TestDecisionSerialization journaled 判定的序列化（scheduler.decide 事件载荷）。
+func TestDecisionSerialization(t *testing.T) {
+	d := store.Decision{Hint: store.HintWait, Reason: "waiting: timer"}
+	b := d.DecisionJSON()
+	var back struct {
+		Hint   string `json:"hint"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(b, &back); err != nil || back.Hint != "wait" || back.Reason == "" {
+		t.Fatalf("Decision 序列化: %s %+v err=%v", b, back, err)
 	}
 }
