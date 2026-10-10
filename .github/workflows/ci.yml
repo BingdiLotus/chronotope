@@ -3,6 +3,7 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   go:
@@ -280,7 +281,7 @@ jobs:
 
   real:
     name: real（真实模型 + 真实 E2B 官方云，手动触发需 secrets）
-    if: github.event_name == 'workflow_dispatch' && secrets.ANTHROPIC_API_KEY != '' && secrets.E2B_API_KEY != ''
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
