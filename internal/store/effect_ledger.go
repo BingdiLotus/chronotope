@@ -170,8 +170,8 @@ func (s *Store) PutMCPCallResult(ctx context.Context, runID string, step int, se
 	const q = `
 UPDATE mcp_calls SET state = $5, err = $6, result_at = now(),
     result = COALESCE($7::jsonb, result), request_hash = COALESCE($8, request_hash)
-WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4 AND call_key = $5`
-	tag, err := s.Pool.Exec(ctx, q, runID, step, server, tool, nullIfEmpty(callKey), state, nullIfEmpty(errMsg), nullIfEmpty(resultJSON), nullIfEmpty(requestHash))
+WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4 AND call_key = $9`
+	tag, err := s.Pool.Exec(ctx, q, runID, step, server, tool, state, nullIfEmpty(errMsg), nullIfEmpty(resultJSON), nullIfEmpty(requestHash), nullIfEmpty(callKey))
 	if err != nil {
 		return fmt.Errorf("store: mcp result: %w", err)
 	}

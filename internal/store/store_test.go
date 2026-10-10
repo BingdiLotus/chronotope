@@ -1141,7 +1141,7 @@ func TestEffectLedgerRoundtrip(t *testing.T) {
 	if _, err := s.PutMCPCallPrepared(ctx, rid, 0, "echo", "echo", "call-1", "hash-1"); err != nil {
 		t.Fatalf("mcp prepared: %v", err)
 	}
-	if err := s.PutMCPCallResult(ctx, rid, 0, "echo", "echo", "dial timeout", "", "", ""); err != nil {
+	if err := s.PutMCPCallResult(ctx, rid, 0, "echo", "echo", "call-1", "hash-1", "", "dial timeout"); err != nil {
 		t.Fatalf("mcp unknown: %v", err)
 	}
 	var state string
