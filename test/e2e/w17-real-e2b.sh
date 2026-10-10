@@ -18,9 +18,9 @@ AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: applica
 AID=$(echo "$AID" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
-# harness 真实模式（模型走 litellm——E2B 档与模型无关；用 fake 保证确定性）
-HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"bash","arguments":{"command":"echo real-e2b-ok"}}},{"final":"E2B 真实路径完成。"}]' \
-  docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
+# 真实模型 × 真实 E2B 组合（可信度专项 ①：harness 真实模式——模型走
+# litellm 真实调用，E2B 官方云真实沙箱；此前 fake 模型只证了 E2B 半边）
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
 sleep 5
 
 # ① 真实 E2B 沙箱创建 + execute（claim → prepared_at fence → done）
