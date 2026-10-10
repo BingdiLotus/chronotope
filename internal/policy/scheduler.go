@@ -84,12 +84,9 @@ func (w WaitHandleDecide) Decide(ctx context.Context, sessionID string) store.De
 			return store.Decision{Hint: store.HintWait, Reason: "active run in progress"}
 		}
 	}
-	if w.RecentCompleted != nil {
-		if recent, err := w.RecentCompleted(ctx, sessionID, 10*time.Minute); err == nil && !recent {
-			return store.Decision{Hint: store.HintQuiet, Reason: "no new evidence in 10m"}
-		}
-	}
-	return store.Decision{Hint: store.HintRun, Reason: "evidence fresh"}
+	// 显式 schedule 到点且无活跃等待 → run（定时唤醒本身就是排程决定；
+	// RecentCompleted 的 quiet 后备只用于周期轮询场景——显式排程不误伤）
+	return store.Decision{Hint: store.HintRun, Reason: "no active wait"}
 }
 
 func (RoundRobin) Pick(_ context.Context, sessionID string, candidates []ExecutorCandidate) ExecutorCandidate {

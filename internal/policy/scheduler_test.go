@@ -47,12 +47,12 @@ func TestWaitHandleDecide(t *testing.T) {
 	if d := w.Decide(context.Background(), "s1"); d.Hint != store.HintWait {
 		t.Fatalf("有活跃等待应 wait 非 quiet: %+v", d)
 	}
-	// 无等待 → 启发式（10 分钟无证据 → quiet）
+	// 无等待 → 显式 schedule 到点即 run（quiet 后备只用于周期轮询场景——
+	// 不误伤显式排程）
 	w2 := WaitHandleDecide{
-		ActiveWaits:     func(context.Context, string) ([]map[string]any, error) { return nil, nil },
-		RecentCompleted: func(context.Context, string, time.Duration) (bool, error) { return false, nil },
+		ActiveWaits: func(context.Context, string) ([]map[string]any, error) { return nil, nil },
 	}
-	if d := w2.Decide(context.Background(), "s1"); d.Hint != store.HintQuiet {
-		t.Fatalf("无等待且无新证据应 quiet: %+v", d)
+	if d := w2.Decide(context.Background(), "s1"); d.Hint != store.HintRun {
+		t.Fatalf("无活跃等待应 run: %+v", d)
 	}
 }
