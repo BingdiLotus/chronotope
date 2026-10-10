@@ -174,6 +174,9 @@ curl -fsS http://localhost:8080/healthz
 # harness 就绪（force-recreate 后 run 立即打——connection refused 致
 # unknown 停派发；GitHub 实证 w12 段 exit 22）
 for i in $(seq 1 60); do curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break; sleep 1; done
+# worker 就绪（PITR 段后的 worker 重启窗口——restate 发现失败致 run panic；
+# GitHub 实证 w12 段 exit 22 的另一个根因）
+for i in $(seq 1 60); do curl -fsS http://localhost:9080/discover > /dev/null 2>&1 && break; sleep 1; done
 # PITR 演练重启过 rustfs——GitHub 初始化慢于归档上传（exit 22 实证）：
 # 等 rustfs 容器 healthy（S3 根响应）
 for i in $(seq 1 120); do
