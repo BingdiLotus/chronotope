@@ -123,7 +123,7 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 			errMsg = err.Error()
 		}
 		resultJSON := ""
-		if err == nil {
+		if err == nil && json.Valid([]byte(r)) {
 			resultJSON = r
 		}
 		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, callKey, reqHash, resultJSON, errMsg); lErr != nil {
