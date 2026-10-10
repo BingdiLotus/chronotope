@@ -188,6 +188,10 @@ func (f *fakeStore) ListHarnesses(_ context.Context, _ string) ([]store.HarnessR
 	return nil, nil
 }
 
+func (f *fakeStore) GetActiveHarness(_ context.Context, _, _ string) (*store.HarnessRow, error) {
+	return &store.HarnessRow{Endpoint: "http://h:8000", Version: "v1"}, nil
+}
+
 func (f *fakeStore) SetHarnessState(_ context.Context, _, _, _, _ string) error {
 	return nil
 }

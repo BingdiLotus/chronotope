@@ -46,6 +46,7 @@ type Store interface {
 	RegisterHarness(ctx context.Context, orgID, name, endpoint, version string, capabilities []string) error
 	ListHarnesses(ctx context.Context, orgID string) ([]store.HarnessRow, error)
 	SetHarnessState(ctx context.Context, orgID, name, version, state string) error
+	GetActiveHarness(ctx context.Context, orgID, name string) (*store.HarnessRow, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
 	CreateWorkItem(ctx context.Context, id, goalID, description, taskClass string, priority int, dependencies string) error

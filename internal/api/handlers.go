@@ -164,6 +164,14 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		"protocol_version":     "1.0",
 		"model":                agent.Config.Model,
 	}
+	// Harness 装配阶段 3：API 路径的 harness 快照冻结（agent 绑定 → active
+	// endpoint → bound；升级后旧 run 沿旧）
+	if agent.Config.HarnessRef != nil && agent.Config.HarnessRef.Name != "" {
+		if hh, hErr := h.Store.GetActiveHarness(r.Context(), sess.OrgID, agent.Config.HarnessRef.Name); hErr == nil {
+			bound["harness_endpoint"] = hh.Endpoint
+			bound["harness_version"] = hh.Version
+		}
+	}
 	trigger, _ := json.Marshal(req.Trigger)
 	created, err := h.Store.CreateRunWithCommand(r.Context(), runID, sessionID, req.Input, req.Topic, trigger, bound)
 	if err != nil {

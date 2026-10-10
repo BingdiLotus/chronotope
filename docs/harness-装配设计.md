@@ -120,8 +120,10 @@ AgentConfig.harness_ref = { name, version? }   // 空 = org 默认（全局 fall
    DefaultResolver 解析链（agent 绑定→org active→全局 fallback）+
    HarnessForRun 快照客户端（bound.harness_endpoint 非全局→快照）+
    w22 e2e 3/3：注册/绑定进 digest/升级切态）
-3. **升级**：同 name 多版本 + 新 run 走新版本 + 旧 run 沿旧（e2e：升级后旧 run
-   继续完成、新 run 用新 harness）
+3. **升级** ✅ 已落地（2026-10-11——API 路径的 bound 冻结（submitRun 解析
+   agent.HarnessRef → active endpoint）+ HarnessForRun 快照客户端接线 +
+   w23 e2e 5/5：run A 打 8001/V1 标记/bound 冻结、升级切态、run B 打
+   8002/V2 标记/bound 冻结——旧 run 沿旧、新 run 走新）
 4. **第三方接入验证**：一个真实第三方 harness（Pi/OpenAI SDK 适配）走注册表
    接入 + conformance 自证
 

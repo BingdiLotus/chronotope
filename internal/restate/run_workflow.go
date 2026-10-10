@@ -547,7 +547,7 @@ func harnessCallClosure(rc restate.RunContext, deps *Deps, runID string, step in
 	if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
 		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err))
 	}
-	r, err := deps.Harness.Call(rc, req)
+	r, err := harnessFor(deps, rc, runID).Call(rc, req)
 	// 结果落账（冻结结果引用 + usage——合同表的「同 operation 已有
 	// result」的回读源）
 	if r != nil {
