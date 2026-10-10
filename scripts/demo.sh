@@ -163,7 +163,7 @@ for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&
 # PITR 演练重启过 rustfs——GitHub 初始化慢于归档上传（exit 22 实证）：
 # 等 rustfs 容器 healthy（S3 根响应）
 for i in $(seq 1 60); do
-  docker inspect --format '{{.State.Health.Status}}' chronotope-rustfs-1 2>/dev/null | grep -q healthy && break
+  $DC ps rustfs --format '{{.Status}}' 2>/dev/null | grep -q healthy && break
   sleep 1
 done
 bash test/e2e/w12-archive.sh "$API" > /tmp/demo-arc.log 2>&1 && pass "冷层归档（4 项断言）" || { fail "冷层归档"; tail -5 /tmp/demo-arc.log; }
