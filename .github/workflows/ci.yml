@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_real:
+        description: 真实模型 × 真实 E2B（需 ANTHROPIC_API_KEY/E2B_API_KEY secrets）
+        type: boolean
+        default: false
 
 jobs:
   go:
@@ -281,7 +286,7 @@ jobs:
 
   real:
     name: real（真实模型 + 真实 E2B 官方云，手动触发需 secrets）
-    if: github.event_name == 'workflow_dispatch'
+    if: inputs.run_real
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -303,10 +308,8 @@ jobs:
           curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
             -d '{"uri":"http://worker:9080","version":"real-v1","use_http_11":true,"force":true}'
       - name: 真实模型全链路（6 断言——secrets 守卫：缺 key 时 skip 非红）
-        if: secrets.ANTHROPIC_API_KEY
         run: bash test/e2e/real-model.sh http://localhost:8080
       - name: 真实 E2B 官方云（7 断言——secrets 守卫：缺 key 时 skip 非红）
-        if: secrets.E2B_API_KEY && secrets.ANTHROPIC_API_KEY
         run: bash test/e2e/w17-real-e2b.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
