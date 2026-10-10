@@ -64,6 +64,12 @@ type WaitHandleDecide struct {
 	RecentCompleted func(ctx context.Context, sessionID string, within time.Duration) (bool, error)
 }
 
+// Pick 委托 RoundRobin（SchedulerPolicy 接口的候选选择部分——DECIDE 只
+// 管判定，装箱选择仍轮转）。
+func (w WaitHandleDecide) Pick(ctx context.Context, sessionID string, candidates []ExecutorCandidate) ExecutorCandidate {
+	return RoundRobin{}.Pick(ctx, sessionID, candidates)
+}
+
 func (w WaitHandleDecide) Decide(ctx context.Context, sessionID string) store.Decision {
 	if w.ActiveWaits != nil {
 		if waits, err := w.ActiveWaits(ctx, sessionID); err == nil && len(waits) > 0 {

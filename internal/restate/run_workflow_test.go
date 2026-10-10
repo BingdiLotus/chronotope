@@ -46,6 +46,7 @@ type fakeStore struct {
 	createdSessions  []string
 	orgQuotas        map[string]any
 	deliverables     []map[string]any
+	activeWaits      []map[string]any
 	sandboxBySession *store.SandboxRow
 	orgTokens        int64
 	checkpoints      map[string]store.Checkpoint
@@ -140,7 +141,7 @@ func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ store.WaitKind, _
 }
 
 func (f *fakeStore) ActiveWaits(_ context.Context, _ string) ([]map[string]any, error) {
-	return nil, nil
+	return f.activeWaits, nil
 }
 
 func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int, _ string) (*store.LLMCallRow, error) {
@@ -1085,5 +1086,27 @@ func TestRunLoopHarnessErrorNoPanic(t *testing.T) {
 	_, err := runLoop(ctx, deps, RunInput{SessionID: "s_nil", Input: "hi"}, "r_nil")
 	if err == nil {
 		t.Fatal("harness 错误应返回 error（且不 panic）")
+	}
+}
+
+// TestBuildMessagesWaitIntent 期 6 ①：causal slice——活跃等待的意图段进
+// 组装消息（恢复时「上次为什么停」进上下文而非 transcript）。
+func TestBuildMessagesWaitIntent(t *testing.T) {
+	f := &fakeStore{}
+	f.activeWaits = []map[string]any{
+		{"kind": "operator_input", "intent": "审批请求：bash", "expect": "approve|reject"},
+	}
+	msgs, err := buildMessages(context.Background(), f, &fakeHarness{}, RunInput{SessionID: "s1"}, "r1", sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1}, nil)
+	if err != nil {
+		t.Fatalf("buildMessages: %v", err)
+	}
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "当前等待中的意图") && strings.Contains(m.Content, "审批请求") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("等待意图段缺失: %+v", msgs)
 	}
 }

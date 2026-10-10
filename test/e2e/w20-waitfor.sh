@@ -41,5 +41,22 @@ sleep 4
 assert "operator_input 等待注册（intent=审批请求 + expect 条件）" \
   bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT count(*) FROM session_waits WHERE session_id='$SID2' AND kind='operator_input' AND intent LIKE '%审批请求%'\" | grep -q 1"
 
+# ② DECIDE 可判定：长 timer 等待（30s）期间第二个 schedule 到点——decide
+# 查活跃 timer 等待 → wait（在等什么不是空转——启发式误判 quiet 的反例关闭）
+curl -fsS -N "$API/sessions/$SID/events?after=0" > /tmp/wf-sse2.out 2>&1 &
+SSE2=$!
+curl -sS -m 5 -X POST "$API/sessions/$SID/schedules" -H 'content-type: application/json' \
+  -d "{\"delay_ms\":30000,\"payload\":{\"input\":\"long\",\"schedule_id\":\"$RUN_ID-long\"}}" >/dev/null 2>&1 || true
+sleep 2
+curl -sS -m 5 -X POST "$API/sessions/$SID/schedules" -H 'content-type: application/json' \
+  -d "{\"delay_ms\":2000,\"payload\":{\"input\":\"check\",\"schedule_id\":\"$RUN_ID-decide\"}}" >/dev/null 2>&1 || true
+sleep 6
+kill $SSE2 2>/dev/null || true
+assert "DECIDE 可判定（活跃 timer 等待 → decide 事件 hint=wait 非 quiet）" \
+  grep -q '"hint":"wait"' /tmp/wf-sse2.out
+
+# 注：causal slice 的等待意图段由单测覆盖（TestBuildMessagesWaitIntent——
+# e2e 的 harness 日志不打请求体）
+
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
 [ "$FAIL" = "0" ]

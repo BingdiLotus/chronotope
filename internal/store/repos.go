@@ -391,3 +391,14 @@ LIMIT $2`
 	}
 	return out, rows.Err()
 }
+
+// HasRecentCompleted 近 within 内是否有 run.completed 事件（DECIDE 的
+// 新证据后备——期 6 ① 装配用）。
+func (s *Store) HasRecentCompleted(ctx context.Context, sessionID string, within time.Duration) (bool, error) {
+	const q = `SELECT EXISTS (SELECT 1 FROM events WHERE session_id = $1 AND type = 'run.completed' AND at > now() - $2)`
+	var ok bool
+	if err := s.Pool.QueryRow(ctx, q, sessionID, within).Scan(&ok); err != nil {
+		return false, fmt.Errorf("store: recent completed: %w", err)
+	}
+	return ok, nil
+}

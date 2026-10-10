@@ -51,22 +51,22 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				if err := restate.Sleep(ctx, time.Duration(in.DelayMs)*time.Millisecond); err != nil {
 					return ScheduleOutput{}, err
 				}
-				state, err := restate.Object[SessionState](ctx, SessionObjectName, in.SessionID, "Wake").
-					Request(WakeInput{Payload: in.Payload})
-				if err != nil {
-					return ScheduleOutput{}, err
-				}
-				emit := &Emitter{Store: deps.Store}
-				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SessionWoken, "woken", restate.Key(ctx), map[string]any{
-					"schedule": restate.Key(ctx), "phase": state.Phase,
-				})
-
 				// M2 DECIDE 先行：先判定本轮是否值得运行（run/wait/quiet——
 				// 定时器到点不再直接等价「必须让 Agent 工作」）；判定 journaled
 				// ——「不作为的可问责性」（每次不运行都有依据与记录）
 				decision := store.Decision{Hint: store.HintRun, Reason: "no policy"}
 				if deps.SchedulerPolicy != nil {
 					decision = deps.SchedulerPolicy.Decide(ctx, in.SessionID)
+				}
+				emit := &Emitter{Store: deps.Store}
+				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SessionWoken, "woken", restate.Key(ctx), map[string]any{
+					"schedule": restate.Key(ctx), "phase": "decide",
+				})
+
+				_, err := restate.Object[SessionState](ctx, SessionObjectName, in.SessionID, "Wake").
+					Request(WakeInput{Payload: in.Payload})
+				if err != nil {
+					return ScheduleOutput{}, err
 				}
 				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SchedulerDecide, "decide", restate.Key(ctx), map[string]any{
 					"schedule": restate.Key(ctx), "hint": string(decision.Hint),

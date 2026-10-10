@@ -65,6 +65,18 @@ func main() {
 		// 审批路由缝（期 3 §B）：POLICY_APPROVAL=none → ManualOnly 人工；
 		// 默认 org-policy → 参考实现（org 策略 approver 集合 + TTL）
 		ApprovalRouter: approvalRouterOf(st),
+		// DECIDE 缝（M2/期 6 ①）：WaitHandleDecide 可判定版——查 session_waits
+		//（活跃等待判 wait 非 quiet）+ 活跃 run/新证据启发式后备
+		SchedulerPolicy: &policy.WaitHandleDecide{
+			ActiveWaits: st.ActiveWaits,
+			HasActiveRun: func(ctx context.Context, sessionID string) (bool, error) {
+				r, err := st.GetActiveRun(ctx, sessionID)
+				return r != nil, err
+			},
+			RecentCompleted: func(ctx context.Context, sessionID string, within time.Duration) (bool, error) {
+				return st.HasRecentCompleted(ctx, sessionID, within)
+			},
+		},
 	}
 	handler, err := restate.BuildEndpoint(deps)
 	if err != nil {
