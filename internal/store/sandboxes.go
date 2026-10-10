@@ -273,6 +273,11 @@ func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM sandbox_leases WHERE sandbox_id = $1`, sandboxID); err != nil {
 		return fmt.Errorf("store: delete sandbox lease: %w", err)
 	}
+	// 真实 E2B destroy 500 实证：execs 的 FK NO ACTION 挡 sandboxes 删除——
+	// 沙箱整体销毁的 execs 一并清（终态清理，非审计 4.2 的单行抹除）
+	if _, err := tx.Exec(ctx, `DELETE FROM sandbox_execs WHERE sandbox_id = $1`, sandboxID); err != nil {
+		return fmt.Errorf("store: delete sandbox execs: %w", err)
+	}
 	const q = `DELETE FROM sandboxes WHERE sandbox_id = $1`
 	tag, err := tx.Exec(ctx, q, sandboxID)
 	if err != nil {

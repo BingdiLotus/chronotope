@@ -86,5 +86,19 @@ fi
 assert "llm.call 携带真实 token（非 0/0）" \
   python3 -c 'import sys,json; data=[json.loads(l[6:]) for l in open("/tmp/real-sse.out") if l.startswith("data: ")]; calls=[e for e in data if e["type"]=="llm.call"]; assert any(e["payload"]["usage"]["tokens_in"]+e["payload"]["usage"]["tokens_out"]>0 for e in calls), calls' <<< '{}'
 
+# --- ⑥ 期 6：真实模型的 DECIDE 判定与等待收敛（schedule 到点 →
+# scheduler.decide 事件 + session_waits 注册/解决）
+curl -fsS -N "$API/sessions/$SID/events?after=0" > /tmp/real-decide.out 2>&1 &
+SDEC=$!
+curl -sS -m 60 -X POST "$API/sessions/$SID/schedules" -H 'content-type: application/json' \
+  -d '{"delay_ms":2000,"payload":{"input":"定时检查","schedule_id":"'"$RUN_ID"'-sch"}}' >/dev/null 2>&1 &
+SCHP=$!
+sleep 12
+kill $SDEC 2>/dev/null || true
+assert "scheduler.decide 判定 journaled（真实模型路径）" \
+  grep -q '"type":"scheduler.decide"' /tmp/real-decide.out
+assert "timer 等待注册并解决（session_waits 收敛）" \
+  bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT count(*) FROM session_waits WHERE session_id='$SID' AND kind='timer'\" | grep -q 1"
+
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
 [[ "$FAIL" -eq 0 ]]

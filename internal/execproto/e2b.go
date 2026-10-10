@@ -349,6 +349,11 @@ func (c *HTTPE2BAPI) CreateSnapshot(ctx context.Context, sandboxID, snapshotID s
 
 func (c *HTTPE2BAPI) Delete(ctx context.Context, sandboxID string) error {
 	_, err := c.do(ctx, http.MethodDelete, "/v2/sandboxes/"+url.PathEscape(sandboxID), nil, nil)
+	// 真实 E2B 实证：云侧沙箱可能已按 TTL 过期销毁——404「no matching
+	// operation」= 目标已达成（destroy 幂等；DB tombstone 照常落账）
+	if err != nil && strings.Contains(err.Error(), "status 404") {
+		return nil
+	}
 	return err
 }
 

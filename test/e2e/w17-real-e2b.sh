@@ -43,6 +43,21 @@ try:
 except urllib.error.HTTPError as e:
     sys.exit(0 if e.code == 409 else 1)' <<< '{}' ''
 
+# ②b 文件读写（真实 E2B 的 write_file/read_file——workspace 合同在云上）
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/real-e2b.txt","content":"真实 E2B 文件写入"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/real-e2b.txt"}}},{"final":"文件验证完成。"}]' \
+  docker compose --env-file .env -f deploy/docker-compose.yml up -d --force-recreate harness >/dev/null 2>&1
+sleep 4
+curl -fsS -m 300 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $RUN_ID-files" -d '{"input":"文件读写"}' > /tmp/w17-files.out 2>&1
+assert "真实 E2B 文件读写（write_file/read_file 往返）" \
+  python3 -c 'import sys,json; d=json.load(open("/tmp/w17-files.out")); assert d["status"]=="completed", d' <<< '{}'
+
+# ②c prepared_at fence（过期 prepared 的 done 0 行——claim 丢失不落账）
+docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -c \
+  "INSERT INTO sandbox_execs (idempotency_key, sandbox_id, state, prepared_at, expires_at) VALUES ('$RUN_ID-fence', (SELECT sandbox_id FROM sandboxes WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1), 'prepared', now() - interval '2 hours', now() + interval '1 day')" >/dev/null 2>&1
+assert "prepared_at fence（过期 prepared 的 done 0 行——迟到结果不落账）" \
+  bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"UPDATE sandbox_execs SET state='done' WHERE idempotency_key='$RUN_ID-fence' AND prepared_at > now() - interval '1 hour'\" | grep -q 'UPDATE 0'"
+
 # ③ 快照 → 销毁 → 恢复（RestoreFrom 真接线——真实 E2B snapshot）
 curl -fsS -m 60 -X POST "$API/sessions/$SID/checkpoints" -H 'content-type: application/json' -d '{}' > /tmp/w17-cp.out 2>&1
 assert "真实 E2B 快照成功" \
@@ -54,6 +69,15 @@ curl -fsS -m 300 -X POST "$API/sessions/$SID/runs" -H 'content-type: application
   -H "Idempotency-Key: $RUN_ID-2" -d '{"input":"快照恢复后继续"}' > /tmp/w17-run2.out 2>&1
 assert "快照恢复 run 完成（真实 E2B 从 snapshot 重建）" \
   python3 -c 'import sys,json; d=json.load(open("/tmp/w17-run2.out")); assert d["status"]=="completed", d' <<< '{}'
+
+# ⑤ destroy 后 tombstone（status=destroyed 行保留——操作证据不抹除；云侧
+# 实例已销毁）
+SB2=$(docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \
+  "SELECT sandbox_id FROM sandboxes WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1" | tr -d '[:space:]')
+curl -fsS -X DELETE "http://localhost:9082/sandboxes/$SB2" >/dev/null 2>&1 || true
+sleep 2
+assert "destroy 后 tombstone（status=destroyed 保留证据）" \
+  bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT status FROM sandboxes WHERE sandbox_id='$SB2'\" | grep -q destroyed"
 
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
 [ "$FAIL" = "0" ]
