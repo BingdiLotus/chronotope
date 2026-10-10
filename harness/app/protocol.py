@@ -16,7 +16,7 @@ PROTOCOL_VERSION = "1.0"
 SUPPORTED_PROTOCOLS = {"1.0"}
 
 Role = Literal["system", "user", "assistant", "tool"]
-Source = Literal["trusted", "sandbox", "network"]
+Source = Literal["trusted", "sandbox", "network", "untrusted"]
 FrameType = Literal["delta", "tool_call", "turn_end", "done", "error", "beat"]
 
 # 工具名词汇表（硬约束，只增不改）——框架自有工具名必须映射后发出
