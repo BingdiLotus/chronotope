@@ -167,7 +167,10 @@ bash test/e2e/w11-blob.sh "$API" > /tmp/demo-blob.log 2>&1 && pass "工作区 bl
 
 # 17. 冷层归档（期 2 §B：老会话 → RustFS 冷层 + 清单 + archived_at）
 ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate api harness
-for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
+# GitHub 的 api 重建慢——healthz 循环 30 次耗尽后仍跑致 w12 第一条 curl
+# 失败（exit 22 实证）——90×2s 对齐 workflow
+for i in $(seq 1 90); do curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break; sleep 2; done
+curl -fsS http://localhost:8080/healthz
 # PITR 演练重启过 rustfs——GitHub 初始化慢于归档上传（exit 22 实证）：
 # 等 rustfs 容器 healthy（S3 根响应）
 for i in $(seq 1 120); do
