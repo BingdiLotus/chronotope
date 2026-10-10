@@ -3,18 +3,19 @@ package store
 import (
 	"context"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"time"
 )
 
-// WaitKind 等待类型（Holon 四 wake kind 收敛——期 6 ①）。
-type WaitKind string
+// WaitKind 等待类型（期 7 下沉：core/wait）。
+type WaitKind = wait.Kind
 
-// WaitKind 常量。
+// WaitKind 常量（core/wait 的别名）。
 const (
-	WaitTimer         WaitKind = "timer"
-	WaitTaskResult    WaitKind = "task_result"
-	WaitExternal      WaitKind = "external"
-	WaitOperatorInput WaitKind = "operator_input"
+	WaitTimer         WaitKind = wait.Timer
+	WaitTaskResult    WaitKind = wait.TaskResult
+	WaitExternal      WaitKind = wait.External
+	WaitOperatorInput WaitKind = wait.OperatorInput
 )
 
 // RegisterWait 注册等待（yield 时捕获 intent——为什么停 + 期待条件）。

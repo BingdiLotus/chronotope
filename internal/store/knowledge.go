@@ -3,18 +3,11 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 )
 
-// KnowledgeItem 是共享知识条目（tenant 级；期 3 §D 基础数据服务）。
-type KnowledgeItem struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	Content       string    `json:"content"`
-	Embedding     []float32 `json:"-"`
-	SourceSession string    `json:"source_session"`
-	CreatedAt     time.Time `json:"created_at"`
-}
+// KnowledgeItem 是共享知识条目（期 7 下沉：core/memory）。
+type KnowledgeItem = memory.KnowledgeItem
 
 // CreateKnowledge 幂等写入（同 id 冲突忽略）。
 func (s *Store) CreateKnowledge(ctx context.Context, k KnowledgeItem) error {

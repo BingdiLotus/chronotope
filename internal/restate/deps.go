@@ -3,6 +3,9 @@ package restate
 import (
 	"context"
 	"encoding/json"
+	"github.com/bingdilotus/chronotope/internal/core/checkpoint"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"time"
 
 	restate "github.com/restatedev/sdk-go"
@@ -15,61 +18,88 @@ import (
 
 // Store 是 worker 侧 store 的最小接口（消费者侧定义，测试以 fake 替换；
 // worker-架构设计 §1 的 ST 模块）。worker 是事件唯一写入者，api 只读投影。
-type Store interface {
+// Store 是持久化的组合端口（期 7：按能力切——EventLog/CheckpointStore/
+// UsageLedger/SessionRegistry/CallLedger/MemoryStore/KnowledgeIndex 七窄接口，
+// 不再按表切。组合后方法集与拆前完全一致——纯重组，零行为变化）。
+
+// EventLog 事件与消息（append-only + 因果投影）。
+type EventLog interface {
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (seq int64, err error)
 	AppendMessage(ctx context.Context, sessionID, runID string, step int, role string, content json.RawMessage) error
-	ListMessages(ctx context.Context, sessionID string, limit int) ([]store.Message, error)
-	ListMessagesForRun(ctx context.Context, sessionID, currentRunID string, limit int) ([]store.Message, error)
-	// GetRun 供 webhook 解析 run → session（HITL 审批回调按 run_id 定位 awakeable）。
-	GetRun(ctx context.Context, runID string) (*store.Run, error)
-	// 交付清单（outbox，W8 后置）
-	CreateDeliverable(ctx context.Context, runID, sessionID, kind string, payload json.RawMessage) error
-	// 沙箱重建（快照恢复依据，评审 #7）
-	GetSandboxBySession(ctx context.Context, sessionID string) (*store.SandboxRow, error)
-	// 时间旅行（期 2）
+	ListMessages(ctx context.Context, sessionID string, limit int) ([]memory.Message, error)
+	ListMessagesForRun(ctx context.Context, sessionID, currentRunID string, limit int) ([]memory.Message, error)
 	LatestEventSeq(ctx context.Context, sessionID string) (int64, error)
-	CreateCheckpoint(ctx context.Context, cp store.Checkpoint) (bool, error)
-	GetCheckpoint(ctx context.Context, id string) (*store.Checkpoint, error)
-	ListCheckpoints(ctx context.Context, sessionID string, limit int) ([]store.Checkpoint, error)
+	CreateDeliverable(ctx context.Context, runID, sessionID, kind string, payload json.RawMessage) error
+}
+
+// CheckpointStore 时间旅行（checkpoint 树 + fork/rollback/diff）。
+type CheckpointStore interface {
+	CreateCheckpoint(ctx context.Context, cp checkpoint.Checkpoint) (bool, error)
+	GetCheckpoint(ctx context.Context, id string) (*checkpoint.Checkpoint, error)
+	ListCheckpoints(ctx context.Context, sessionID string, limit int) ([]checkpoint.Checkpoint, error)
 	ForkSession(ctx context.Context, newSessionID, parentSessionID string, atSeq int64, atCheckpoint string) error
-	RollbackSession(ctx context.Context, sessionID string, cp *store.Checkpoint) error
+	RollbackSession(ctx context.Context, sessionID string, cp *checkpoint.Checkpoint) error
 	DiffSessions(ctx context.Context, a, b string, limit int) (*store.SessionDiff, error)
-	// 工作区 blob 合同（期 2 §A）
-	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]store.WorkspaceFile, error)
-	// CreateRun 供 scheduler 建 child run 行（events/messages 的 FK 前提）。
-	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
-	// UpdateRunStatus：worker 是 run 终态的记账者（api 中途崩溃后 runs 行仍收敛——
-	// 事件才是真相，状态行是投影；chaos 套件 kill9-api 实证）。
-	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
-	// org 级预算（三级熔断 ②）：org 配额 + 当日消费（worker 校验冻结）。
+}
+
+// UsageLedger 预算与配额（org 级熔断 + 当日消费）。
+type UsageLedger interface {
 	GetOrg(ctx context.Context, orgID string) (*store.Org, error)
 	OrgDailyUsage(ctx context.Context, orgID string, day time.Time) (tokens int64, computeSeconds float64, err error)
-	// 子 Agent（W6）：父会话/agent 元数据 + 子会话建行（确定性 id，journaled）。
+	IsMember(ctx context.Context, orgID, userID string) (bool, error)
+}
+
+// SessionRegistry 会话/run 的注册与终态（worker 是终态记账者）。
+type SessionRegistry interface {
+	GetRun(ctx context.Context, runID string) (*store.Run, error)
 	GetSession(ctx context.Context, sessionID string) (*store.Session, error)
 	GetAgent(ctx context.Context, agentID string) (*store.Agent, error)
 	CreateSession(ctx context.Context, id, orgID, agentID string) error
-	// 分层记忆（边界语义 §7）：主题摘要与长期记忆条目（派生数据，worker 唯一写入）。
-	LatestSummary(ctx context.Context, sessionID, topic string) (*store.Summary, error)
-	CreateSummary(ctx context.Context, sum store.Summary) (bool, error)
-	CreateMemoryItem(ctx context.Context, item store.MemoryItem) (bool, error)
-	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]store.MemoryItem, error)
-	// MCP 网关 allowlist（期 3 §C）
-	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
+	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
+	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
+	FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error
+	GetSandboxBySession(ctx context.Context, sessionID string) (*store.SandboxRow, error)
+	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]memory.WorkspaceFile, error)
+	AdmissionState(ctx context.Context, runID string) (string, error)
+	RegisterWait(ctx context.Context, sessionID string, kind wait.Kind, handle, intent, expect string) error
+	ResolveWait(ctx context.Context, sessionID string, kind wait.Kind, handle string) error
+	ActiveWaits(ctx context.Context, sessionID string) ([]map[string]any, error)
+}
+
+// CallLedger 效果账本（LLM/MCP 的 prepared/dispatched/result/unknown 仲裁）。
+type CallLedger interface {
 	PutLLMCallPrepared(ctx context.Context, runID string, step int, requestHash string) (*store.LLMCallRow, error)
 	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error
+	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*store.MCPCallRow, error)
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, errMsg string) error
-	IsMember(ctx context.Context, orgID, userID string) (bool, error)
-	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
-	AdmissionState(ctx context.Context, runID string) (string, error)
-	FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error
-	RegisterWait(ctx context.Context, sessionID string, kind store.WaitKind, handle, intent, expect string) error
-	ResolveWait(ctx context.Context, sessionID string, kind store.WaitKind, handle string) error
-	ActiveWaits(ctx context.Context, sessionID string) ([]map[string]any, error)
+}
+
+// MemoryStore 分层记忆（主题摘要 + 长期记忆条目——派生数据，worker 唯一写入）。
+type MemoryStore interface {
+	LatestSummary(ctx context.Context, sessionID, topic string) (*memory.Summary, error)
+	CreateSummary(ctx context.Context, sum memory.Summary) (bool, error)
+	CreateMemoryItem(ctx context.Context, item memory.MemoryItem) (bool, error)
+	ListMemoryItems(ctx context.Context, sessionID, topic string, limit int) ([]memory.MemoryItem, error)
+}
+
+// KnowledgeIndex 共享知识检索与 MCP 准入（tenant 级 pgvector + allowlist）。
+type KnowledgeIndex interface {
+	RetrieveKnowledge(ctx context.Context, tenantID string, embedding []float32, topK int) ([]memory.KnowledgeItem, error)
+	MCPToolAllowed(ctx context.Context, tenantID, server, tool string) (bool, error)
 	HasMCPAllowlist(ctx context.Context, tenantID, server string) (bool, error)
-	// 共享知识检索（期 3 §D：tenant 级 pgvector）
-	RetrieveKnowledge(ctx context.Context, tenantID string, embedding []float32, topK int) ([]store.KnowledgeItem, error)
+}
+
+// Store 组合端口（期 7 重组：七窄接口的组合——与拆前方法集完全一致）。
+type Store interface {
+	EventLog
+	CheckpointStore
+	UsageLedger
+	SessionRegistry
+	CallLedger
+	MemoryStore
+	KnowledgeIndex
 }
 
 // SessionSource 是会话状态的读写接缝：run_workflow 经它读/回填 session_object

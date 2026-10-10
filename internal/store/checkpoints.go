@@ -5,20 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
+	"github.com/bingdilotus/chronotope/internal/core/checkpoint"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // Checkpoint 是会话时间坐标（时间旅行 期 2：seq 指针 + 沙箱快照引用）。
-type Checkpoint struct {
-	ID           string    `json:"id"`
-	SessionID    string    `json:"session_id"`
-	Seq          int64     `json:"seq"`
-	SnapshotRef  string    `json:"snapshot_ref"`
-	MaxMessageID int64     `json:"max_message_id"` // 消息投影水位（rollback 截断依据）
-	CreatedAt    time.Time `json:"created_at"`
-}
+// 期 7 下沉：定义在 core/checkpoint——store 用别名（只做 SQL）。
+type Checkpoint = checkpoint.Checkpoint
 
 // CreateCheckpoint 落库时间坐标（幂等：同 id 已存在返回 false）。
 func (s *Store) CreateCheckpoint(ctx context.Context, cp Checkpoint) (bool, error) {

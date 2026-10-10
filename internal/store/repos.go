@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
@@ -249,14 +250,8 @@ WHERE id = $1`
 }
 
 // Message 是 messages 表行（真相，只增；content 为 JSON 原样）。
-type Message struct {
-	ID        int64
-	SessionID string
-	RunID     string
-	Step      int
-	Role      string
-	Content   json.RawMessage
-}
+// Message 消息投影行（期 7 下沉：core/memory）。
+type Message = memory.Message
 
 // AppendMessage 追加消息（worker-架构设计 §3：msgs.Append 必须落表，重放后历史不缺失）。
 func (s *Store) AppendMessage(ctx context.Context, sessionID, runID string, step int, role string, content json.RawMessage) error {

@@ -6,34 +6,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"time"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 
 	"github.com/jackc/pgx/v5"
 )
 
-// Summary 是 summaries 行（主题滚动摘要；派生数据，可重算）。
-type Summary struct {
-	SessionID    string
-	Topic        string
-	Version      int
-	Summary      string
-	Diff         string
-	CreatedByRun string
-	CreatedAt    time.Time
-}
+// Summary 是 summaries 行（期 7 下沉：core/memory）。
+type Summary = memory.Summary
 
-// MemoryItem 是 memory_items 行（长期记忆条目；派生数据，带来源引用）。
-type MemoryItem struct {
-	SessionID   string
-	Topic       string
-	Kind        string
-	Content     string
-	ContentHash string
-	SourceRunID string
-	SourceStep  int
-	Version     int
-	CreatedAt   time.Time
-}
+// MemoryItem 是 memory_items 行（期 7 下沉：core/memory）。
+type MemoryItem = memory.MemoryItem
 
 // HashContent 内容哈希（去重键）。
 func HashContent(content string) string {

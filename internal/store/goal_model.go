@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"time"
 )
 
@@ -163,27 +163,18 @@ func (s *Store) ReleaseActionClaim(ctx context.Context, scope string, generation
 	return tag.RowsAffected() > 0, nil
 }
 
-// SchedulerHint 调度提示（层 0 类型——DECIDE 的机器可读结论）。
-type SchedulerHint string
+// SchedulerHint 调度提示（期 7 下沉：core/wait）。
+type SchedulerHint = wait.SchedulerHint
 
-// SchedulerHint 常量（M2 DECIDE 先行——触发器只消费提示不判断业务）。
+// SchedulerHint 常量（core/wait 的别名）。
 const (
-	HintRun    SchedulerHint = "run"
-	HintWait   SchedulerHint = "wait"
-	HintAsk    SchedulerHint = "ask"
-	HintReplan SchedulerHint = "replan"
-	HintRepair SchedulerHint = "repair"
-	HintQuiet  SchedulerHint = "quiet"
+	HintRun    SchedulerHint = wait.HintRun
+	HintWait   SchedulerHint = wait.HintWait
+	HintAsk    SchedulerHint = wait.HintAsk
+	HintReplan SchedulerHint = wait.HintReplan
+	HintRepair SchedulerHint = wait.HintRepair
+	HintQuiet  SchedulerHint = wait.HintQuiet
 )
 
-// Decision 是 DECIDE 的判定结果（层 1 策略缝的契约）。
-type Decision struct {
-	Hint   SchedulerHint `json:"hint"`
-	Reason string        `json:"reason"`
-}
-
-// DecisionJSON 序列化（journaled 判定事件用）。
-func (d Decision) DecisionJSON() json.RawMessage {
-	b, _ := json.Marshal(d)
-	return b
-}
+// Decision 是 DECIDE 的判定结果（期 7 下沉：core/wait）。
+type Decision = wait.Decision

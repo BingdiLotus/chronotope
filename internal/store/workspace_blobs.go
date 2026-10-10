@@ -3,17 +3,12 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 )
 
 // WorkspaceFile 是工作区文件索引行（path → 内容寻址；期 2 §A）。
-type WorkspaceFile struct {
-	SessionID string    `json:"session_id"`
-	Path      string    `json:"path"`
-	Hash      string    `json:"hash"`
-	Size      int64     `json:"size"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
+// WorkspaceFile 工作区文件索引行（期 7 下沉：core/memory）。
+type WorkspaceFile = memory.WorkspaceFile
 
 // UpsertWorkspaceFile 写索引行（同路径覆盖；内容寻址幂等——同 hash 对象复用）。
 func (s *Store) UpsertWorkspaceFile(ctx context.Context, f WorkspaceFile) error {
