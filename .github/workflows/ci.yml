@@ -263,6 +263,48 @@ jobs:
             sleep 1
           done
           bash test/e2e/w12-archive.sh http://localhost:8080
+      - name: W18 账本/quiesce/unknown e2e（calls 对账 + freeze + exec 未知态）
+        run: bash test/e2e/w18-ledger.sh http://localhost:8080
+      - name: W19 合规验收 e2e（Goal→审批→Evidence→审计链验证）
+        run: bash test/e2e/w19-compliance.sh http://localhost:8080
+      - name: W20 WaitFor 等待收敛 e2e（timer 注册/解决 + 审批 intent + DECIDE 判定）
+        run: bash test/e2e/w20-waitfor.sh http://localhost:8080
+      - name: W21 信任拓扑 e2e（MCP 注入 untrusted 标记 + class 2 不执行）
+        run: |
+          nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/mcp-fixture.log 2>&1 &
+          sleep 2
+          bash test/e2e/w21-trust.sh http://localhost:8080
+      - name: 容器日志（失败时诊断）
+        if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs --tail=100
+
+  real:
+    name: real（真实模型 + 真实 E2B 官方云，手动触发需 secrets）
+    if: github.event_name == 'workflow_dispatch' && secrets.ANTHROPIC_API_KEY != '' && secrets.E2B_API_KEY != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 启动全栈（真实模式）
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          EXECUTOR_DRIVER: e2b_selfhosted
+          E2B_API_URL: https://api.e2b.dev
+        run: docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker executor api
+      - name: 等待 api 就绪
+        run: |
+          for i in $(seq 1 90); do
+            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
+            sleep 2
+          done
+      - name: 注册 worker 端点到 Restate
+        run: |
+          curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
+            -d '{"uri":"http://worker:9080","version":"real-v1","use_http_11":true,"force":true}'
+      - name: 真实模型全链路（6 断言）
+        run: bash test/e2e/real-model.sh http://localhost:8080
+      - name: 真实 E2B 官方云（7 断言）
+        run: bash test/e2e/w17-real-e2b.sh http://localhost:8080
       - name: 容器日志（失败时诊断）
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail=100

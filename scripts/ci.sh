@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本地 CI 门禁（.github/workflows/ci.yml 的本地等价物）：
 #   gofmt → build → vet → test（store 集成 + golden journal 重放）→ harness → spike
-#   --e2e：追加 compose 全链路 e2e（scripts/demo.sh——W1–W8+期2/期3 共 19 阶段）
+#   --e2e：追加 compose 全链路 e2e（scripts/demo.sh——W1–W8+期2/3/6 共 24 段）
 # 用法: bash scripts/ci.sh [--e2e]
 set -euo pipefail
 
