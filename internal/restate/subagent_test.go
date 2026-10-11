@@ -119,3 +119,23 @@ func TestRunLoopSpawnSubagentChildFailure(t *testing.T) {
 }
 
 var _ = runs.ToolSpawnSubagent
+
+// TestSubagentOwnershipBackground A5：background 的 spawn 即返回
+// （不 durable 等待——child run 独立完成）。
+func TestSubagentOwnershipBackground(t *testing.T) {
+	args := parseToolArguments(ToolCall{
+		ID: "t1", Name: runs.ToolSpawnSubagent,
+		Arguments: json.RawMessage(`{"agent":"a","input":"x","ownership":"background"}`),
+	})
+	if o, _ := args["ownership"].(string); o != "background" {
+		t.Fatalf("ownership 解析: %v", args["ownership"])
+	}
+	// 默认 foreground（缺省——父 run durable 等待的语义不变）
+	args2 := parseToolArguments(ToolCall{
+		ID: "t2", Name: runs.ToolSpawnSubagent,
+		Arguments: json.RawMessage(`{"agent":"a","input":"x"}`),
+	})
+	if _, ok := args2["ownership"]; ok {
+		t.Fatal("缺省 ownership 不应出现（foreground 语义由缺省承担）")
+	}
+}

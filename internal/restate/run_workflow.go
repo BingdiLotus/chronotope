@@ -409,9 +409,14 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 						}
 						_ = json.Unmarshal([]byte(decision), &d)
 						if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
+							ownership := ""
+							if rr, rErr2 := deps.Store.GetRun(ctx, runID); rErr2 == nil && rr != nil {
+								ownership, _ = rr.Bound["ownership"].(string)
+							}
 							if approvers, _, rErr := deps.ApprovalRouter.Route(ctx, policy.ApprovalRequest{
 								TenantID: sess.OrgID, Tool: tc.Name, Class: 2, SessionID: in.SessionID, RunID: runID,
-								Context: tc.ApprovalContext, // A1：hook 注入进路由判断
+								Context:   tc.ApprovalContext, // A1：hook 注入进路由判断
+								Ownership: ownership,          // A5：子代理所有权进路由
 							}); rErr == nil && len(approvers) > 0 && d.Approver != "" && !containsStr(approvers, d.Approver) {
 								_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
 									"step": step, "tool": tc.Name, "risk_class": 2, "reason": "approver_revoked",

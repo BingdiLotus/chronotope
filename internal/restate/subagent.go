@@ -22,6 +22,12 @@ func dispatchSubagent(ctx restate.Context, deps *Deps, in RunInput, runID string
 	args := parseToolArguments(tc)
 	agentID, _ := args["agent"].(string)
 	input, _ := args["input"].(string)
+	// A5：ownership（Pi 的 foreground/background——默认 foreground：
+	// 父 run durable 等待子完成；background：spawn 即返回，子独立完成）
+	ownership := "foreground"
+	if o, ok := args["ownership"].(string); ok && o == "background" {
+		ownership = "background"
+	}
 	if agentID == "" || input == "" {
 		return "", 0, restate.ToTerminalError(fmt.Errorf("spawn_subagent 需要 agent 与 input"))
 	}
@@ -49,7 +55,8 @@ func dispatchSubagent(ctx restate.Context, deps *Deps, in RunInput, runID string
 		}
 		if _, err := deps.Store.CreateRun(rc, childRunID, childSessionID,
 			json.RawMessage(`{"trigger":"subagent","parent_run_id":"`+runID+`"}`),
-			map[string]any{"model": agent.Config.Model, "agent_id": agentID}); err != nil {
+			map[string]any{"model": agent.Config.Model, "agent_id": agentID,
+				"ownership": ownership}); err != nil {
 			return nil, err
 		}
 		return &spawnOutcome{SessionID: childSessionID, RunID: childRunID, Agent: agentID}, nil
@@ -68,8 +75,15 @@ func dispatchSubagent(ctx restate.Context, deps *Deps, in RunInput, runID string
 
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.SubagentSpawned, "subagent", tc.Name, map[string]any{
 		"step": step, "child_session_id": outcome.SessionID, "child_run_id": outcome.RunID,
-		"agent": outcome.Agent, "input": input,
+		"agent": outcome.Agent, "input": input, "ownership": ownership,
 	})
+
+	// A5：background 不等待——spawn 即返回（子 run 独立完成；foreground
+	// 保持 durable 等待）
+	if ownership == "background" {
+		b, _ := json.Marshal(map[string]any{"status": "spawned(background)", "child_run_id": outcome.RunID})
+		return string(b), 0, nil
+	}
 
 	// child run_workflow：durable 等待（挂起零进程占用；重放回放同一结果）
 	childOut, childErr := restate.Workflow[RunOutput](ctx, RunWorkflowName, outcome.RunID, "run").

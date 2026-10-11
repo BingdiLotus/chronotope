@@ -14,6 +14,9 @@ type ApprovalRequest struct {
 	// Context 是 harness 侧 hook 注入的审批上下文（A1——审批路由的
 	// 判断输入之一；也进 HITL digest 的 context 字段供审批者查看）。
 	Context json.RawMessage `json:"context,omitempty"`
+	// Ownership 是子代理所有权（A5——foreground/background；审批路由可
+	// 区分：background 的审批不阻塞父 run 的语义在 spawn 层已保证）。
+	Ownership string `json:"ownership,omitempty"`
 }
 
 // ApprovalRouter 是审批人路由缝（期 3 §B）：默认 ManualOnly（空集合 =
