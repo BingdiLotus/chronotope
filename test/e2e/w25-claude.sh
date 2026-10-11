@@ -11,10 +11,12 @@ fail() { echo -e "  \033[1;31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
 assert() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 
 echo "== W25 Claude 官方 SDK (API=$API RUN_ID=$RUN_ID) =="
-# ① 起官方 SDK 适配器 + 注册表 + 绑定
+# ① api 就绪等待（W26 后 api 忙——502 transient 的固化处理）+ 起适配器
+for i in $(seq 1 30); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 1; done
 nohup python3 adapters/claude/harness.py 8010 > /tmp/claude-sdk.log 2>&1 &
 CP=$!
 sleep 3
+for i in $(seq 1 30); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 1; done
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
   -d '{"name":"claude-sdk","endpoint":"http://host.docker.internal:8010","version":"v1","capabilities":["claude-sonnet-4-6"]}' > /dev/null
 AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
