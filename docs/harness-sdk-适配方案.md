@@ -1,19 +1,23 @@
-# 第三方 SDK 官方适配方案（Claude Codex / Pi / deepseek-harness 分批实现）
+# 第三方 SDK 官方适配方案（Claude / Codex / Pi / deepseek-harness 四批实现）
 
 > 2026-10-11 方案定稿（先文档后编码）。目标：三个真实第三方 SDK 经**官方
 > 本地 SDK**接入 Chronotope——每个实现表现官方最佳实践，优先本地 SDK（进程
 > 内调用）而非远程 API 模拟。
-> 调研核实：Claude Agent SDK 有[官方 Python SDK](https://code.claude.com/docs/en/agent-sdk/python)
-> （query/hooks/permissions/checkpointing）；Pi 有 [earendil-works/pi](https://github.com/earendil-works/pi)
-> （packages/coding-agent 本地 npm 包）；dsh 有 [@deepseek-ai/dsh-sdk-client](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sdk/client/README.md)
-> （官方 SDK client）。
+> 调研核实：**Claude 与 Codex 是两个不同的 harness**（用户指正——分别有
+> 独立官方 SDK）：Claude Agent SDK 有[官方 Python SDK](https://code.claude.com/docs/en/agent-sdk/python)
+> （query/hooks/permissions/checkpointing）；Codex 有 OpenAI 的
+> [@openai/codex-sdk](https://chore-update--yarnpkg.netlify.app/ja/package/@openai/codex-sdk)
+> （独立本地 SDK）；Pi 有 [earendil-works/pi](https://github.com/earendil-works/pi)
+> （coding-agent 本地 npm 包）；dsh 有 [@deepseek-ai/dsh-sdk-client](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sdk/client/README.md)。
+> 共**四个独立适配器、四批实现**。
 
 ## 一、总体架构（三个适配器同一形态）
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │ 官方 SDK 适配器进程（本地 SDK 调用——官方最佳实践）      │
-│  ├─ Claude Codex：Python claude-agent-sdk（query+hooks）│
+│  ├─ Claude：Python claude-agent-sdk（query+hooks）        │
+│  ├─ Codex：@openai/codex-sdk（本地 SDK）                  │
 │  ├─ Pi：Node pi-ai（coding-agent 本地包）               │
 │  └─ dsh：TypeScript @deepseek-ai/dsh-sdk-client         │
 ├────────────────────────────────────────────────────────┤
@@ -45,7 +49,7 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
 
 ## 三、分批实现（每批的验收）
 
-### 批 1：Claude Codex（Python——官方 claude-agent-sdk）
+### 批 1：Claude（Python——官方 claude-agent-sdk）
 
 1. **官方最小示例跑通**：claude-agent-sdk 的 `query()` 本地调用（官方
    quickstart 的形态——不魔改）
@@ -54,10 +58,18 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    tool_use → tool_call 帧（execute 幂等键）
 3. **最佳实践映射**：hooks（PreToolUse 拦 class 2 → 审批请求帧）+
    permissions（工具 allowlist）+ usage（账本）
-4. **验收**：w25-claude-codex.sh——真实 SDK 对话 run 完成 + 工具调用走
+4. **验收**：w25-claude.sh——真实 Claude SDK 对话 run 完成 + 工具调用走
    execute 幂等键 + 审批绑定 digest + 账本 token 非零
 
-### 批 2：Pi（Node——pi-ai 本地包）
+### 批 2：Codex（官方 @openai/codex-sdk——OpenAI 本地 SDK）
+
+1. **官方最小示例跑通**：@openai/codex-sdk 的本地调用（官方 README 形态）
+2. **适配器**：`adapters/codex/harness.ts`（或官方 SDK 语言的对应实现）——
+   Codex 的 turn/tool → /runs 帧与 execute 幂等键
+3. **最佳实践映射**：Codex 的 approvals/usage → HITL digest/账本
+4. **验收**：w26-codex.sh——真实 Codex 调用 + 工具幂等 + 审批绑定
+
+### 批 3：Pi（Node——pi-ai 本地包）
 
 1. **官方最小示例跑通**：pi-ai 的 coding-agent 本地调用（npm 包官方
    README 的形态）
@@ -65,9 +77,9 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    帧；Pi 的子 agent（foreground/background）→ child run 语义
 3. **最佳实践映射**：Pi 的 harness 循环 → step；Pi 的 taskGraph →
    WorkItem 队列（M2）
-4. **验收**：w26-pi.sh——真实 Pi 对话 + 工具调用 + 子 Agent 派发的闭环
+4. **验收**：w27-pi.sh——真实 Pi 对话 + 工具调用 + 子 Agent 派发的闭环
 
-### 批 3：deepseek-harness（TypeScript——@deepseek-ai/dsh-sdk-client）
+### 批 4：deepseek-harness（TypeScript——@deepseek-ai/dsh-sdk-client）
 
 1. **官方最小示例跑通**：dsh-sdk-client 的官方 README 调用（rc 线注意
    破坏性改动——锁定版本）
@@ -75,7 +87,7 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    帧；dsh 的 Seam/capabilities → executor 协议的能力声明
 3. **最佳实践映射**：dsh 的 Cordis 可逆效应 → 可补偿层（effect ledger）+
    审计链（不可逆层）——三态谱系的分层落地
-4. **验收**：w27-dsh.sh——真实 dsh 调用 + 能力声明 + 幂等键的完整闭环
+4. **验收**：w28-dsh.sh——真实 dsh 调用 + 能力声明 + 幂等键的完整闭环
 
 ## 四、每批的共同验收基线
 
@@ -90,7 +102,7 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
 
 ## 五、本地 SDK 优先的具体含义
 
-- **Claude Codex**：本地 `pip install claude-agent-sdk` + 进程内
+- **Claude**：本地 `pip install claude-agent-sdk` + 进程内
   `query()`——不调 Claude 的远程 Agent API（本地 SDK 是官方最佳实践）
 - **Pi**：本地 `npm install pi-ai`（earendil-works/pi 的 coding-agent
   包）——不拉远程 Pi 服务
@@ -109,7 +121,7 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
   无状态）的边界：SDK 的内部状态不持久化到 Chronotope（适配器每次 run
   重建 SDK 会话——上下文全部来自 /runs 入参）
 - **双份权限的冲突**：SDK 权限与 class 分级冲突时取严——映射表的测试
-  覆盖（批 1 的 hooks 拦截反例）
+  覆盖（批 1 Claude 的 hooks 拦截反例、批 2 Codex 的 approvals 反例）
 
 ## 七、分阶段落地（批内顺序）
 
