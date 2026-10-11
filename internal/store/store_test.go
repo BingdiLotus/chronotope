@@ -975,18 +975,12 @@ func TestRunActiveUniqueAndCommand(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "r_ru_2", sid, nil, map[string]any{}); err == nil {
 		t.Fatal("active 唯一约束应拒绝第二 run")
 	}
-	// 幂等重投的 command 读回
-	rows, err := s.ListStaleQueuedRuns(ctx, time.Now().Add(time.Minute), 100)
-	if err != nil {
-		t.Fatalf("list stale: %v", err)
+	// 幂等重投的 command 读回（GetRun 直读——不依赖 stale 扫描的排序窗口）
+	found, err := s.GetRun(ctx, rid)
+	if err != nil || found == nil {
+		t.Fatalf("get run: %+v err=%v", found, err)
 	}
-	var found *store.Run
-	for i := range rows {
-		if rows[i].ID == rid {
-			found = rows[i]
-		}
-	}
-	if found == nil || found.Input != "原始输入" || found.Topic != "话题" {
+	if found.Input != "原始输入" || found.Topic != "话题" {
 		t.Fatalf("重投行应带 input/topic: %+v", found)
 	}
 }
