@@ -11,6 +11,10 @@ fail() { echo -e "  \033[1;31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
 assert() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 
 echo "== W28 dsh 接入 (API=$API RUN_ID=$RUN_ID) =="
+# api 就绪等待 + 旧残留清理（W28 在 W26 后——api 忙的 502 与断言读旧
+# 残留的假阳性链——与 W25 同款根因）
+rm -f /tmp/ds-run.out
+for i in $(seq 1 30); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 1; done
 DSH_RUNTIME_BIN=node DSH_RUNTIME_ARGS="/tmp/dsh/apps/cli/lib/bin.js --profile headless --patch <cordis> --json" \
   nohup node adapters/dsh/harness.mjs 8040 > /tmp/dsh-sdk.log 2>&1 &
 DP=$!
