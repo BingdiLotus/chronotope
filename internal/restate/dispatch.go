@@ -259,11 +259,15 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 		// terminal 化：重试链断（批准路径的失败显式暴露而非静默换槽）。
 		return "", restate.ToTerminalError(err)
 	}
-	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunAwaitingApproval, "await", "", map[string]any{
+	payload := map[string]any{
 		"step": step, "awakeable_id": awakeable.Id(),
 		"tool": tc.Name, "arguments": json.RawMessage(tc.Arguments),
 		"risk_class": riskClass, "action_digest": digest,
-	})
+	}
+	if len(tc.ApprovalContext) > 0 { // A1：hook 注入的上下文进审批事件（审批者可见）
+		payload["context"] = tc.ApprovalContext
+	}
+	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunAwaitingApproval, "await", "", payload)
 	// D 批：挂起即冻结——算力即时释放（不再依赖 10m lease+5m GC+TTL 存在）
 	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {
 		_ = deps.Executor.FreezeSandbox(ctx, state.SandboxID)

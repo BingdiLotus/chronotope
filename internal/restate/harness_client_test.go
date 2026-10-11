@@ -1,6 +1,7 @@
 package restate
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -93,5 +94,22 @@ func TestParseFramesToolCallIsTerminalHandoff(t *testing.T) {
 func TestParseFramesBadJSON(t *testing.T) {
 	if _, err := ParseFrames(strings.NewReader(`data: {oops` + "\n")); err == nil {
 		t.Fatal("坏 JSON 帧应报错")
+	}
+}
+
+// TestToolCallApprovalContext A1：tool_call 帧的 approval_context 解析
+// （hook 注入进 ToolCall——审批路由与 digest 的 context 来源）。
+func TestToolCallApprovalContext(t *testing.T) {
+	res := frames(t,
+		`{"type":"beat","seq":0,"payload":{}}`,
+		`{"type":"tool_call","seq":1,"payload":{"id":"t1","name":"bash","arguments":{"command":"rm -rf /"},"approval_context":{"hook":"PreToolUse","tool":"bash"}}}`,
+		`{"type":"done","seq":2,"payload":{"final":"x"}}`,
+	)
+	if len(res.ToolCalls) != 1 {
+		t.Fatalf("tool calls: %+v", res.ToolCalls)
+	}
+	tc := res.ToolCalls[0]
+	if len(tc.ApprovalContext) == 0 || !bytes.Contains(tc.ApprovalContext, []byte("PreToolUse")) {
+		t.Fatalf("approval_context 未解析: %s", tc.ApprovalContext)
 	}
 }

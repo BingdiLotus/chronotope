@@ -1,5 +1,7 @@
 package policy
 
+import "encoding/json"
+
 import "context"
 
 // ApprovalRequest 是审批路由输入（class 2 危险工具挂起时的路由请求）。
@@ -9,6 +11,9 @@ type ApprovalRequest struct {
 	Class     int    `json:"class"`
 	SessionID string `json:"session_id"`
 	RunID     string `json:"run_id"`
+	// Context 是 harness 侧 hook 注入的审批上下文（A1——审批路由的
+	// 判断输入之一；也进 HITL digest 的 context 字段供审批者查看）。
+	Context json.RawMessage `json:"context,omitempty"`
 }
 
 // ApprovalRouter 是审批人路由缝（期 3 §B）：默认 ManualOnly（空集合 =

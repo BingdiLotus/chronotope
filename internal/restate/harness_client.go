@@ -39,6 +39,10 @@ type ToolCall struct {
 	ID        string
 	Name      string
 	Arguments json.RawMessage
+	// ApprovalContext 是 harness 侧 hook 注入的审批上下文（A1——Claude
+	// PreToolUse 等 hook 的观察注入：工具参数摘要/风险提示——进 HITL
+	// digest 的 context 字段，审批者可见）。
+	ApprovalContext json.RawMessage
 }
 
 // harnessClient 是 HTTP+SSE 实现；无状态（每次调用短连接）。
@@ -120,6 +124,8 @@ func ParseFrames(r io.Reader) (*Result, error) {
 				ID        string          `json:"id"`
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
+				// A1：harness 侧 hook 注入的审批上下文（可选）
+				ApprovalContext json.RawMessage `json:"approval_context,omitempty"`
 			}
 			if err := json.Unmarshal(f.Payload, &p); err != nil {
 				return nil, fmt.Errorf("harness: bad tool_call payload: %w", err)
@@ -127,7 +133,7 @@ func ParseFrames(r io.Reader) (*Result, error) {
 			if !runs.IsVocabularyName(p.Name) {
 				return nil, fmt.Errorf("harness: tool name %q 不是词汇表规范名（契约规范 §3 硬约束）", p.Name)
 			}
-			res.ToolCalls = append(res.ToolCalls, ToolCall{ID: p.ID, Name: p.Name, Arguments: p.Arguments})
+			res.ToolCalls = append(res.ToolCalls, ToolCall{ID: p.ID, Name: p.Name, Arguments: p.Arguments, ApprovalContext: p.ApprovalContext})
 		case runs.FrameDone:
 			var p runs.DonePayload
 			if err := json.Unmarshal(f.Payload, &p); err != nil {

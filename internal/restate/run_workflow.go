@@ -376,6 +376,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 						if sess, sErr := deps.Store.GetSession(ctx, in.SessionID); sErr == nil {
 							if approvers, _, rErr := deps.ApprovalRouter.Route(ctx, policy.ApprovalRequest{
 								TenantID: sess.OrgID, Tool: tc.Name, Class: 2, SessionID: in.SessionID, RunID: runID,
+								Context: tc.ApprovalContext, // A1：hook 注入进路由判断
 							}); rErr == nil && len(approvers) > 0 && d.Approver != "" && !containsStr(approvers, d.Approver) {
 								_ = emit.Emit(ctx, in.SessionID, runID, step, event.AuditToolDenied, "deny", tc.Name, map[string]any{
 									"step": step, "tool": tc.Name, "risk_class": 2, "reason": "approver_revoked",

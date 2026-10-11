@@ -56,9 +56,22 @@ def sse_frames(body):
                             yield {"type": "delta", "seq": seq, "payload": {"text": b.text}}
                         elif bn == "ToolUseBlock":
                             seq += 1
+                            # A1：hook 注入的审批上下文（class 2 工具的参数
+                            # 摘要——进 HITL digest 的 context 字段，审批者
+                            # 可见——官方 hooks 的最佳实践映射）
+                            ctx = {}
+                            args = getattr(b, "input", {}) or {}
+                            if b.name in ("bash", "run_python", "write_file", "http_request"):
+                                ctx = {
+                                    "hook": "PreToolUse",
+                                    "tool": b.name,
+                                    "risk_note": "class 2 危险工具——参数摘要供审批",
+                                    "args_summary": json.dumps(args, ensure_ascii=False)[:500],
+                                }
                             yield {"type": "tool_call", "seq": seq, "payload": {
                                 "id": getattr(b, "id", "t_sdk"), "name": b.name,
-                                "arguments": getattr(b, "input", {}),
+                                "arguments": args,
+                                "approval_context": ctx or None,
                             }}
                     if isinstance(getattr(msg, "usage", None), dict):
                         usage = msg.usage
