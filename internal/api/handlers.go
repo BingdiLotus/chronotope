@@ -1034,16 +1034,26 @@ func (h *Handler) steerSession(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) registerHarness(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
 	var req struct {
-		Name         string               `json:"name"`
-		Endpoint     string               `json:"endpoint"`
-		Version      string               `json:"version"`
-		Capabilities harness.Capabilities `json:"capabilities"`
+		Name         string          `json:"name"`
+		Endpoint     string          `json:"endpoint"`
+		Version      string          `json:"version"`
+		Capabilities json.RawMessage `json:"capabilities"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Endpoint == "" || req.Version == "" {
 		writeError(w, http.StatusUnprocessableEntity, 422, "name/endpoint/version 必填")
 		return
 	}
-	if err := h.Store.RegisterHarness(r.Context(), orgID, req.Name, req.Endpoint, req.Version, req.Capabilities); err != nil {
+	// B1 兼容：capabilities 支持结构化对象或旧自由数组（数组 → ToolFamilies）
+	var caps harness.Capabilities
+	if len(req.Capabilities) > 0 {
+		var arr []string
+		if json.Unmarshal(req.Capabilities, &arr) == nil {
+			caps = harness.Capabilities{ToolFamilies: arr, Protocol: "1.0"}
+		} else {
+			_ = json.Unmarshal(req.Capabilities, &caps)
+		}
+	}
+	if err := h.Store.RegisterHarness(r.Context(), orgID, req.Name, req.Endpoint, req.Version, caps); err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
