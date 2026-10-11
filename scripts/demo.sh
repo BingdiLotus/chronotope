@@ -116,6 +116,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.14 w28 dsh 接入（headless --json + openai 兼容）
+bash test/e2e/w28-dsh.sh "$API" > /tmp/demo-w28.log 2>&1 && pass "W28 dsh 接入（2 项断言）" || { fail "W28 dsh 接入"; tail -5 /tmp/demo-w28.log; }
+
 # 13.13 w26 Codex 官方 SDK 接入（真实 thread + 账本留痕）
 bash test/e2e/w26-codex.sh "$API" > /tmp/demo-w26.log 2>&1 && pass "W26 Codex SDK（2 项断言）" || { fail "W26 Codex SDK"; tail -5 /tmp/demo-w26.log; }
 

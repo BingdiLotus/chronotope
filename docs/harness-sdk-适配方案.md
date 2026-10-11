@@ -113,11 +113,12 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    帧；dsh 的 Seam/capabilities → executor 协议的能力声明
 3. **最佳实践映射**：dsh 的 Cordis 可逆效应 → 可补偿层（effect ledger）+
    审计链（不可逆层）——三态谱系的分层落地
-4. **验收** ⏳ 骨架（2026-10-11——adapters/dsh/harness.mjs：官方
-   DeepSeekHarness 的 owned-run API 调用点（launch/run/finalResponse）+
-   HarnessClient 底层协议备查；前置标注：① dsh runtime 构建（monorepo
-   的 lib/bin.js + cordis.yml——env 参数化）② provider 凭证（.env 无
-   DEEPSEEK_API_KEY——credentials 组）。前置就绪后 w28-dsh.sh 即插即用）
+4. **验收** ✅ 已落地（2026-10-11——用户指正「dsh 支持 openai 格式接口」
+   成立：Custom model API（apiKeyEnv + openai-completions + baseURL 指
+   poke2api）——无需 DEEPSEEK key；runtime 构建（pnpm + build +
+   build:native-system——apps/cli/lib/bin.js）；w28-dsh.sh 2/2：真实
+   headless run（DshSDK 标记 + gpt-6.1-sol 经 poke2api）+ 账本 usage
+   （step_end 的 tokens））
 
 ## 四、每批的共同验收基线
 

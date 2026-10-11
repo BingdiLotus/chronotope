@@ -1,42 +1,54 @@
-// dsh 官方 SDK 适配器（批 4——@deepseek-ai/dsh-sdk-client 骨架）。
+// dsh 官方 SDK 适配器（批 4——真实实现：headless --json 的官方机器可读形态）。
 //
-// 经 /runs 协议接 Chronotope；官方 DeepSeekHarness 的 owned-run API：
-//   new DeepSeekHarness({ launch: { command, args }, provider, model,
-//                         maxTokens }) → run(prompt) → finalResponse
-// HarnessClient 底层协议（start/initialize/prompt/request/close）备查。
+// 经 /runs 协议接 Chronotope；spawn dsh headless CLI（官方 --json 的
+// ndjson run events）→ 帧映射（text/final/step_end+usage → delta/done）。
+// 官方参考：@deepseek-ai/dsh-sdk-client README + docs/user/guide/providers.md。
 //
-// 官方参考：@deepseek-ai/dsh-sdk-client README（rc 线——锁版本）。
-// 官方形态要点：
-//   - launch 完全显式（command/args）——runtime 可执行由调用方命名
-//   - 子进程懒启动、跨 run 复用、close() 强制（await using）
-//   - provider 是 runtime 侧 cordis.yml 的职责（client 不组装请求）
-//   - 无 mid-turn cancel（放弃 turn = 关闭 runtime）
+// 用户指正（2026-10-11）：dsh 支持 openai 格式接口——Custom model API
+// （apiKeyEnv + openai-completions + baseURL 指 poke2api）——无需
+// DEEPSEEK key；装配验证实证：--dump-config 的 composed 树含 provider +
+// headless 真实 run（gpt-6.1-sol 经 poke2api——reasoning+回答完整）。
 //
-// 前置状态（2026-10-11 更新）：
-//   ① dsh runtime 构建 ✅ 已通（pnpm install + build:lib:host——
-//      apps/cli/lib/bin.js 是 runtime 入口）——DSH_RUNTIME_BIN=node +
-//      DSH_RUNTIME_ARGS=apps/cli/lib/bin.js <cordis.yml>
-//   ② 凭证（用户指正——dsh 支持 openai 格式接口）：Custom model API
-//      （docs/user/guide/providers.md）——apiKeyEnv: OPENAI_API_KEY +
-//      api: openai-completions + baseURL: poke2api——无需 DEEPSEEK key；
-//      cordis 模板见 adapters/dsh/cordis.yml
-// 剩余：cordis 的完整装配验证（cli 启动 + provider 生效）——w28 就绪。
+// 三铁律：无状态（每次 run spawn 新 headless 进程——dsh 的 session 不
+// 持久化到 Chronotope）；usage → 账本（step_end 的 usage 映射）。
 import http from "node:http";
+import { spawn } from "node:child_process";
 
 const PORT = parseInt(process.argv[2] || "8040", 10);
 const MARK = "DshSDK"; // 回复标记（路由证据）
 
-// 官方调用点（runtime 就绪后启用）：
-//   const { DeepSeekHarness } = await import("@deepseek-ai/dsh-sdk-client");
-//   await using harness = new DeepSeekHarness({
-//     launch: { command: process.env.DSH_RUNTIME_BIN || "node",
-//               args: (process.env.DSH_RUNTIME_ARGS || "lib/bin.js cordis.yml").split(" ") },
-//     provider: process.env.DSH_PROVIDER || "deepseek-official",
-//     model: process.env.DSH_MODEL || "deepseek-v4-flash",
-//     maxTokens: 49_152,
-//   });
-//   const result = await harness.run(prompt);
-//   result.finalResponse → done 帧（Chronotope 账本自动落 usage）
+// spawn headless --json → ndjson events → final + usage
+async function runDsh(prompt) {
+  const bin = process.env.DSH_RUNTIME_BIN || "node";
+  const args = (process.env.DSH_RUNTIME_ARGS ||
+    "/tmp/dsh/apps/cli/lib/bin.js --profile headless --patch <cordis> --json").split(" ");
+  const cordis = process.env.DSH_CORDIS ||
+    new URL("./cordis.yml", import.meta.url).pathname;
+  const argv = args.map((a) => (a === "<cordis>" ? cordis : a));
+  argv.push(prompt);
+  return new Promise((resolve) => {
+    const child = spawn(bin, argv, { env: process.env });
+    let final = "", usage = {}, buf = "";
+    child.stdout.on("data", (c) => {
+      buf += c;
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === "text") final += ev.text || "";
+          if (ev.type === "final") final = ev.text || final;
+          if (ev.type === "status" && ev.phase === "step_end" && ev.usage) {
+            usage = { tokens_in: ev.usage.inputTokens || 0, tokens_out: ev.usage.outputTokens || 0 };
+          }
+        } catch {}
+      }
+    });
+    child.stderr.on("data", () => {});
+    child.on("close", () => resolve({ final, usage }));
+  });
+}
 
 function sse(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -53,30 +65,34 @@ const server = http.createServer((req, res) => {
   }
   let raw = "";
   req.on("data", (c) => (raw += c));
-  req.on("end", () => {
+  req.on("end", async () => {
+    let body = {};
+    try {
+      body = JSON.parse(raw || "{}");
+    } catch {}
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
     });
     sse(res, { type: "beat", seq: 0, payload: {} });
-    // 骨架状态：runtime 未构建/凭证未配置——显式 error 帧（诚实）
-    const ready = process.env.DSH_RUNTIME_BIN !== undefined;
-    if (!ready) {
-      sse(res, {
-        type: "error",
-        seq: 1,
-        payload: {
-          error:
-            "dsh runtime 未构建（deepseek-harness monorepo 的 lib/bin.js + cordis.yml——DSH_RUNTIME_BIN/DSH_RUNTIME_ARGS 配置后启用 DeepSeekHarness）",
-        },
-      });
-      return;
+    const prompt = (body.messages || [])
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join("\n");
+    try {
+      const { final, usage } = await runDsh(prompt);
+      if (!final) {
+        sse(res, { type: "error", seq: 1, payload: { error: "dsh run 无 final（runtime 或 provider 未就绪）" } });
+        res.end();
+        return;
+      }
+      sse(res, { type: "delta", seq: 1, payload: { text: final } });
+      sse(res, { type: "done", seq: 2, payload: { final: `${final} [${MARK}]`.trim(), usage, truncated: false } });
+      res.end();
+    } catch (e) {
+      sse(res, { type: "error", seq: 1, payload: { error: String(e) } });
+      res.end();
     }
-    sse(res, {
-      type: "done",
-      seq: 1,
-      payload: { final: `${MARK} 回复`, usage: {}, truncated: false },
-    });
   });
 });
 
