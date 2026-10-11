@@ -10,12 +10,17 @@ import http from "node:http";
 const PORT = parseInt(process.argv[2] || "8030", 10);
 const MARK = "PiCore"; // 回复标记（路由证据）
 
-// pi-ai 的调用点（catalog 装配后启用）：
-//   const { getModel, streamSimple } = await import("@earendil-works/pi-ai/compat");
-//   const model = getModel(process.env.PI_MODEL_ID || "claude-sonnet-4-6");
-//   const stream = streamSimple(model, { messages }, options);
-// 帧映射：assistant 文本事件 → delta；toolCall 事件 → tool_call；
-// result → done + usage（Chronotope 账本自动落）。
+// pi-ai 的官方调用点（catalog 装配已解决——providers/all 的静态 MODELS：
+//   const { getBuiltinModel } = await import(
+//     "@earendil-works/pi-ai/providers/all");
+//   const { streamSimple } = await import("@earendil-works/pi-ai/compat");
+//   const model = getBuiltinModel("anthropic", "claude-sonnet-4-6");
+//   const stream = streamSimple(model, { messages, tools }, options);
+// 帧映射：text-delta → delta；toolCall 事件 → tool_call；result → done
+// + usage（Chronotope 账本自动落）。
+// 已知受阻：pi-ai 的 anthropic auth 路径 401（invalid x-api-key——官方
+// auth 迁移中；claude-agent-sdk 同 key 直连成功——pi-ai 侧 env 注入差异
+// 待官方 auth 形态稳定）。
 
 function sse(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -44,19 +49,16 @@ const server = http.createServer((req, res) => {
       "Cache-Control": "no-cache",
     });
     sse(res, { type: "beat", seq: 0, payload: {} });
-    // 骨架状态：模型 catalog 装配前显式 error 帧（诚实——不虚假完成）
-    const modelReady = process.env.PI_MODEL_ID !== undefined;
-    if (!modelReady) {
-      sse(res, {
-        type: "error",
-        seq: 1,
-        payload: {
-          error:
-            "pi-ai 模型 catalog 未装配（coding-agent ModelManager 迁移中——设置 PI_MODEL_ID 后启用 streamSimple）",
-        },
-      });
-      return;
-    }
+    // 诚实状态：catalog 装配已通（getBuiltinModel）——真实调用受阻于
+    // pi-ai 的 anthropic auth 401（官方 auth 迁移中）——显式 error 帧
+    sse(res, {
+      type: "error",
+      seq: 1,
+      payload: {
+        error:
+          "pi-ai 模型已解析（getBuiltinModel anthropic/claude-sonnet-4-6）——auth 401 待官方 auth 形态稳定（官方迁移中）",
+      },
+    });
     sse(res, {
       type: "done",
       seq: 1,
