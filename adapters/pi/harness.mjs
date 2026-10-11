@@ -76,3 +76,15 @@ server.listen(PORT, "0.0.0.0", () => {
 // OPENAI_BASE_URL/poke2api 直连成功）：openai-proxy 装配同样卡在
 // 「Provider is not configured」（login({signal}) 交互形态——官方 auth
 // 迁移窗口；两路径骨架就绪）。
+
+//
+// login({signal}) 的官方形态深挖（2026-10-11）：
+//   login(providerId, type, interaction, options?) —— 四参数（两参数调用
+//   的「reading 'signal'」= interaction 缺失）
+//   AuthInteraction = { signal?, prompt(prompt): Promise<string>,
+//                       notify(event) } —— prompt 的 secret 类型返回 key
+//   ambient-only（auth 无 login 函数）→ login 被拒（「does not support
+//   api_key login」——正确路径是不 login 直接 resolve）
+//   实测：auth.resolve 未被触发（getAuth 返回 undefined）——credential
+//   初始化的触发链是官方 auth 迁移的最后一环（Cloudflare 的 PiHarness
+//   用 pi-durable 完整形态佐证——官方完整装配在 coding-agent 层）
