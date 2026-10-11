@@ -11,9 +11,14 @@ fail() { echo -e "  \033[1;31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
 assert() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 
 echo "== W25 Claude 官方 SDK (API=$API RUN_ID=$RUN_ID) =="
+# SDK 检测（CI 环境的 PATH 可能无 claude-agent-sdk——fallback 到
+# anaconda；适配器起失败的假阳性链关闭）
+PY=python3
+python3 -c "import claude_agent_sdk" 2>/dev/null || PY=/Users/yangziwen/anaconda3/bin/python3
+rm -f /tmp/cl-run.out
 # ① api 就绪等待（W26 后 api 忙——502 transient 的固化处理）+ 起适配器
 for i in $(seq 1 30); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 1; done
-nohup python3 adapters/claude/harness.py 8010 > /tmp/claude-sdk.log 2>&1 &
+nohup $PY adapters/claude/harness.py 8010 > /tmp/claude-sdk.log 2>&1 &
 CP=$!
 sleep 3
 for i in $(seq 1 30); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 1; done
