@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/store"
@@ -164,6 +165,10 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		"agent_config":         agent.Config, // 全量快照：旧 run 永远用启动时 config（正确性二期 ⑩）
 		"protocol_version":     "1.0",
 		"model":                agent.Config.Model,
+	}
+	// B2：扩展绑定快照（bound 冻结扩展清单——装配合并后置标注）
+	if len(agent.Config.Extensions) > 0 {
+		bound["extensions"] = agent.Config.Extensions
 	}
 	// Harness 装配阶段 3：API 路径的 harness 快照冻结（agent 绑定 → active
 	// endpoint → bound；升级后旧 run 沿旧）
@@ -1012,6 +1017,33 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// registerExtension B2：扩展包注册（tools/prompts/hooks 的可装配包）。
+func (h *Handler) registerExtension(w http.ResponseWriter, r *http.Request) {
+	var req extension.Definition
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" || req.Name == "" || req.Version == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "id/name/version 必填")
+		return
+	}
+	if req.Kind == "" {
+		req.Kind = "tools"
+	}
+	if err := h.Store.RegisterExtension(r.Context(), req); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"registered": true, "id": req.ID})
+}
+
+// listExtensions B2：org 的 active 扩展包列表。
+func (h *Handler) listExtensions(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Store.ListExtensions(r.Context(), chi.URLParam(r, "orgID"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"extensions": rows})
+}
+
 // steerSession A4：运行中转向（Pi 的 follow-up inbox 对应）——排队输入
 // 不打断当前 run（drain 点注入）。
 func (h *Handler) steerSession(w http.ResponseWriter, r *http.Request) {

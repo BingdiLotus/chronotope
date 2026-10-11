@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"log/slog"
 	"time"
@@ -49,6 +50,8 @@ type Store interface {
 	SetHarnessState(ctx context.Context, orgID, name, version, state string) error
 	GetActiveHarness(ctx context.Context, orgID, name string) (*store.HarnessRow, error)
 	EnqueueSteering(ctx context.Context, sessionID, input string) error
+	RegisterExtension(ctx context.Context, ext extension.Definition) error
+	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
 	CreateWorkItem(ctx context.Context, id, goalID, description, taskClass string, priority int, dependencies string) error

@@ -64,6 +64,9 @@ type AgentConfig struct {
 	Skills       []string        `json:"skills,omitempty"`
 	Environment  Environment     `json:"environment,omitempty"`
 	Budget       map[string]any  `json:"budget,omitempty"`
+	// Extensions 是扩展包绑定（B2——org 级扩展的 agent 绑定；进 spec
+	// digest：绑定变更 = digest 变更）。
+	Extensions []string `json:"extensions,omitempty"`
 	// Sandbox 是 sandbox 预设声明（A3——Codex 的 read_only/workspace_write/
 	// full_access 对应）：空 = 平台默认（workspace_write 等价）。
 	// 与 class 分级取严（read_only 时写工具提级审批）。

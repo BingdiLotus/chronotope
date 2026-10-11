@@ -1297,3 +1297,24 @@ func TestSteeringQueue(t *testing.T) {
 		t.Fatalf("消费后应剩 1: %+v", left)
 	}
 }
+
+// TestExtensionRegistry B2：扩展包注册/列表（tools/prompts/hooks 的可
+// 装配包——Claude skills/plugins 与 dsh 插件树的最小公约数）。
+func TestExtensionRegistry(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if err := s.RegisterExtension(ctx, extension.Definition{
+		ID: "ext_tools_1", Name: "工具包", Kind: "tools", Version: "v1",
+		Tools: []string{"read_file", "write_file"},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	_ = s.RegisterExtension(ctx, extension.Definition{
+		ID: "ext_prompt_1", Name: "提示包", Kind: "prompts", Version: "v1",
+		Prompt: "你是合规助手。",
+	})
+	rows, err := s.ListExtensions(ctx, "")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("list: %+v err=%v", rows, err)
+	}
+}
