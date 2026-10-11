@@ -69,15 +69,24 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
 3. **最佳实践映射**：Codex 的 approvals/usage → HITL digest/账本
 4. **验收**：w26-codex.sh——真实 Codex 调用 + 工具幂等 + 审批绑定
 
-### 批 3：Pi（Node——pi-ai 本地包）
+### 批 3：Pi（Node——**接入 Pi 核心 pi-ai，不接 pi-durable**）
 
-1. **官方最小示例跑通**：pi-ai 的 coding-agent 本地调用（npm 包官方
-   README 的形态）
-2. **适配器**：`adapters/pi/harness.mjs`——Pi 的 turn/ownership → /runs
-   帧；Pi 的子 agent（foreground/background）→ child run 语义
-3. **最佳实践映射**：Pi 的 harness 循环 → step；Pi 的 taskGraph →
-   WorkItem 队列（M2）
-4. **验收**：w27-pi.sh——真实 Pi 对话 + 工具调用 + 子 Agent 派发的闭环
+> 调研结论（2026-10-11）：pi-durable 的职责（transcript 持久化 + crash
+> recovery + wake-up）与 Chronotope 的 durable 层完全重叠——接入会形成
+> 两套存储（pi_ SQLite vs PG）+ 两套恢复的冲突，且违反 /runs 三铁律
+> （harness 无状态）；pi-durable 的「意图先提交/replay:safe」Chronotope
+> 的 prepared/幂等键已有更强版本；pi-durable 是 experimental beta
+> （API 会变）。**Pi 核心只贡献 agent loop 的执行器**——持久化全部由
+> Chronotope 承担（评审二「火花在成为它们底下那层」的落地）。
+
+1. **官方最小示例跑通**：pi-ai 的 agent loop 本地调用（npm 包官方
+   README 形态）
+2. **适配器**：`adapters/pi/harness.mjs`——Pi 的 turn/tool → /runs 帧
+   与 execute 幂等键；Pi 的 follow-up inbox → Chronotope 的 run 输入
+   （Pi 的状态不持久化——每次 run 从入参重建）
+3. **最佳实践映射**：Pi 的 loop → step；Pi 的 ownership（foreground/
+   background）→ 子 Agent（W6）；Pi 的 taskGraph → WorkItem 队列（M2）
+4. **验收**：w27-pi.sh——真实 Pi 对话 + 工具调用 + 子 Agent 派发闭环
 
 ### 批 4：deepseek-harness（TypeScript——@deepseek-ai/dsh-sdk-client）
 
