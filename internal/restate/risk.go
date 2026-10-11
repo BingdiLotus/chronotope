@@ -25,14 +25,29 @@ var defaultToolClasses = map[string]int{
 
 // riskClassOf 求工具的风险分级：配置覆盖表优先（1..2 合法，其余忽略），
 // 其次内置词汇默认；未知工具保守按 class 1（默认允许但可被覆盖收紧）。
+// A3：sandbox 预设取严（read_only 时写工具提级 class 2——双份权限取严）。
 func riskClassOf(name string, cfg sessionapi.AgentConfig) int {
-	if c, ok := cfg.ToolClasses[name]; ok && c >= 1 && c <= 2 {
-		return c
+	c := 1
+	if c0, ok := cfg.ToolClasses[name]; ok && c0 >= 1 && c0 <= 2 {
+		c = c0
+	} else if c1, ok := defaultToolClasses[name]; ok {
+		c = c1
 	}
-	if c, ok := defaultToolClasses[name]; ok {
-		return c
+	// A3：sandbox 声明收紧（read_only → 写工具提级审批；full_access 不
+	// 放宽 class——平台分级永远取严）
+	if cfg.Sandbox == "read_only" && isWriteTool(name) && c < 2 {
+		c = 2
 	}
-	return 1
+	return c
+}
+
+// isWriteTool 写工具判定（A3——read_only 预设的提级范围）。
+func isWriteTool(name string) bool {
+	switch name {
+	case "bash", "run_python", "write_file":
+		return true
+	}
+	return false
 }
 
 // approvalGranted 解析审批决定：JSON {"approved":false} → 拒绝；

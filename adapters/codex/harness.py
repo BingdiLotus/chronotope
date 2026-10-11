@@ -29,7 +29,14 @@ def run_codex(body):
     prompt = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
     if system:
         prompt = f"{system}\n\n{prompt}"
-    sandbox = Sandbox.workspace_write  # 默认 class 1 等价（取严——平台分级为准）
+    # A3：sandbox 预设声明（/runs 的 context.sandbox——read_only/
+    # workspace_write/full_access 三态映射——官方 Sandbox 预设）
+    sandbox_decl = (body.get("context") or {}).get("sandbox", "workspace_write")
+    sandbox = {
+        "read_only": Sandbox.read_only,
+        "workspace_write": Sandbox.workspace_write,
+        "full_access": Sandbox.full_access,
+    }.get(sandbox_decl, Sandbox.workspace_write)
     try:
         with Codex() as codex:
             thread = codex.thread_start(sandbox=sandbox)

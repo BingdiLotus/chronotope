@@ -185,3 +185,23 @@ func TestRunLoopClass2Denied(t *testing.T) {
 		t.Fatalf("run 状态应为 failed: %+v", st.runs)
 	}
 }
+
+// TestSandboxPresetTighten A3：sandbox 预设取严——read_only 时写工具提级
+// class 2（审批）；full_access 不放宽（平台分级永远取严）。
+func TestSandboxPresetTighten(t *testing.T) {
+	base := sessionapi.AgentConfig{}
+	if got := riskClassOf("bash", base); got != 1 {
+		t.Fatalf("bash 默认 class: %d", got)
+	}
+	ro := sessionapi.AgentConfig{Sandbox: "read_only"}
+	if got := riskClassOf("bash", ro); got != 2 {
+		t.Fatalf("read_only 的 bash 应提级 class 2: %d", got)
+	}
+	if got := riskClassOf("read_file", ro); got != 0 {
+		t.Fatalf("read_only 的 read_file 应保持 class 0: %d", got)
+	}
+	fa := sessionapi.AgentConfig{Sandbox: "full_access"}
+	if got := riskClassOf("bash", fa); got != 1 {
+		t.Fatalf("full_access 不应放宽 bash: %d", got)
+	}
+}

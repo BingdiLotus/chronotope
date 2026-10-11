@@ -64,6 +64,10 @@ type AgentConfig struct {
 	Skills       []string        `json:"skills,omitempty"`
 	Environment  Environment     `json:"environment,omitempty"`
 	Budget       map[string]any  `json:"budget,omitempty"`
+	// Sandbox 是 sandbox 预设声明（A3——Codex 的 read_only/workspace_write/
+	// full_access 对应）：空 = 平台默认（workspace_write 等价）。
+	// 与 class 分级取严（read_only 时写工具提级审批）。
+	Sandbox string `json:"sandbox,omitempty"`
 	// HarnessRef 是 harness 绑定（装配设计 §2.3）：name + 可选 version；
 	// 空 = org 默认 → 全局 fallback。绑定进 spec digest——绑定变更 =
 	// digest 变更 = 新 run 走新绑定（旧 run 沿旧快照）。
