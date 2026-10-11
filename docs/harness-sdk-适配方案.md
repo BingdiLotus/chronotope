@@ -93,7 +93,12 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    （Pi 的状态不持久化——每次 run 从入参重建）
 3. **最佳实践映射**：Pi 的 loop → step；Pi 的 ownership（foreground/
    background）→ 子 Agent（W6）；Pi 的 taskGraph → WorkItem 队列（M2）
-4. **验收**：w27-pi.sh——真实 Pi 对话 + 工具调用 + 子 Agent 派发闭环
+4. **验收** ⏳ 部分（2026-10-11——adapters/pi/harness.mjs 骨架交付：
+   /runs → pi-ai streamSimple 调用点 + 帧映射参数化（PI_MODEL_ID env）；
+   **官方最小示例的完整跑通受阻于 pi-ai 模型 catalog 装配**——compat
+   入口的 getModels 在 catalog 生成前返回空（coding-agent ModelManager
+   官方迁移中）。骨架显式 error 帧——不虚假完成。catalog 装配完成后
+   w27-pi.sh 即插即用）
 
 ### 批 4：deepseek-harness（TypeScript——@deepseek-ai/dsh-sdk-client）
 
