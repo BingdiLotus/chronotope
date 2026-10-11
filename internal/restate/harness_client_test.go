@@ -101,9 +101,9 @@ func TestParseFramesBadJSON(t *testing.T) {
 // （hook 注入进 ToolCall——审批路由与 digest 的 context 来源）。
 func TestToolCallApprovalContext(t *testing.T) {
 	res := frames(t,
-		`{"type":"beat","seq":0,"payload":{}}`,
-		`{"type":"tool_call","seq":1,"payload":{"id":"t1","name":"bash","arguments":{"command":"rm -rf /"},"approval_context":{"hook":"PreToolUse","tool":"bash"}}}`,
-		`{"type":"done","seq":2,"payload":{"final":"x"}}`,
+		`data: {"type":"beat","seq":0,"payload":{}}`,
+		`data: {"type":"tool_call","seq":1,"payload":{"id":"t1","name":"bash","arguments":{"command":"rm -rf /"},"approval_context":{"hook":"PreToolUse","tool":"bash"}}}`,
+		`data: {"type":"done","seq":2,"payload":{"final":"x"}}`,
 	)
 	if len(res.ToolCalls) != 1 {
 		t.Fatalf("tool calls: %+v", res.ToolCalls)
