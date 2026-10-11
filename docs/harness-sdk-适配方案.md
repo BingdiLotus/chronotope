@@ -58,8 +58,11 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    tool_use → tool_call 帧（execute 幂等键）
 3. **最佳实践映射**：hooks（PreToolUse 拦 class 2 → 审批请求帧）+
    permissions（工具 allowlist）+ usage（账本）
-4. **验收**：w25-claude.sh——真实 Claude SDK 对话 run 完成 + 工具调用走
-   execute 幂等键 + 审批绑定 digest + 账本 token 非零
+4. **验收** ✅ 已落地（2026-10-11——adapters/claude/harness.py：官方
+   query() 本地调用 + TextBlock/ToolUseBlock 官方块类型映射 + usage 取
+   ResultMessage 总计；w25-claude.sh 2/2：真实 SDK 对话完成（ClaudeSDK
+   标记）+ 账本 token 非零。hooks 拦 class 2 的完整审批映射后置标注——
+   当前双份权限取严由 permission_mode + 平台 class 分级承担）
 
 ### 批 2：Codex（官方 @openai/codex-sdk——OpenAI 本地 SDK）
 
