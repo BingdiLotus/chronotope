@@ -70,7 +70,11 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
 2. **适配器**：`adapters/codex/harness.ts`（或官方 SDK 语言的对应实现）——
    Codex 的 turn/tool → /runs 帧与 execute 幂等键
 3. **最佳实践映射**：Codex 的 approvals/usage → HITL digest/账本
-4. **验收**：w26-codex.sh——真实 Codex 调用 + 工具幂等 + 审批绑定
+4. **验收** ✅ 已落地（2026-10-11——adapters/codex/harness.py：官方
+   openai-codex Python 稳定版（Codex().thread_start + run →
+   final_response）+ Sandbox 预设映射（workspace_write↔class 1 取严）；
+   w26-codex.sh 2/2：真实 Codex thread 对话完成（CodexSDK 标记）+
+   账本留痕）
 
 ### 批 3：Pi（Node——**接入 Pi 核心 pi-ai，不接 pi-durable**）
 
