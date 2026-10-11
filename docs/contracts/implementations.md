@@ -19,6 +19,15 @@
 4. 注册：executor 走注册表（kind/capabilities）；harness 走 HARNESS_URL
 5. 验证真实路径：w17-real-e2b.sh（真实 E2B 档）或 w1-loop（fake 闭环）
 
+## 第三方接入走通记录（2026-10-11——Harness 装配阶段 4）
+
+- **最小第三方 harness**（test/fixtures/third-party-harness.py——纯
+  stdlib，模拟 Claude/OpenAI SDK 适配器形态）：conformance 帧断言 +
+  注册表注册 + agent 绑定 → run 走第三方（final 含第三方标记——路由
+  证据）——w24-thirdparty.sh 2/2
+- 走通路径 = implementations.md 的三步接入的实证：「0 平台改动换
+  harness」从契约承诺变演示事实
+
 ## 已知第三方生态（2026-10 调研）
 
 | 生态 | 接入点 |

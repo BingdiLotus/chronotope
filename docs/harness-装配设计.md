@@ -124,8 +124,10 @@ AgentConfig.harness_ref = { name, version? }   // 空 = org 默认（全局 fall
    agent.HarnessRef → active endpoint）+ HarnessForRun 快照客户端接线 +
    w23 e2e 5/5：run A 打 8001/V1 标记/bound 冻结、升级切态、run B 打
    8002/V2 标记/bound 冻结——旧 run 沿旧、新 run 走新）
-4. **第三方接入验证**：一个真实第三方 harness（Pi/OpenAI SDK 适配）走注册表
-   接入 + conformance 自证
+4. **第三方接入验证** ✅ 已落地（2026-10-11——最小第三方 harness（纯
+   stdlib 模拟 SDK 适配器形态）+ w24 e2e 2/2：conformance 帧断言 + 注册表
+   + 绑定 → run 走第三方（final 标记 = 路由证据）——「0 平台改动换
+   harness」从承诺变事实）
 
 ## 八、明确不做（诚实边界）
 

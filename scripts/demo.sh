@@ -116,6 +116,9 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.11 w24 第三方 harness 接入（conformance + 注册表 + 路由标记）
+bash test/e2e/w24-thirdparty.sh "$API" > /tmp/demo-w24.log 2>&1 && pass "W24 第三方接入（2 项断言）" || { fail "W24 第三方接入"; tail -5 /tmp/demo-w24.log; }
+
 # 13.10 w23 Harness 升级（旧 run 沿旧、新 run 走新——两实体路由标记）
 bash test/e2e/w23-harness-upgrade.sh "$API" > /tmp/demo-w23.log 2>&1 && pass "W23 Harness 升级（5 项断言）" || { fail "W23 Harness 升级"; tail -5 /tmp/demo-w23.log; }
 
