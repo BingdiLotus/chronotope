@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
@@ -1033,10 +1034,10 @@ func (h *Handler) steerSession(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) registerHarness(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
 	var req struct {
-		Name         string   `json:"name"`
-		Endpoint     string   `json:"endpoint"`
-		Version      string   `json:"version"`
-		Capabilities []string `json:"capabilities"`
+		Name         string               `json:"name"`
+		Endpoint     string               `json:"endpoint"`
+		Version      string               `json:"version"`
+		Capabilities harness.Capabilities `json:"capabilities"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Endpoint == "" || req.Version == "" {
 		writeError(w, http.StatusUnprocessableEntity, 422, "name/endpoint/version 必填")

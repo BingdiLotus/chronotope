@@ -5,23 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/bingdilotus/chronotope/internal/core/harness"
 )
 
 // HarnessRow 是 harness 注册行（装配设计 §2.2——与 ExecutorRow 同款）。
 type HarnessRow struct {
-	OrgID        string
-	Name         string
-	Endpoint     string
-	Version      string
-	Capabilities []string
+	OrgID    string
+	Name     string
+	Endpoint string
+	Version  string
+	// Capabilities 是结构化能力声明（B1——[]string 升级为
+	// harness.Capabilities；worker 按声明路由/校验）。
+	Capabilities harness.Capabilities
 	State        string
 	RegisteredAt time.Time
 	HeartbeatAt  time.Time
 }
 
 // RegisterHarness 注册/心跳（同 org+name+version 覆盖 heartbeat；capabilities
-// 更新）。
-func (s *Store) RegisterHarness(ctx context.Context, orgID, name, endpoint, version string, capabilities []string) error {
+// 更新——B1 结构化）。
+func (s *Store) RegisterHarness(ctx context.Context, orgID, name, endpoint, version string, capabilities harness.Capabilities) error {
 	capJSON, _ := json.Marshal(capabilities)
 	const q = `
 INSERT INTO harness_registry (org_id, name, endpoint, version, capabilities, state, heartbeat_at)

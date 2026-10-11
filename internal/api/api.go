@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"log/slog"
 	"time"
 
@@ -43,7 +44,7 @@ type Store interface {
 	SetAuditHold(ctx context.Context, sessionID string) error
 	ListCompletedWithoutEvent(ctx context.Context, limit int) ([]store.CompletedOrphan, error)
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error)
-	RegisterHarness(ctx context.Context, orgID, name, endpoint, version string, capabilities []string) error
+	RegisterHarness(ctx context.Context, orgID, name, endpoint, version string, capabilities harness.Capabilities) error
 	ListHarnesses(ctx context.Context, orgID string) ([]store.HarnessRow, error)
 	SetHarnessState(ctx context.Context, orgID, name, version, state string) error
 	GetActiveHarness(ctx context.Context, orgID, name string) (*store.HarnessRow, error)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
@@ -1242,11 +1243,11 @@ func TestHarnessRegistryRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	oid := fmt.Sprintf("org_hr_%d", time.Now().UnixNano())
 	_ = s.CreateOrg(ctx, oid, "o")
-	if err := s.RegisterHarness(ctx, oid, "claude", "http://h1:8000", "v1", []string{"claude-sonnet-4-6"}); err != nil {
+	if err := s.RegisterHarness(ctx, oid, "claude", "http://h1:8000", "v1", harness.Capabilities{ToolFamilies: []string{"llm"}, Protocol: "1.0"}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	// 心跳 upsert 同版本不新增
-	if err := s.RegisterHarness(ctx, oid, "claude", "http://h1:8000", "v1", []string{"claude-sonnet-4-6"}); err != nil {
+	if err := s.RegisterHarness(ctx, oid, "claude", "http://h1:8000", "v1", harness.Capabilities{ToolFamilies: []string{"llm"}, Protocol: "1.0"}); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 	rows, err := s.ListHarnesses(ctx, oid)
@@ -1254,7 +1255,7 @@ func TestHarnessRegistryRoundtrip(t *testing.T) {
 		t.Fatalf("list: %+v err=%v", rows, err)
 	}
 	// active 查询（同 name 新版本注册后仍返回原 active）
-	if err := s.RegisterHarness(ctx, oid, "claude", "http://h2:8000", "v2", nil); err != nil {
+	if err := s.RegisterHarness(ctx, oid, "claude", "http://h2:8000", "v2", harness.Capabilities{Protocol: "1.0"}); err != nil {
 		t.Fatalf("v2: %v", err)
 	}
 	h, err := s.GetActiveHarness(ctx, oid, "claude")

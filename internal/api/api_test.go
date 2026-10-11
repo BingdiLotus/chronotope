@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/events"
 	"github.com/bingdilotus/chronotope/internal/store"
@@ -180,7 +181,7 @@ func (f *fakeStore) AppendEvent(_ context.Context, _, _ string, _ event.Type, _ 
 	return 0, nil
 }
 
-func (f *fakeStore) RegisterHarness(_ context.Context, _, _, _, _ string, _ []string) error {
+func (f *fakeStore) RegisterHarness(_ context.Context, _, _, _, _ string, _ harness.Capabilities) error {
 	return nil
 }
 
