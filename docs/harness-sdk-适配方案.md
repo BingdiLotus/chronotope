@@ -93,12 +93,12 @@ Chronotope：effect ledger / HITL digest / 审计链 / 快照路由
    （Pi 的状态不持久化——每次 run 从入参重建）
 3. **最佳实践映射**：Pi 的 loop → step；Pi 的 ownership（foreground/
    background）→ 子 Agent（W6）；Pi 的 taskGraph → WorkItem 队列（M2）
-4. **验收** ⏳ 部分（2026-10-11——catalog 装配已解决：providers/all 的
-   静态 MODELS——getBuiltinModel("anthropic","claude-sonnet-4-6") 直用；
-   **剩余受阻：pi-ai 的 anthropic auth 401**（invalid x-api-key——
-   claude-agent-sdk 同 key 直连成功——pi-ai 侧 env 注入差异，官方 auth
-   迁移中）。骨架升级为真实调用点 + 显式 error 帧——不虚假完成。auth
-   稳定后 w27-pi.sh 即插即用）
+4. **验收** ⏳ 部分（2026-10-11——createProvider 官方装配路径已探明：
+   baseUrl 指代理（poke2api——.env 的 key 是代理 key 非官方）+ api-key
+   env 注入的 auth.resolve + setProvider 后模型解析 ✓。**最后剩余：
+   streamSimple 报「Provider is not configured」**——credential 存储的
+   初始化链（login/CredentialStore——官方 auth 迁移中）。骨架注释完整
+   装配路径——auth 稳定后 w27-pi.sh 即插即用）
 
 ### 批 4：deepseek-harness（TypeScript——@deepseek-ai/dsh-sdk-client）
 
