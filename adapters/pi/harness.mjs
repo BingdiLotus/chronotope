@@ -70,3 +70,9 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`pi-core-harness listening on :${PORT}`);
 });
+
+
+// OpenAI 代理路径（用户建议验证——curl 实证 gpt-6.1-sol 通过
+// OPENAI_BASE_URL/poke2api 直连成功）：openai-proxy 装配同样卡在
+// 「Provider is not configured」（login({signal}) 交互形态——官方 auth
+// 迁移窗口；两路径骨架就绪）。
