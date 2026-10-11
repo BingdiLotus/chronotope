@@ -79,8 +79,12 @@ const server = http.createServer((req, res) => {
       .filter((m) => m.role === "user")
       .map((m) => m.content)
       .join("\n");
+    // 保活 beat：dsh 冷启动可能 >30s（worker 的帧间隙超时）——spawn 期间
+    // 每 10s 发 beat 维持流
+    const keepalive = setInterval(() => sse(res, { type: "beat", seq: 0, payload: {} }), 10000);
     try {
       const { final, usage } = await runDsh(prompt);
+      clearInterval(keepalive);
       if (!final) {
         sse(res, { type: "error", seq: 1, payload: { error: "dsh run 无 final（runtime 或 provider 未就绪）" } });
         res.end();
@@ -90,6 +94,7 @@ const server = http.createServer((req, res) => {
       sse(res, { type: "done", seq: 2, payload: { final: `${final} [${MARK}]`.trim(), usage, truncated: false } });
       res.end();
     } catch (e) {
+      clearInterval(keepalive);
       sse(res, { type: "error", seq: 1, payload: { error: String(e) } });
       res.end();
     }
