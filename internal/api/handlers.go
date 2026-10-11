@@ -1011,6 +1011,24 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// steerSession A4：运行中转向（Pi 的 follow-up inbox 对应）——排队输入
+// 不打断当前 run（drain 点注入）。
+func (h *Handler) steerSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	var req struct {
+		Input string `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Input == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "steering input 必填")
+		return
+	}
+	if err := h.Store.EnqueueSteering(r.Context(), sessionID, req.Input); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"queued": true, "session_id": sessionID})
+}
+
 // registerHarness Harness 装配阶段 1：注册/心跳（org+name+version 幂等覆盖）。
 func (h *Handler) registerHarness(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")

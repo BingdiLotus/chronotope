@@ -16,6 +16,7 @@ import (
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
+	"github.com/bingdilotus/chronotope/internal/core/session"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/execproto"
 	"github.com/bingdilotus/chronotope/internal/store"
@@ -155,6 +156,14 @@ func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ in
 
 func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _, _, _ string) (*store.MCPCallRow, error) {
 	return &store.MCPCallRow{}, nil
+}
+
+func (f *fakeStore) ListPendingSteerings(_ context.Context, _ string, _ int) ([]session.Steering, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ConsumeSteerings(_ context.Context, _ string, _ []int64) error {
+	return nil
 }
 
 func (f *fakeStore) PutMCPCallResult(_ context.Context, _ string, _ int, _, _, _, _, _, _ string, _ int64) error {

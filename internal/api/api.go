@@ -47,6 +47,7 @@ type Store interface {
 	ListHarnesses(ctx context.Context, orgID string) ([]store.HarnessRow, error)
 	SetHarnessState(ctx context.Context, orgID, name, version, state string) error
 	GetActiveHarness(ctx context.Context, orgID, name string) (*store.HarnessRow, error)
+	EnqueueSteering(ctx context.Context, sessionID, input string) error
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
 	CreateWorkItem(ctx context.Context, id, goalID, description, taskClass string, priority int, dependencies string) error
@@ -181,6 +182,7 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/harnesses", h.registerHarness)                       // Harness 装配：注册/心跳
 		r.Get("/harnesses", h.listHarnesses)                          // Harness 装配：列表
 		r.Put("/harnesses/{name}/{version}/state", h.setHarnessState) // 切 active/draining/retire
+		r.Post("/sessions/{sessionID}/steer", h.steerSession)         // A4：运行中转向（Pi 的 follow-up inbox）
 		r.Get("/goals/{goalID}", h.getGoal)
 		r.Post("/goals/{goalID}/items", h.createWorkItem) // M2 工作切片
 		r.Get("/goals/{goalID}/items", h.listWorkItems)

@@ -1271,3 +1271,28 @@ func TestHarnessRegistryRoundtrip(t *testing.T) {
 		t.Fatalf("draining 后应回退 v1: %+v err=%v", h2, err)
 	}
 }
+
+// TestSteeringQueue A4：steering 队列——入队/未消费列表/消费幂等（Pi 的
+// follow-up inbox 对应）。
+func TestSteeringQueue(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	oid := fmt.Sprintf("org_st_%d", time.Now().UnixNano())
+	sid := fmt.Sprintf("s_st_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, oid, "o")
+	_ = s.CreateAgent(ctx, "a_st", oid, "a", &sessionapi.AgentConfig{Model: "m", Instructions: "i", Version: 1})
+	_ = s.CreateSession(ctx, sid, oid, "a_st")
+	if err := s.EnqueueSteering(ctx, sid, "转向 1"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	_ = s.EnqueueSteering(ctx, sid, "转向 2")
+	pending, err := s.ListPendingSteerings(ctx, sid, 10)
+	if err != nil || len(pending) != 2 || pending[0].Input != "转向 1" {
+		t.Fatalf("pending: %+v err=%v", pending, err)
+	}
+	_ = s.ConsumeSteerings(ctx, sid, []int64{pending[0].ID})
+	left, _ := s.ListPendingSteerings(ctx, sid, 10)
+	if len(left) != 1 || left[0].Input != "转向 2" {
+		t.Fatalf("消费后应剩 1: %+v", left)
+	}
+}

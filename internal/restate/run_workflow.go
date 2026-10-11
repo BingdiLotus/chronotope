@@ -192,6 +192,41 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 	}
 
 	for step := 0; step < maxSteps; step++ {
+		// A4：steering drain（Pi 的 follow-up inbox——排队转向在每 step 前
+		// 注入消息历史；消费幂等——journal 重放回放同一 drain 结果）
+		steerInjected, sErr := restate.Run(ctx, func(rc restate.RunContext) (bool, error) {
+			pending, pErr := deps.Store.ListPendingSteerings(rc, in.SessionID, 20)
+			if pErr != nil {
+				return false, pErr
+			}
+			if len(pending) == 0 {
+				return false, nil
+			}
+			for _, st := range pending {
+				if aErr := deps.Store.AppendMessage(rc, in.SessionID, runID, step, "user", json.RawMessage(mustJSONString(st.Input))); aErr != nil {
+					return false, aErr
+				}
+			}
+			ids := make([]int64, 0, len(pending))
+			for _, st := range pending {
+				ids = append(ids, st.ID)
+			}
+			_ = deps.Store.ConsumeSteerings(rc, in.SessionID, ids)
+			return true, nil
+		}, restate.WithName(StepName("steer-drain", step, "n/a")))
+		if sErr != nil {
+			return RunOutput{}, restate.ToTerminalError(fmt.Errorf("steering drain: %w", sErr))
+		}
+		_ = steerInjected
+		if steerInjected {
+			msgs2, mErr := restate.Run(ctx, func(rc restate.RunContext) ([]runs.Message, error) {
+				return buildMessages(rc, deps.Store, deps.Harness, in, runID, cfg, state.Skills)
+			}, restate.WithName("build-messages-after-steer"))
+			if mErr != nil {
+				return RunOutput{}, restate.ToTerminalError(mErr)
+			}
+			msgs = msgs2
+		}
 		// 取消检查点（评审 #6 非抢占式：每步 harness 调用前检查会话取消标志）
 		stepState, err := deps.Sessions.GetState(ctx, in.SessionID)
 		// D 批：paused 检查点——暂停即冻结沙箱（算力即时释放；pause 不再是
