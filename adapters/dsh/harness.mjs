@@ -12,12 +12,15 @@
 //   - provider 是 runtime 侧 cordis.yml 的职责（client 不组装请求）
 //   - 无 mid-turn cancel（放弃 turn = 关闭 runtime）
 //
-// 已知前置（诚实标注）：
-//   ① dsh runtime 构建（deepseek-harness monorepo 的 lib/bin.js +
-//      cordis.yml）——DSH_RUNTIME_BIN/DSH_RUNTIME_ARGS env 参数化
-//   ② provider 凭证（credentials 组——DeepSeek 官方 key 或兼容端点；
-//      .env 无 DEEPSEEK_API_KEY——凭证策略由调用方持有）
-// 前置就绪后 w28-dsh.sh 即插即用。
+// 前置状态（2026-10-11 更新）：
+//   ① dsh runtime 构建 ✅ 已通（pnpm install + build:lib:host——
+//      apps/cli/lib/bin.js 是 runtime 入口）——DSH_RUNTIME_BIN=node +
+//      DSH_RUNTIME_ARGS=apps/cli/lib/bin.js <cordis.yml>
+//   ② 凭证（用户指正——dsh 支持 openai 格式接口）：Custom model API
+//      （docs/user/guide/providers.md）——apiKeyEnv: OPENAI_API_KEY +
+//      api: openai-completions + baseURL: poke2api——无需 DEEPSEEK key；
+//      cordis 模板见 adapters/dsh/cordis.yml
+// 剩余：cordis 的完整装配验证（cli 启动 + provider 生效）——w28 就绪。
 import http from "node:http";
 
 const PORT = parseInt(process.argv[2] || "8040", 10);

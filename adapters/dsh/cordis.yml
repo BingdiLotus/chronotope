@@ -1,0 +1,23 @@
+# dsh runtime 的 cordis 配置（批 4——用户指正：dsh 支持 openai 格式接口）。
+# Custom model API（官方 docs/user/guide/providers.md）：openai-completions
+# 协议 + baseURL 指 poke2api 代理 + OPENAI_API_KEY env——无需 DEEPSEEK key。
+# 官方形态：
+#   - id: llm-pi-ai
+#     config:
+#       providers:
+#         my-gateway:
+#           apiKeyEnv: GATEWAY_API_KEY
+#           api: openai-completions
+#           baseURL: https://gateway.example/v1
+#           models: [{ id: ... }]
+# runtime 构建后（lib/bin.js + 本 cordis.yml）DSH_RUNTIME_ARGS 指向即可。
+# 官方形态的完整示例（docs/user/guide/providers.md 的 advanced config）：
+# - id: llm-pi-ai
+#   config:
+#     providers:
+#       poke2api:
+#         apiKeyEnv: OPENAI_API_KEY
+#         api: openai-completions
+#         baseURL: https://www.poke2api.com/v1
+#         models:
+#           - id: gpt-6.1-sol
