@@ -1,26 +1,75 @@
-// Pi 官方 SDK 适配器（批 3——pi-ai 核心接入的骨架）。
+// Pi 官方 SDK 适配器（批 3——pi-durable 完整形态重构）。
 //
-// 经 /runs 协议接 Chronotope；官方 pi-ai 的 streamSimple 调用点 + 帧映射。
-// 模型装配：pi-ai 的模型 catalog 需 coding-agent 的 ModelManager 完整形态
-// （compat 入口的 getModels 在 catalog 生成前返回空——官方迁移中）。
-// 骨架参数化：PI_MODEL_ID/PI_PROVIDER env——catalog 装配完成后即插即用。
-// 官方参考：https://github.com/earendil-works/pi（packages/agent + pi-ai）
+// 与 Cloudflare PiHarness 同款官方形态：Harness.open(MemoryStorage) +
+// root.submit → wait → AssistantEntry——MemoryStorage 是 transient（适配器
+// 进程内——每次 run 重建——三铁律：Pi 状态不持久化到 Chronotope）。
+// 官方参考：@earendil-works/pi-durable README（Quick Start）。
+//
+// 已探明的官方装配（2026-10-11）：
+//   createProvider({ id, baseUrl, auth: { apiKey: envApiKeyAuth(...) },
+//                    models, api }) → createModels().setProvider
+//   Harness.open(new MemoryStorage(), { models, registry: createRegistry() })
+//   root(ctx, { agent: { model: { provider, modelId } } })
+//   submit({ type:"input", content }) → wait → status done/unanswered
+//   commit((tx) => tx.entry(AssistantEntry, settled.answer))
+//
+// 已知剩余：poke2api 代理的 key 校验（curl 的 Bearer 直连成功 vs pi-ai
+// 的 401——pi-ai 请求构造的 header/URL 细节差异；官方 provider 硬编码
+// 官方端点——baseUrl 参数已覆盖。env 注入本身可行：envApiKeyAuth
+// 官方工厂读 OPENAI_API_KEY ✓）。
 import http from "node:http";
 
 const PORT = parseInt(process.argv[2] || "8030", 10);
-const MARK = "PiCore"; // 回复标记（路由证据）
+const MARK = "PiDurable"; // 回复标记（路由证据）
 
-// pi-ai 的官方调用点（catalog 装配已解决——providers/all 的静态 MODELS：
-//   const { getBuiltinModel } = await import(
-//     "@earendil-works/pi-ai/providers/all");
-//   const { streamSimple } = await import("@earendil-works/pi-ai/compat");
-//   const model = getBuiltinModel("anthropic", "claude-sonnet-4-6");
-//   const stream = streamSimple(model, { messages, tools }, options);
-// 帧映射：text-delta → delta；toolCall 事件 → tool_call；result → done
-// + usage（Chronotope 账本自动落）。
-// 已知受阻：pi-ai 的 anthropic auth 路径 401（invalid x-api-key——官方
-// auth 迁移中；claude-agent-sdk 同 key 直连成功——pi-ai 侧 env 注入差异
-// 待官方 auth 形态稳定）。
+const { createProvider, createModels, envApiKeyAuth, openAICompletionsApi } =
+  await import("@earendil-works/pi-ai/compat");
+const { getBuiltinModel } = await import("@earendil-works/pi-ai/providers/all");
+const { Harness, MemoryStorage, createRegistry, AssistantEntry } =
+  await import("@earendil-works/pi-durable");
+
+// 每次 run 重建的官方装配（transient——MemoryStorage）
+async function runPi(body) {
+  const messages = body.messages || [];
+  const prompt = messages
+    .filter((m) => m.role === "user")
+    .map((m) => m.content)
+    .join("\n");
+  const base = getBuiltinModel("openai", "gpt-6.1-sol");
+  const provider = createProvider({
+    id: "openai-proxy",
+    baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY || ""}` },
+    auth: { apiKey: envApiKeyAuth("key", ["OPENAI_API_KEY"]), oauth: undefined },
+    models: [{ ...base, api: "openai-completions", provider: "openai-proxy" }],
+    api: { "openai-completions": openAICompletionsApi() },
+  });
+  const models = createModels();
+  models.setProvider(provider);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models, registry: createRegistry() },
+    {}
+  );
+  try {
+    const root = await harness.root({}, {
+      agent: { model: { provider: "openai-proxy", modelId: "gpt-6.1-sol" } },
+    });
+    const submission = await root.submit({ type: "input", content: prompt }, {});
+    const settled = await submission.wait({});
+    if (settled.status === "done" && settled.type === "input") {
+      const answer = await root.commit(
+        (tx) => tx.entry(AssistantEntry, settled.answer),
+        {}
+      );
+      const text = (answer?.model || []).map(String).join(" ");
+      return { final: `${text} [${MARK}]`.trim(), usage: {}, err: null };
+    }
+    return { final: "", usage: {}, err: `pi-durable: ${settled.reason}: ${String(settled.detail || "").slice(0, 200)}` };
+  } finally {
+    await harness.close({});
+  }
+}
 
 function sse(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -35,56 +84,32 @@ const server = http.createServer((req, res) => {
     res.writeHead(404).end();
     return;
   }
-  let body = "";
-  req.on("data", (c) => (body += c));
-  req.on("end", () => {
-    let reqBody = {};
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", async () => {
+    let body = {};
     try {
-      reqBody = JSON.parse(body || "{}");
-    } catch {
-      /* 非法 JSON——按空请求 */
-    }
+      body = JSON.parse(raw || "{}");
+    } catch {}
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
     });
     sse(res, { type: "beat", seq: 0, payload: {} });
-    // 诚实状态：catalog 装配已通（getBuiltinModel）——真实调用受阻于
-    // pi-ai 的 anthropic auth 401（官方 auth 迁移中）——显式 error 帧
-    sse(res, {
-      type: "error",
-      seq: 1,
-      payload: {
-        error:
-          "pi-ai 模型已解析（getBuiltinModel anthropic/claude-sonnet-4-6）——auth 401 待官方 auth 形态稳定（官方迁移中）",
-      },
-    });
-    sse(res, {
-      type: "done",
-      seq: 1,
-      payload: { final: `${MARK} 回复`, usage: {}, truncated: false },
-    });
+    try {
+      const { final, err } = await runPi(body);
+      if (err) {
+        sse(res, { type: "error", seq: 1, payload: { error: err } });
+        return;
+      }
+      sse(res, { type: "delta", seq: 1, payload: { text: final } });
+      sse(res, { type: "done", seq: 2, payload: { final, usage: {}, truncated: false } });
+    } catch (e) {
+      sse(res, { type: "error", seq: 1, payload: { error: String(e) } });
+    }
   });
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`pi-core-harness listening on :${PORT}`);
+  console.log(`pi-durable-harness listening on :${PORT}`);
 });
-
-
-// OpenAI 代理路径（用户建议验证——curl 实证 gpt-6.1-sol 通过
-// OPENAI_BASE_URL/poke2api 直连成功）：openai-proxy 装配同样卡在
-// 「Provider is not configured」（login({signal}) 交互形态——官方 auth
-// 迁移窗口；两路径骨架就绪）。
-
-//
-// login({signal}) 的官方形态深挖（2026-10-11）：
-//   login(providerId, type, interaction, options?) —— 四参数（两参数调用
-//   的「reading 'signal'」= interaction 缺失）
-//   AuthInteraction = { signal?, prompt(prompt): Promise<string>,
-//                       notify(event) } —— prompt 的 secret 类型返回 key
-//   ambient-only（auth 无 login 函数）→ login 被拒（「does not support
-//   api_key login」——正确路径是不 login 直接 resolve）
-//   实测：auth.resolve 未被触发（getAuth 返回 undefined）——credential
-//   初始化的触发链是官方 auth 迁移的最后一环（Cloudflare 的 PiHarness
-//   用 pi-durable 完整形态佐证——官方完整装配在 coding-agent 层）
