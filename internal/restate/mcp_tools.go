@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	restate "github.com/restatedev/sdk-go"
 
@@ -117,7 +118,11 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 		if row.State == "unknown" {
 			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 unknown 停派发（需人工裁决）"))
 		}
+		// A2：执行耗时测量（Pi 的 tool_execution_end.durationMs 对应——
+		// 账本的时序维度）
+		mcpStarted := time.Now()
 		r, err := deps.MCP.Call(rc, url, tool, json.RawMessage(tc.Arguments))
+		durMs := time.Since(mcpStarted).Milliseconds()
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
@@ -126,7 +131,7 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 		if err == nil && json.Valid([]byte(r)) {
 			resultJSON = r
 		}
-		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, callKey, reqHash, resultJSON, errMsg); lErr != nil {
+		if lErr := deps.Store.PutMCPCallResult(rc, runID, step, server, tool, callKey, reqHash, resultJSON, errMsg, durMs); lErr != nil {
 			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 result 失败: %w", lErr))
 		}
 		return r, err

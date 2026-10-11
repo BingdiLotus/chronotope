@@ -162,16 +162,17 @@ RETURNING run_id, step, server, tool, state, prepared_at, COALESCE(request_hash,
 }
 
 // PutMCPCallResult 结果落账（错误 → unknown——网络超时可能效果已发生）。
-func (s *Store) PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string) error {
+func (s *Store) PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string, durationMs int64) error {
 	state := "result"
 	if errMsg != "" {
 		state = "unknown"
 	}
 	const q = `
 UPDATE mcp_calls SET state = $5, err = $6, result_at = now(),
-    result = COALESCE($7::jsonb, result), request_hash = COALESCE($8, request_hash)
+    result = COALESCE($7::jsonb, result), request_hash = COALESCE($8, request_hash),
+    duration_ms = COALESCE($10, duration_ms)
 WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4 AND call_key = $9`
-	tag, err := s.Pool.Exec(ctx, q, runID, step, server, tool, state, nullIfEmpty(errMsg), nullIfEmpty(resultJSON), nullIfEmpty(requestHash), nullIfEmpty(callKey))
+	tag, err := s.Pool.Exec(ctx, q, runID, step, server, tool, state, nullIfEmpty(errMsg), nullIfEmpty(resultJSON), nullIfEmpty(requestHash), nullIfEmpty(callKey), nullIfEmptyInt(durationMs))
 	if err != nil {
 		return fmt.Errorf("store: mcp result: %w", err)
 	}
@@ -227,4 +228,12 @@ LIMIT $2`
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// nullIfEmptyInt 0 → NULL（COALESCE 跳过——duration 未测不覆盖）。
+func nullIfEmptyInt(v int64) any {
+	if v <= 0 {
+		return nil
+	}
+	return v
 }
