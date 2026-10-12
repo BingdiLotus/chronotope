@@ -72,6 +72,7 @@ bash test/e2e/w3-schedule.sh "$API" > /tmp/demo-w3s.log 2>&1 && pass "W3 定时�
 # 7. W5 分层记忆（worker 阈值调小 → 多轮对话触发消化 → 恢复默认）
 CONSOLIDATE_THRESHOLD=4 $DC up -d --force-recreate worker
 for i in $(seq 1 60); do curl -fsS http://localhost:9080/discover > /dev/null 2>&1 && break; sleep 1; done
+for i in $(seq 1 30); do curl -fsS "$API/healthz" > /dev/null 2>&1 && break; sleep 1; done
 curl -fsS -X POST "$ADMIN/deployments" -H 'content-type: application/json' \
   -d '{"uri":"http://worker:9080","version":"v1","use_http_11":true,"force":true}' > /dev/null
 sleep 5
