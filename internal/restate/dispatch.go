@@ -1,6 +1,7 @@
 package restate
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -142,7 +143,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			"duration_ms": outcome.Duration.Milliseconds(), // 计算秒计量依据（W4）+ 预算熔断
 		})
 		// B4：tool_exec span（duration 属性——Pi 的 tool_execution_end 对应）
-		_, toolSpan := observability.ToolExec(ctx, tc.Name, outcome.Duration.Milliseconds())
+		_, toolSpan := observability.ToolExec(context.Background(), tc.Name, outcome.Duration.Milliseconds())
 		_ = toolSpan
 		return jsonToolResult(tc.Name, res), outcome.Duration.Seconds(), nil
 

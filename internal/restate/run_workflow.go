@@ -194,7 +194,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 
 	for step := 0; step < maxSteps; step++ {
 		// B4：step span（OTEL_EXPORTER=stdout 时导出——事件流的 span 族）
-		stepCtx, stepSpan := observability.Step(ctx, "chronotope.step", runID, in.SessionID, step)
+		stepCtx, stepSpan := observability.Step(context.Background(), "chronotope.step", runID, in.SessionID, step)
 		_ = stepCtx
 		_ = stepSpan
 		// A4：steering drain（Pi 的 follow-up inbox——排队转向在每 step 前
