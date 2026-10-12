@@ -29,6 +29,7 @@ async function runDsh(prompt) {
   return new Promise((resolve) => {
     const child = spawn(bin, argv, { env: process.env });
     let final = "", usage = {}, buf = "";
+    const toolsUsed = []; // A-3：dsh 的工具调用清单（账本可见）
     child.stdout.on("data", (c) => {
       buf += c;
       let i;
@@ -42,11 +43,16 @@ async function runDsh(prompt) {
           if (ev.type === "status" && ev.phase === "step_end" && ev.usage) {
             usage = { tokens_in: ev.usage.inputTokens || 0, tokens_out: ev.usage.outputTokens || 0 };
           }
+          // A-3：tool_call/tool_result 事件（dsh 的工具调用——清单进
+          // done 帧；完整交棒后置标注）
+          if (ev.type === "tool_call" && ev.tool) {
+            toolsUsed.push({ tool: ev.tool, call_id: ev.callId });
+          }
         } catch {}
       }
     });
     child.stderr.on("data", () => {});
-    child.on("close", () => resolve({ final, usage }));
+    child.on("close", () => resolve({ final, usage, toolsUsed }));
   });
 }
 
@@ -83,7 +89,7 @@ const server = http.createServer((req, res) => {
     // 每 10s 发 beat 维持流
     const keepalive = setInterval(() => sse(res, { type: "beat", seq: 0, payload: {} }), 10000);
     try {
-      const { final, usage } = await runDsh(prompt);
+      const { final, usage, toolsUsed } = await runDsh(prompt);
       clearInterval(keepalive);
       if (!final) {
         sse(res, { type: "error", seq: 1, payload: { error: "dsh run 无 final（runtime 或 provider 未就绪）" } });
@@ -91,7 +97,7 @@ const server = http.createServer((req, res) => {
         return;
       }
       sse(res, { type: "delta", seq: 1, payload: { text: final } });
-      sse(res, { type: "done", seq: 2, payload: { final: `${final} [${MARK}]`.trim(), usage, truncated: false } });
+      sse(res, { type: "done", seq: 2, payload: { final: `${final} [${MARK}]`.trim(), usage, tools_used: toolsUsed, truncated: false } });
       res.end();
     } catch (e) {
       clearInterval(keepalive);
