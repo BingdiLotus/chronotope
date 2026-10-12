@@ -153,6 +153,9 @@ type Deps struct {
 	// HarnessEndpoint 是 worker 级 harness 地址（装配阶段 1：run 快照冻结
 	// 的全局 fallback——解析链在阶段 2）。
 	HarnessEndpoint string
+	// CredentialResolver 是凭据解析缝（凭据服务阶段 ③：引用名 → 值——
+	// 每次操作重解析；nil = 不校验）。
+	CredentialResolver policy.CredentialResolver
 	// HarnessResolver 是解析链（装配阶段 2：agent 绑定 → org 默认 → 全局）。
 	HarnessResolver policy.HarnessResolver
 	// HarnessForRun 按 run 快照解析 harness 客户端（bound.harness_endpoint

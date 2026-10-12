@@ -149,6 +149,11 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		}
 	}
 
+	// 凭据服务阶段 ③：引用解析验证（未配置显式失败——不静默换凭据）
+	if err := verifyCredential(ctx, deps, runID); err != nil {
+		return RunOutput{}, err
+	}
+
 	// 用户输入写回消息全量（对话真相，每 run 一次；buildMessages 之后读回——
 	// 循环内重复写回会随轮次复读输入，真实模型 e2e 实证 400）
 	if err := deps.Store.AppendMessage(ctx, in.SessionID, runID, 0, "user", json.RawMessage(mustJSONString(in.Input))); err != nil {
@@ -629,6 +634,26 @@ func credentialRefOf(ctx context.Context, deps *Deps, runID string) string {
 	}
 	ref, _ := runRow.Bound["credential_ref"].(string)
 	return ref
+}
+
+// verifyCredential 阶段 ③：引用解析验证（未配置 → 显式失败——不静默换
+// 凭据；nil resolver = 不校验）。
+func verifyCredential(ctx context.Context, deps *Deps, runID string) error {
+	if deps.CredentialResolver == nil {
+		return nil
+	}
+	ref := credentialRefOf(ctx, deps, runID)
+	if ref == "" {
+		return nil
+	}
+	resolved, err := deps.CredentialResolver.Resolve(ctx, "", ref)
+	if err != nil {
+		return restate.ToTerminalError(fmt.Errorf("凭据解析失败（引用 %s）: %w", ref, err))
+	}
+	if resolved == nil {
+		return restate.ToTerminalError(fmt.Errorf("凭据引用 %s 未配置（显式失败——不静默换凭据）", ref))
+	}
+	return nil
 }
 
 // assembleExtensions B2 装配合并：bound 的 extensions 解析（快照冻结的
