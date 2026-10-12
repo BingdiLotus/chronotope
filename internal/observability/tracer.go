@@ -6,9 +6,11 @@ package observability
 import (
 	"context"
 	"os"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -16,12 +18,28 @@ import (
 
 var tracer trace.Tracer = otel.Tracer("chronotope")
 
-// Init 按 OTEL_EXPORTER 装配（stdout = 开发用文本导出；默认 noop——
-// 零行为变化）。B4 的 OTLP 导出后置（collector 端点配置）。
+// Init 按 OTEL_EXPORTER 装配（stdout = 开发用文本导出；otlp = collector
+// 导出（OTEL_EXPORTER_OTLP_ENDPOINT 或默认 localhost:4318）；默认 noop
+// ——零行为变化）。
 func Init() {
 	switch os.Getenv("OTEL_EXPORTER") {
 	case "stdout":
 		exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+		if err != nil {
+			return
+		}
+		tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
+		otel.SetTracerProvider(tp)
+		tracer = tp.Tracer("chronotope")
+	case "otlp":
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		opts := []otlptracehttp.Option{}
+		if endpoint != "" {
+			opts = append(opts, otlptracehttp.WithEndpoint(endpoint))
+		}
+		exp, err := otlptracehttp.New(ctx, opts...)
 		if err != nil {
 			return
 		}

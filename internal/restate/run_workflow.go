@@ -199,7 +199,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		// B4：step span（OTEL_EXPORTER=stdout 时导出——事件流的 span 族）
 		stepCtx, stepSpan := observability.Step(context.Background(), "chronotope.step", runID, in.SessionID, step)
 		_ = stepCtx
-		_ = stepSpan
+		defer stepSpan.End()
 		// A4：steering drain（Pi 的 follow-up inbox——排队转向在每 step 前
 		// 注入消息历史；消费幂等——journal 重放回放同一 drain 结果）
 		steerInjected, sErr := restate.Run(ctx, func(rc restate.RunContext) (bool, error) {
