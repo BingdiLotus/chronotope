@@ -69,6 +69,7 @@ func main() {
 			}
 			return nil // 全局 fallback（harnessFor 回落到 deps.Harness）
 		},
+		CredentialResolver: policy.EnvResolver{},
 		HarnessResolver: &policy.DefaultResolver{
 			Lookup:    harnessLookupOf(st),
 			GlobalURL: *harnessURL,
