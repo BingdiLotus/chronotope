@@ -1329,23 +1329,25 @@ func TestWorkItemDependencyChain(t *testing.T) {
 	gid := fmt.Sprintf("g_wit_%d", time.Now().UnixNano())
 	_ = s.CreateOrg(ctx, oid, "o")
 	_, _ = s.UpsertGoal(ctx, gid, oid, "目标", "scope", "")
-	_ = s.CreateWorkItem(ctx, "wi_b", gid, "前置 B", "task", 1, "")
-	_ = s.CreateWorkItem(ctx, "wi_a", gid, "依赖 B 的 A", "task", 2, "wi_b")
+	wib := fmt.Sprintf("wi_b_%d", time.Now().UnixNano())
+	wia := fmt.Sprintf("wi_a_%d", time.Now().UnixNano())
+	_ = s.CreateWorkItem(ctx, wib, gid, "前置 B", "task", 1, "")
+	_ = s.CreateWorkItem(ctx, wia, gid, "依赖 B 的 A", "task", 2, wib)
 	// 依赖未满足：A 不可领取
-	if err := s.ClaimWorkItem(ctx, "wi_a", "w1"); err == nil {
+	if err := s.ClaimWorkItem(ctx, wia, "w1"); err == nil {
 		t.Fatal("依赖未满足应拒绝领取 A")
 	}
 	// ready 列表只有 B
 	ready, _ := s.ListReadyWorkItems(ctx, gid, 10)
-	if len(ready) != 1 || ready[0]["id"] != "wi_b" {
+	if len(ready) != 1 || ready[0]["id"] != wib {
 		t.Fatalf("ready 应只有 B: %+v", ready)
 	}
 	// B 领取+完成 → A 可领取
-	if err := s.ClaimWorkItem(ctx, "wi_b", "w1"); err != nil {
+	if err := s.ClaimWorkItem(ctx, wib, "w1"); err != nil {
 		t.Fatalf("claim B: %v", err)
 	}
-	_ = s.CompleteWorkItem(ctx, "wi_b", "ev_b")
-	if err := s.ClaimWorkItem(ctx, "wi_a", "w1"); err != nil {
+	_ = s.CompleteWorkItem(ctx, wib, "ev_b")
+	if err := s.ClaimWorkItem(ctx, wia, "w1"); err != nil {
 		t.Fatalf("依赖满足后 A 应可领取: %v", err)
 	}
 }
