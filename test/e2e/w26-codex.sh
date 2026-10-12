@@ -15,7 +15,7 @@ nohup python3 adapters/codex/harness.py 8020 > /tmp/codex-sdk.log 2>&1 &
 CP=$!
 sleep 3
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"codex-sdk","endpoint":"http://host.docker.internal:8020","version":"v1","capabilities":["gpt-6.1-sol"]}' > /dev/null
+  -d '{"name":"codex-sdk","endpoint":"http://host.docker.internal:8020","version":"v1","capabilities":{"sandbox_presets":["read_only","workspace_write","full_access"],"tool_families":["exec"],"protocol":"1.0"}}' > /dev/null
 AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
   -d '{"name":"codex","config":{"model":"gpt-6.1-sol","instructions":"你是简洁的助手。","tools":[],"harness_ref":{"name":"codex-sdk"},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')

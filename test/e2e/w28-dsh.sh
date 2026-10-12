@@ -20,7 +20,7 @@ DSH_RUNTIME_BIN=node DSH_RUNTIME_ARGS="/tmp/dsh/apps/cli/lib/bin.js --profile he
 DP=$!
 sleep 3
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"dsh-sdk","endpoint":"http://host.docker.internal:8040","version":"v1","capabilities":["gpt-6.1-sol"]}' > /dev/null
+  -d '{"name":"dsh-sdk","endpoint":"http://host.docker.internal:8040","version":"v1","capabilities":{"tool_families":["exec","mcp","control","subagent"],"protocol":"1.0"}}' > /dev/null
 AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
   -d '{"name":"dsh","config":{"model":"gpt-6.1-sol","instructions":"你是简洁的助手。","tools":[],"harness_ref":{"name":"dsh-sdk"},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')

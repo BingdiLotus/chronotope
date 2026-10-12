@@ -23,7 +23,7 @@ assert "两 harness 实体就绪（8001/8002）" \
 
 # ② 注册 v1 + agent 绑定
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"upgrade","endpoint":"http://host.docker.internal:8001","version":"v1","capabilities":[]}' > /dev/null
+  -d '{"name":"upgrade","endpoint":"http://host.docker.internal:8001","version":"v1","capabilities":{"tool_families":["exec"],"protocol":"1.0"}}' > /dev/null
 AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
   -d '{"name":"hu","config":{"model":"m","instructions":"i","tools":[],"harness_ref":{"name":"upgrade"},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -40,7 +40,7 @@ assert "run A 快照冻结 8001（旧 run 沿旧）" \
 
 # ④ 升级：注册 v2 + v1 切 draining
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"upgrade","endpoint":"http://host.docker.internal:8002","version":"v2","capabilities":[]}' > /dev/null
+  -d '{"name":"upgrade","endpoint":"http://host.docker.internal:8002","version":"v2","capabilities":{"tool_families":["exec"],"protocol":"1.0"}}' > /dev/null
 curl -fsS -X PUT "$API/orgs/org-$RUN_ID/harnesses/upgrade/v1/state" -H 'content-type: application/json' \
   -d '{"state":"draining"}' > /dev/null
 

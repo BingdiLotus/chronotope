@@ -13,7 +13,7 @@ assert() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fa
 echo "== W22 Harness 替换 (API=$API RUN_ID=$RUN_ID) =="
 # ① 注册第二 harness（org 级 + capabilities）
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"second","endpoint":"http://harness-2:8000","version":"v1","capabilities":["claude-sonnet-4-6"]}' > /dev/null
+  -d '{"name":"second","endpoint":"http://harness-2:8000","version":"v1","capabilities":{"tool_families":["exec"],"protocol":"1.0"}}' > /dev/null
 assert "第二 harness 注册（active）" \
   bash -c "curl -fsS '$API/orgs/org-$RUN_ID/harnesses' | grep -q second"
 
@@ -25,7 +25,7 @@ assert "agent 绑定进 config（harness_ref 字段）" \
 
 # ③ 升级切态（v2 注册 → active 切换）
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"second","endpoint":"http://harness-2:8000","version":"v2","capabilities":[]}' > /dev/null
+  -d '{"name":"second","endpoint":"http://harness-2:8000","version":"v2","capabilities":{"tool_families":["exec"],"protocol":"1.0"}}' > /dev/null
 curl -fsS -X PUT "$API/orgs/org-$RUN_ID/harnesses/second/v1/state" -H 'content-type: application/json' \
   -d '{"state":"draining"}' > /dev/null
 assert "v2 active + v1 draining（升级切换）" \

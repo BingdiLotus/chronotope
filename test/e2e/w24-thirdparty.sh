@@ -27,7 +27,7 @@ assert t.count("done") == 1, "done 非唯一终态"' <<< '{}'
 
 # ② 注册表注册 + agent 绑定
 curl -fsS -X POST "$API/orgs/org-$RUN_ID/harnesses" -H 'content-type: application/json' \
-  -d '{"name":"thirdparty","endpoint":"http://host.docker.internal:9011","version":"v1","capabilities":["claude-sonnet-4-6"]}' > /dev/null
+  -d '{"name":"thirdparty","endpoint":"http://host.docker.internal:9011","version":"v1","capabilities":{"tool_families":["control"],"protocol":"1.0"}}' > /dev/null
 AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
   -d '{"name":"tp","config":{"model":"claude-sonnet-4-6","instructions":"i","tools":[],"harness_ref":{"name":"thirdparty"},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
