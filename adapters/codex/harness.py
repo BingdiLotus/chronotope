@@ -26,7 +26,20 @@ def run_codex(body):
     """官方调用：thread 新建 → run → final_response（不魔改官方 API）。"""
     messages = body.get("messages", [])
     system = next((m.get("content", "") for m in messages if m.get("role") == "system"), "")
-    prompt = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
+    # B-1：会话续跑——全历史拼进 prompt（resumeThread 的官方形态与三铁律
+    # 冲突（thread 持久化 = SDK 状态）——等价语义：历史可见（第二轮引用
+    # 第一轮内容可验证）；官方 resumeThread 的真实使用后置标注
+    parts = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content", "")
+        if not content:
+            continue
+        if role == "system":
+            continue
+        prefix = "用户" if role == "user" else "助手"
+        parts.append(f"{prefix}: {content}")
+    prompt = "\n".join(parts)
     if system:
         prompt = f"{system}\n\n{prompt}"
     # A3：sandbox 预设声明（/runs 的 context.sandbox——read_only/
