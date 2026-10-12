@@ -16,6 +16,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/execproto"
+	"github.com/bingdilotus/chronotope/internal/observability"
 )
 
 // maxInlineBytes 内联载荷上限（契约规范 §7 journal 大小策略——超限外置
@@ -140,6 +141,9 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			"output": truncate(res.Output, maxInlineBytes), "output_ref": res.OutputRef, "truncated": res.Truncated,
 			"duration_ms": outcome.Duration.Milliseconds(), // 计算秒计量依据（W4）+ 预算熔断
 		})
+		// B4：tool_exec span（duration 属性——Pi 的 tool_execution_end 对应）
+		_, toolSpan := observability.ToolExec(ctx, tc.Name, outcome.Duration.Milliseconds())
+		_ = toolSpan
 		return jsonToolResult(tc.Name, res), outcome.Duration.Seconds(), nil
 
 	case tc.Name == runs.ToolWriteFile:

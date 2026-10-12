@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"github.com/bingdilotus/chronotope/internal/observability"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 )
 
 func main() {
+	observability.Init() // B4：OTEL_EXPORTER=stdout 装配（默认 noop 零行为变化）
 	var (
 		addr        = flag.String("addr", envOr("WORKER_ADDR", ":9080"), "listen address（Restate 端点）")
 		databaseURL = flag.String("database-url", envOr("DATABASE_URL", ""), "Postgres DSN（事件/消息真相层）")
