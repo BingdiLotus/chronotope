@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/session"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
@@ -156,6 +157,10 @@ func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ in
 
 func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _, _, _ string) (*store.MCPCallRow, error) {
 	return &store.MCPCallRow{}, nil
+}
+
+func (f *fakeStore) ListExtensions(_ context.Context, _ string) ([]extension.Definition, error) {
+	return nil, nil
 }
 
 func (f *fakeStore) ListPendingSteerings(_ context.Context, _ string, _ int) ([]session.Steering, error) {

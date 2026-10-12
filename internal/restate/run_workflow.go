@@ -100,6 +100,9 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 	// 会话 config 变化不改变本 run 的后续步骤（run 内确定性）；旧 run 无快照
 	//（bound 缺失）回退会话 config 兼容。
 	cfg := state.AgentConfig
+	// B2 装配合并：bound 冻结的 extensions 解析 → tools 合并 + prompt 拼接
+	// + hooks 清单进提示（快照语义——旧 run 沿旧扩展清单）
+	cfg = assembleExtensions(ctx, deps.Store, runID, cfg)
 	if runRow, gErr := deps.Store.GetRun(ctx, runID); gErr == nil && runRow != nil && len(runRow.Bound) > 0 {
 		raw, mErr := json.Marshal(runRow.Bound)
 		if mErr == nil {
@@ -615,6 +618,69 @@ func requestHashOf(req *runs.Request) string {
 	b, _ := json.Marshal(req)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// assembleExtensions B2 装配合并：bound 的 extensions 解析（快照冻结的
+// 清单）→ 扩展的 tools 合并进 cfg.Tools + prompt 拼进 Instructions +
+// hooks 清单追加提示（审批通道的 hook 注入后置标注——A1 的 ApprovalContext
+// 已就绪，装配点在扩展 hooks 的逐条注入）。
+func assembleExtensions(ctx context.Context, st Store, runID string, cfg sessionapi.AgentConfig) sessionapi.AgentConfig {
+	if st == nil {
+		return cfg
+	}
+	runRow, err := st.GetRun(ctx, runID)
+	if err != nil || runRow == nil {
+		return cfg
+	}
+	ids, _ := runRow.Bound["extensions"].([]string)
+	if len(ids) == 0 {
+		if arr, ok := runRow.Bound["extensions"].([]any); ok {
+			for _, v := range arr {
+				if s, ok := v.(string); ok {
+					ids = append(ids, s)
+				}
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return cfg
+	}
+	exts, err := st.ListExtensions(ctx, "")
+	if err != nil {
+		return cfg
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	toolSet := map[string]bool{}
+	for _, t := range cfg.Tools {
+		toolSet[t] = true
+	}
+	var prompts []string
+	var hooks []string
+	for _, ext := range exts {
+		if !want[ext.ID] {
+			continue
+		}
+		for _, t := range ext.Tools {
+			if !toolSet[t] {
+				toolSet[t] = true
+				cfg.Tools = append(cfg.Tools, t)
+			}
+		}
+		if ext.Prompt != "" {
+			prompts = append(prompts, ext.Prompt)
+		}
+		hooks = append(hooks, ext.Hooks...)
+	}
+	if len(prompts) > 0 {
+		cfg.Instructions += "\n\n【扩展注入】\n" + strings.Join(prompts, "\n")
+	}
+	if len(hooks) > 0 {
+		cfg.Instructions += "\n\n【扩展注入】\n" + strings.Join(prompts, "\n")
+	}
+	return cfg
 }
 
 // buildMessages 组装本轮消息（分层记忆的 W5 前简化形态：system 指令 + 历史 + 本 run 输入）。

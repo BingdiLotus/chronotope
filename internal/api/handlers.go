@@ -1017,6 +1017,32 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// claimWorkItem B3：领取（open → claimed——依赖校验在 store 层 SQL）。
+func (h *Handler) claimWorkItem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClaimedBy string `json:"claimed_by"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := h.Store.ClaimWorkItem(r.Context(), chi.URLParam(r, "id"), req.ClaimedBy); err != nil {
+		writeError(w, http.StatusConflict, 409, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"claimed": true, "id": chi.URLParam(r, "id")})
+}
+
+// completeWorkItem B3：完成（claimed → done + 证据引用）。
+func (h *Handler) completeWorkItem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		EvidenceRef string `json:"evidence_ref"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := h.Store.CompleteWorkItem(r.Context(), chi.URLParam(r, "id"), req.EvidenceRef); err != nil {
+		writeError(w, http.StatusConflict, 409, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"completed": true, "id": chi.URLParam(r, "id")})
+}
+
 // orgConfig B5：配置自省（composed 树——dump-config 形态；三层分离的
 // 可观测：原语（快照语义）/策略缝（配额）/业务（agents/harnesses/
 // extensions））。

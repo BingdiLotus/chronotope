@@ -52,6 +52,8 @@ type Store interface {
 	EnqueueSteering(ctx context.Context, sessionID, input string) error
 	RegisterExtension(ctx context.Context, ext extension.Definition) error
 	ListAgents(ctx context.Context, orgID string) ([]store.Agent, error)
+	ClaimWorkItem(ctx context.Context, id, claimedBy string) error
+	CompleteWorkItem(ctx context.Context, id, evidenceRef string) error
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)

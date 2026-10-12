@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/bingdilotus/chronotope/internal/core/checkpoint"
+	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/ledger"
 	"github.com/bingdilotus/chronotope/internal/core/memory"
 	"github.com/bingdilotus/chronotope/internal/core/sandbox"
@@ -76,6 +77,7 @@ type CallLedger interface {
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*ledger.MCPCallRow, error)
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string, durationMs int64) error
 	ListPendingSteerings(ctx context.Context, sessionID string, limit int) ([]session.Steering, error)
+	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	ConsumeSteerings(ctx context.Context, sessionID string, ids []int64) error
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 }
