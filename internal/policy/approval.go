@@ -39,6 +39,9 @@ type OrgApprovalPolicy struct {
 }
 
 // Route 实现：工具匹配任一 pattern（空 patterns = 全匹配）→ 返回集合+TTL。
+// A5：Ownership 进路由的语义（background 的审批不阻塞父 run 已在 spawn
+// 层保证；路由层按 Ownership 区分的独立 approver 组后置标注——当前返回
+// 同一集合，字段已进契约）。
 func (p OrgApprovalPolicy) Route(ctx context.Context, req ApprovalRequest) ([]string, int64, error) {
 	patterns, approvers, ttl, err := p.Get(ctx, req.TenantID)
 	if err != nil {

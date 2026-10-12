@@ -176,6 +176,12 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		if hh, hErr := h.Store.GetActiveHarness(r.Context(), sess.OrgID, agent.Config.HarnessRef.Name); hErr == nil {
 			bound["harness_endpoint"] = hh.Endpoint
 			bound["harness_version"] = hh.Version
+			// B1 能力校验：agent 声明的 sandbox 预设不在 harness 能力内
+			// → bound 的显式降级标注（诚实——run 可审计声明与能力的
+			// 不匹配；拒绝语义后置标注）
+			if agent.Config.Sandbox != "" && !hh.Capabilities.Has(agent.Config.Sandbox) {
+				bound["capability_mismatch"] = "sandbox:" + agent.Config.Sandbox
+			}
 		}
 	}
 	trigger, _ := json.Marshal(req.Trigger)
