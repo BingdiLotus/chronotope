@@ -25,8 +25,23 @@ const MARK = "PiDurable"; // 回复标记（路由证据）
 const { createProvider, createModels, envApiKeyAuth, openAICompletionsApi } =
   await import("@earendil-works/pi-ai/compat");
 const { getBuiltinModel } = await import("@earendil-works/pi-ai/providers/all");
-const { Harness, MemoryStorage, createRegistry, AssistantEntry } =
+const { Harness, MemoryStorage, createRegistry, AssistantEntry, defineExtension, hook, ToolTask } =
   await import("@earendil-works/pi-durable");
+
+// A-2：beforeTool hook（class 2 工具 → block——pi-durable 的 block 语义：
+// 工具零执行 + error tool result；replay 策略声明在 defineTool 侧）
+const GuardExt = defineExtension({
+  name: "chronotope-guard",
+  hooks: [hook(ToolTask, {
+    beforeTool: (call) => {
+      const name = String(call?.tool?.name || call?.name || "").toLowerCase();
+      if (name === "bash" || name === "run_python") {
+        return { block: "class 2 危险工具——SDK 侧拦截（平台审批双层取严）" };
+      }
+      return undefined;
+    },
+  })],
+});
 
 // 每次 run 重建的官方装配（transient——MemoryStorage）
 async function runPi(body) {
@@ -48,7 +63,7 @@ async function runPi(body) {
   models.setProvider(provider);
   const harness = await Harness.open(
     new MemoryStorage(),
-    { models, registry: createRegistry() },
+    { models, registry: (() => { const r = createRegistry(); r.install(GuardExt); return r; })() },
     {}
   );
   try {
