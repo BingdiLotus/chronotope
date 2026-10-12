@@ -1374,4 +1374,12 @@ func TestCredentialLifecycle(t *testing.T) {
 	if len(rows) != 1 || rows[0].State != "revoked" {
 		t.Fatalf("吊销后应 revoked: %+v", rows)
 	}
+	// 变更事件（set + revoke——audit 与轮换的可观测）
+	events, eErr := s.ListCredentialEvents(ctx, oid, 10)
+	if eErr != nil || len(events) != 2 {
+		t.Fatalf("事件应 set+revoke 两条: %+v err=%v", events, eErr)
+	}
+	if events[0]["action"] != "revoke" || events[1]["action"] != "set" {
+		t.Fatalf("事件序（新在前）: %+v", events)
+	}
 }

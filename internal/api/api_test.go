@@ -198,6 +198,10 @@ func (f *fakeStore) ListCredentials(_ context.Context, _ string) ([]store.Creden
 	return nil, nil
 }
 
+func (f *fakeStore) ListCredentialEvents(_ context.Context, _ string, _ int) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) RevokeCredential(_ context.Context, _ string) error {
 	return nil
 }

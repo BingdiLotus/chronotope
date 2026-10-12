@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/credential"
 )
@@ -21,7 +22,7 @@ SET ref = EXCLUDED.ref, backend = EXCLUDED.backend, backend_ref = EXCLUDED.backe
 	if _, err := s.Pool.Exec(ctx, q, id, orgID, ref, backend, backendRef); err != nil {
 		return fmt.Errorf("store: register credential: %w", err)
 	}
-	return nil
+	return s.RecordCredentialEvent(ctx, orgID, id, ref, "set")
 }
 
 // ListCredentials org 的凭据注册（describe 视图——无值槽）。
@@ -42,6 +43,38 @@ func (s *Store) ListCredentials(ctx context.Context, orgID string) ([]Credential
 	return out, rows.Err()
 }
 
+// RecordCredentialEvent 凭据变更事件（set/revoke/unset——审计与轮换的
+// 可观测；dsh 的 reference-updated 对应）。
+func (s *Store) RecordCredentialEvent(ctx context.Context, orgID, credentialID, ref, action string) error {
+	const q = `INSERT INTO credential_events (org_id, credential_id, ref, action) VALUES ($1, $2, $3, $4)`
+	if _, err := s.Pool.Exec(ctx, q, orgID, credentialID, ref, action); err != nil {
+		return fmt.Errorf("store: credential event: %w", err)
+	}
+	return nil
+}
+
+// ListCredentialEvents org 的凭据变更事件流（按时间序）。
+func (s *Store) ListCredentialEvents(ctx context.Context, orgID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT credential_id, ref, action, at FROM credential_events WHERE org_id = $1 ORDER BY id DESC LIMIT $2`, orgID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list credential events: %w", err)
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var cid, ref, action string
+		var at time.Time
+		if err := rows.Scan(&cid, &ref, &action, &at); err != nil {
+			return nil, fmt.Errorf("store: scan credential event: %w", err)
+		}
+		out = append(out, map[string]any{"credential_id": cid, "ref": ref, "action": action, "at": at})
+	}
+	return out, rows.Err()
+}
+
 // RevokeCredential 吊销（active → revoked——解析返回未配置；显式失败不
 // 静默换凭据）。
 func (s *Store) RevokeCredential(ctx context.Context, id string) error {
@@ -52,6 +85,10 @@ func (s *Store) RevokeCredential(ctx context.Context, id string) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	var orgID, ref string
+	if rErr := s.Pool.QueryRow(ctx, `SELECT org_id, ref FROM credentials WHERE id = $1`, id).Scan(&orgID, &ref); rErr == nil {
+		_ = s.RecordCredentialEvent(ctx, orgID, id, ref, "revoke")
 	}
 	return nil
 }

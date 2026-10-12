@@ -1065,6 +1065,17 @@ func (h *Handler) registerCredential(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"registered": true, "id": req.ID, "ref": req.Ref})
 }
 
+// listCredentialEvents 凭据服务：变更事件流（set/revoke/unset——审计与
+// 轮换的可观测；dsh 的 reference-updated 对应）。
+func (h *Handler) listCredentialEvents(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Store.ListCredentialEvents(r.Context(), chi.URLParam(r, "orgID"), 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": rows})
+}
+
 // listCredentials 凭据服务阶段 ②：describe 视图（backend/state——值无槽）。
 func (h *Handler) listCredentials(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Store.ListCredentials(r.Context(), chi.URLParam(r, "orgID"))

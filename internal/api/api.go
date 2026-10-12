@@ -57,6 +57,7 @@ type Store interface {
 	RegisterCredential(ctx context.Context, id, orgID, ref, backend, backendRef string) error
 	ListCredentials(ctx context.Context, orgID string) ([]store.CredentialRow, error)
 	RevokeCredential(ctx context.Context, id string) error
+	ListCredentialEvents(ctx context.Context, orgID string, limit int) ([]map[string]any, error)
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)
