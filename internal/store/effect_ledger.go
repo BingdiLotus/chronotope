@@ -238,3 +238,26 @@ func nullIfEmptyInt(v int64) any {
 	}
 	return v
 }
+
+// CredentialUsage 凭据服务阶段 ④：审计查询——按 credential_ref 聚合的
+// 使用（run/session 的 token 归属）。
+func (s *Store) CredentialUsage(ctx context.Context, orgID string) ([]map[string]any, error) {
+	const q = "SELECT credential_ref, count(*) AS calls, COALESCE(sum(tokens_in + tokens_out), 0) AS tokens " +
+		"FROM llm_calls l JOIN runs r ON r.id = l.run_id JOIN sessions ss ON ss.id = r.session_id " +
+		"WHERE credential_ref <> '' AND ss.org_id = $1 GROUP BY credential_ref ORDER BY tokens DESC"
+	rows, err := s.Pool.Query(ctx, q, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("store: credential usage: %w", err)
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var ref string
+		var calls, tokens int64
+		if err := rows.Scan(&ref, &calls, &tokens); err != nil {
+			return nil, fmt.Errorf("store: scan credential usage: %w", err)
+		}
+		out = append(out, map[string]any{"credential_ref": ref, "calls": calls, "tokens": tokens})
+	}
+	return out, rows.Err()
+}

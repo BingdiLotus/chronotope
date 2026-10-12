@@ -14,6 +14,7 @@ import (
 	"github.com/restatedev/sdk-go/x/mocks"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/bingdilotus/chronotope/internal/core/credential"
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
@@ -157,6 +158,10 @@ func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ in
 
 func (f *fakeStore) PutMCPCallPrepared(_ context.Context, _ string, _ int, _, _, _, _ string) (*store.MCPCallRow, error) {
 	return &store.MCPCallRow{}, nil
+}
+
+func (f *fakeStore) ListCredentials(_ context.Context, _ string) ([]credential.Row, error) {
+	return nil, nil
 }
 
 func (f *fakeStore) ListExtensions(_ context.Context, _ string) ([]extension.Definition, error) {

@@ -636,8 +636,9 @@ func credentialRefOf(ctx context.Context, deps *Deps, runID string) string {
 	return ref
 }
 
-// verifyCredential 阶段 ③：引用解析验证（未配置 → 显式失败——不静默换
-// 凭据；nil resolver = 不校验）。
+// verifyCredential 阶段 ③④：引用解析验证（未配置 → 显式失败——不静默换
+// 凭据）+ 吊销校验（credentials 表的 state=revoked → 显式失败——轮换的
+// 吊销语义）；nil resolver = 不校验。
 func verifyCredential(ctx context.Context, deps *Deps, runID string) error {
 	if deps.CredentialResolver == nil {
 		return nil
@@ -645,6 +646,15 @@ func verifyCredential(ctx context.Context, deps *Deps, runID string) error {
 	ref := credentialRefOf(ctx, deps, runID)
 	if ref == "" {
 		return nil
+	}
+	// 吊销校验（阶段 ④：state=revoked 的显式失败）
+	rows, lErr := deps.Store.ListCredentials(ctx, "")
+	if lErr == nil {
+		for _, c := range rows {
+			if c.Ref == ref && c.State == "revoked" {
+				return restate.ToTerminalError(fmt.Errorf("凭据引用 %s 已吊销（显式失败——不静默换凭据）", ref))
+			}
+		}
 	}
 	resolved, err := deps.CredentialResolver.Resolve(ctx, "", ref)
 	if err != nil {

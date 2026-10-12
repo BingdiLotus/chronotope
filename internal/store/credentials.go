@@ -3,19 +3,12 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
+
+	"github.com/bingdilotus/chronotope/internal/core/credential"
 )
 
-// CredentialRow 是凭据注册行（阶段 ②——org 级；值不进此行）。
-type CredentialRow struct {
-	ID         string
-	OrgID      string
-	Ref        string
-	Backend    string
-	BackendRef string
-	State      string
-	RotatedAt  time.Time
-}
+// CredentialRow 是凭据注册行（期 7 下沉：credential.Row 别名）。
+type CredentialRow = credential.Row
 
 // RegisterCredential 注册凭据引用（同 id 覆盖；值永不经此方法）。
 func (s *Store) RegisterCredential(ctx context.Context, id, orgID, ref, backend, backendRef string) error {
