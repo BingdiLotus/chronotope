@@ -151,7 +151,7 @@ func (f *fakeStore) PutLLMCallPrepared(_ context.Context, _ string, _ int, _ str
 	return &store.LLMCallRow{}, nil
 }
 
-func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ int64, _, _ bool, _, _ string) error {
+func (f *fakeStore) PutLLMCallResult(_ context.Context, _ string, _ int, _, _ int64, _, _ bool, _, _, _ string) error {
 	return nil
 }
 

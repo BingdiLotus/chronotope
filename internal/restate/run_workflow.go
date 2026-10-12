@@ -602,11 +602,11 @@ func harnessCallClosure(rc restate.RunContext, deps *Deps, runID string, step in
 	if r != nil {
 		unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
 		resultJSON, _ := json.Marshal(r)
-		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON)); lErr != nil {
+		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON), credentialRefOf(rc, deps, runID)); lErr != nil {
 			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
 		}
 	} else if err != nil {
-		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), ""); lErr != nil {
+		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), "", credentialRefOf(rc, deps, runID)); lErr != nil {
 			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
 		}
 	}
@@ -618,6 +618,17 @@ func requestHashOf(req *runs.Request) string {
 	b, _ := json.Marshal(req)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// credentialRefOf 凭据服务阶段 ①：run 的凭据引用（bound 冻结的引用名
+// ——值解析在策略缝）。MVP 返回引用名（账本的凭据维度落账）。
+func credentialRefOf(ctx context.Context, deps *Deps, runID string) string {
+	runRow, err := deps.Store.GetRun(ctx, runID)
+	if err != nil || runRow == nil {
+		return ""
+	}
+	ref, _ := runRow.Bound["credential_ref"].(string)
+	return ref
 }
 
 // assembleExtensions B2 装配合并：bound 的 extensions 解析（快照冻结的

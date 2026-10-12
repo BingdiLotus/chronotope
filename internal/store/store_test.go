@@ -1123,14 +1123,14 @@ func TestEffectLedgerRoundtrip(t *testing.T) {
 	if _, err := s.PutLLMCallPrepared(ctx, rid, 0, "hash-a"); err != nil {
 		t.Fatalf("llm prepared: %v", err)
 	}
-	if err := s.PutLLMCallResult(ctx, rid, 0, 120, 45, false, false, "", ""); err != nil {
+	if err := s.PutLLMCallResult(ctx, rid, 0, 120, 45, false, false, "", "", "ANTHROPIC_API_KEY"); err != nil {
 		t.Fatalf("llm result: %v", err)
 	}
 	// 错误 → unknown（usage_unknown 账本化）
 	if _, err := s.PutLLMCallPrepared(ctx, rid, 1, "hash-b"); err != nil {
 		t.Fatalf("llm prepared2: %v", err)
 	}
-	if err := s.PutLLMCallResult(ctx, rid, 1, 0, 0, false, true, "model 400", ""); err != nil {
+	if err := s.PutLLMCallResult(ctx, rid, 1, 0, 0, false, true, "model 400", "", ""); err != nil {
 		t.Fatalf("llm unknown: %v", err)
 	}
 	// A2：mcp prepared → 错误 unknown
@@ -1158,7 +1158,7 @@ func TestArbitrationResultReplay(t *testing.T) {
 	if _, err := s.PutLLMCallPrepared(ctx, rid, 0, "hash-1"); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if err := s.PutLLMCallResult(ctx, rid, 0, 10, 5, false, false, "", `{"final":"冻结原结果"}`); err != nil {
+	if err := s.PutLLMCallResult(ctx, rid, 0, 10, 5, false, false, "", `{"final":"冻结原结果"}`, ""); err != nil {
 		t.Fatalf("result: %v", err)
 	}
 	// 冲突读回：state=result + hash 同 → 回读冻结结果

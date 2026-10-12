@@ -72,7 +72,7 @@ type SessionRegistry interface {
 // CallLedger 效果账本（LLM/MCP 的 prepared/dispatched/result/unknown 仲裁）。
 type CallLedger interface {
 	PutLLMCallPrepared(ctx context.Context, runID string, step int, requestHash string) (*ledger.LLMCallRow, error)
-	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error
+	PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON, credentialRef string) error
 	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*ledger.MCPCallRow, error)
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string, durationMs int64) error

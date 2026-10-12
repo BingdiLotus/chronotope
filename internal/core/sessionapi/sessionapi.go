@@ -64,6 +64,9 @@ type AgentConfig struct {
 	Skills       []string        `json:"skills,omitempty"`
 	Environment  Environment     `json:"environment,omitempty"`
 	Budget       map[string]any  `json:"budget,omitempty"`
+	// CredentialRef 是凭据引用（凭据服务阶段 ①——引用名而非值；进 spec
+	// digest 的是引用名——值永不过 digest/快照）。
+	CredentialRef string `json:"credential_ref,omitempty"`
 	// Extensions 是扩展包绑定（B2——org 级扩展的 agent 绑定；进 spec
 	// digest：绑定变更 = digest 变更）。
 	Extensions []string `json:"extensions,omitempty"`

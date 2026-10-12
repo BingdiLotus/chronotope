@@ -166,6 +166,10 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		"protocol_version":     "1.0",
 		"model":                agent.Config.Model,
 	}
+	// 凭据服务阶段 ①：bound 冻结引用名（值永不过快照——解析在 worker 侧）
+	if agent.Config.CredentialRef != "" {
+		bound["credential_ref"] = agent.Config.CredentialRef
+	}
 	// B2：扩展绑定快照（bound 冻结扩展清单——装配合并后置标注）
 	if len(agent.Config.Extensions) > 0 {
 		bound["extensions"] = agent.Config.Extensions

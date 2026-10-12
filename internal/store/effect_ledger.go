@@ -113,7 +113,7 @@ func (s *Store) AdmissionState(ctx context.Context, runID string) (string, error
 }
 
 // PutLLMCallResult 结果落账（usage 三字段 + 状态 result/unknown）。
-func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON string) error {
+func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON, credentialRef string) error {
 	state := "result"
 	if unknown || errMsg != "" {
 		state = "unknown"
@@ -122,9 +122,10 @@ func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, to
 UPDATE llm_calls
 SET state = $3, tokens_in = $4, tokens_out = $5, usage_partial = $6,
     usage_unknown = $7, err = $8, result_at = now(),
-    result = COALESCE($9::jsonb, result)
+    result = COALESCE($9::jsonb, result),
+    credential_ref = COALESCE($10, credential_ref)
 WHERE run_id = $1 AND step = $2`
-	_, err := s.Pool.Exec(ctx, q, runID, step, state, tokensIn, tokensOut, partial, unknown, nullIfEmpty(errMsg), nullIfEmpty(resultJSON))
+	_, err := s.Pool.Exec(ctx, q, runID, step, state, tokensIn, tokensOut, partial, unknown, nullIfEmpty(errMsg), nullIfEmpty(resultJSON), nullIfEmpty(credentialRef))
 	if err != nil {
 		return fmt.Errorf("store: llm result: %w", err)
 	}
