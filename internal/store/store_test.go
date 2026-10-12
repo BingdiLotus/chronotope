@@ -1351,3 +1351,27 @@ func TestWorkItemDependencyChain(t *testing.T) {
 		t.Fatalf("依赖满足后 A 应可领取: %v", err)
 	}
 }
+
+// TestCredentialLifecycle 凭据服务阶段 ②：注册/describe/吊销（值永不经
+// store——backend 指针与状态）。
+func TestCredentialLifecycle(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	oid := fmt.Sprintf("org_cred_%d", time.Now().UnixNano())
+	_ = s.CreateOrg(ctx, oid, "o")
+	cid := fmt.Sprintf("cred_%d", time.Now().UnixNano())
+	if err := s.RegisterCredential(ctx, cid, oid, "ANTHROPIC_API_KEY", "env", ""); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	rows, err := s.ListCredentials(ctx, oid)
+	if err != nil || len(rows) != 1 || rows[0].State != "active" || rows[0].Ref != "ANTHROPIC_API_KEY" {
+		t.Fatalf("list: %+v err=%v", rows, err)
+	}
+	if err := s.RevokeCredential(ctx, cid); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	rows, _ = s.ListCredentials(ctx, oid)
+	if len(rows) != 1 || rows[0].State != "revoked" {
+		t.Fatalf("吊销后应 revoked: %+v", rows)
+	}
+}

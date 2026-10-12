@@ -54,6 +54,9 @@ type Store interface {
 	ListAgents(ctx context.Context, orgID string) ([]store.Agent, error)
 	ClaimWorkItem(ctx context.Context, id, claimedBy string) error
 	CompleteWorkItem(ctx context.Context, id, evidenceRef string) error
+	RegisterCredential(ctx context.Context, id, orgID, ref, backend, backendRef string) error
+	ListCredentials(ctx context.Context, orgID string) ([]store.CredentialRow, error)
+	RevokeCredential(ctx context.Context, id string) error
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)

@@ -190,6 +190,18 @@ func (f *fakeStore) ListHarnesses(_ context.Context, _ string) ([]store.HarnessR
 	return nil, nil
 }
 
+func (f *fakeStore) RegisterCredential(_ context.Context, _, _, _, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) ListCredentials(_ context.Context, _ string) ([]store.CredentialRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) RevokeCredential(_ context.Context, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) RebindSessionAgent(_ context.Context, _, _ string) error {
 	return nil
 }

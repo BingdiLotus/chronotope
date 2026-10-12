@@ -1041,6 +1041,50 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// registerCredential 凭据服务阶段 ②：注册引用（值永不经 API——backend
+// 决定值所在：env 后端 = 环境变量；external = 外部 secret store 指针）。
+func (h *Handler) registerCredential(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	var req struct {
+		ID         string `json:"id"`
+		Ref        string `json:"ref"`
+		Backend    string `json:"backend"`
+		BackendRef string `json:"backend_ref"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" || req.Ref == "" {
+		writeError(w, http.StatusUnprocessableEntity, 422, "id/ref 必填")
+		return
+	}
+	if req.Backend == "" {
+		req.Backend = "env"
+	}
+	if err := h.Store.RegisterCredential(r.Context(), req.ID, orgID, req.Ref, req.Backend, req.BackendRef); err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"registered": true, "id": req.ID, "ref": req.Ref})
+}
+
+// listCredentials 凭据服务阶段 ②：describe 视图（backend/state——值无槽）。
+func (h *Handler) listCredentials(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Store.ListCredentials(r.Context(), chi.URLParam(r, "orgID"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credentials": rows})
+}
+
+// revokeCredential 凭据服务阶段 ②：吊销（active → revoked——解析返回
+// 未配置）。
+func (h *Handler) revokeCredential(w http.ResponseWriter, r *http.Request) {
+	if err := h.Store.RevokeCredential(r.Context(), chi.URLParam(r, "id")); err != nil {
+		writeError(w, http.StatusNotFound, 404, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": true, "id": chi.URLParam(r, "id")})
+}
+
 // claimWorkItem B3：领取（open → claimed——依赖校验在 store 层 SQL）。
 func (h *Handler) claimWorkItem(w http.ResponseWriter, r *http.Request) {
 	var req struct {
