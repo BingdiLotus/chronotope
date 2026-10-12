@@ -24,6 +24,22 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8010
 MARK = "ClaudeSDK"  # 回复标记（路由证据——e2e 断言用）
 
 
+# class 分级的内置词汇（与平台 risk.go 的 defaultToolClasses 对齐——
+# 双份权限取严：SDK 侧判定与平台侧判定都过）
+CLASS0 = {"read_file", "list_files"}
+CLASS2 = {"bash", "run_python"}
+
+def can_use_tool(tool_name, input_data):
+    """canUseTool 回调（A-1——class 分级的 SDK 侧执行）：
+    class 0 → allow；class 2 → ask（SDK 侧审批——平台 HITL 双层）；
+    其余 → allow。"""
+    if tool_name in CLASS0:
+        return {"permission": "allow"}
+    if tool_name in CLASS2:
+        return {"permission": "ask", "reason": "class 2 危险工具——SDK 侧审批（平台 HITL 双层取严）"}
+    return {"permission": "allow"}
+
+
 def sse_frames(body):
     """把 /runs 请求体转成 SSE 帧序列的异步生成器（SDK 官方调用）。"""
     async def gen():
@@ -61,15 +77,15 @@ def sse_frames(body):
                             # 可见——官方 hooks 的最佳实践映射）
                             ctx = {}
                             args = getattr(b, "input", {}) or {}
-                            if b.name in ("bash", "run_python", "write_file", "http_request"):
+                            if b.name.lower() in ("bash", "run_python", "write_file", "http_request"):
                                 ctx = {
                                     "hook": "PreToolUse",
-                                    "tool": b.name,
+                                    "tool": b.name.lower(),
                                     "risk_note": "class 2 危险工具——参数摘要供审批",
                                     "args_summary": json.dumps(args, ensure_ascii=False)[:500],
                                 }
                             yield {"type": "tool_call", "seq": seq, "payload": {
-                                "id": getattr(b, "id", "t_sdk"), "name": b.name,
+                                "id": getattr(b, "id", "t_sdk"), "name": b.name.lower(),
                                 "arguments": args,
                                 "approval_context": ctx or None,
                             }}
