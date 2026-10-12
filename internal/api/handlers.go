@@ -834,11 +834,14 @@ func (h *Handler) listCheckpoints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"checkpoints": cps})
 }
 
-// POST /sessions/{id}/fork {checkpoint_id} —— 从时间坐标派生新会话（写时复制）。
+// POST /sessions/{id}/fork {checkpoint_id, agent_id?} —— 从时间坐标派生
+// 新会话（写时复制）；agent_id = handoff（Pi 的 reset/handoff 语义——
+// 交接给新 agent）。
 func (h *Handler) forkSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
 	var req struct {
 		CheckpointID string `json:"checkpoint_id"`
+		AgentID      string `json:"agent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CheckpointID == "" {
 		writeError(w, http.StatusUnprocessableEntity, 422, "checkpoint_id 必填")
@@ -857,6 +860,17 @@ func (h *Handler) forkSession(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.ForkSession(r.Context(), forkID, sessionID, cp.Seq, cp.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
+	}
+	// C1 handoff：agent_id 交接（fork 后换 agent——新会话绑新 agent）
+	if req.AgentID != "" {
+		if _, aErr := h.Store.GetAgent(r.Context(), req.AgentID); aErr != nil {
+			writeError(w, http.StatusNotFound, 404, "handoff agent not found")
+			return
+		}
+		if uErr := h.Store.RebindSessionAgent(r.Context(), forkID, req.AgentID); uErr != nil {
+			writeError(w, http.StatusInternalServerError, 500, uErr.Error())
+			return
+		}
 	}
 	// 分支会话的 SessionState 初始化（真实 e2e 实证：仅落库不初始化 →
 	// 首次 run 502「session_object 未初始化」——与 createSession 同款控制面）

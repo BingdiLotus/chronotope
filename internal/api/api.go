@@ -103,6 +103,7 @@ type Store interface {
 	GetCheckpoint(ctx context.Context, id string) (*store.Checkpoint, error)
 	ListCheckpoints(ctx context.Context, sessionID string, limit int) ([]store.Checkpoint, error)
 	ForkSession(ctx context.Context, newSessionID, parentSessionID string, atSeq int64, atCheckpoint string) error
+	RebindSessionAgent(ctx context.Context, sessionID, agentID string) error
 	RollbackSession(ctx context.Context, sessionID string, cp *store.Checkpoint) error
 	DiffSessions(ctx context.Context, a, b string, limit int) (*store.SessionDiff, error)
 	ListPendingOutbox(ctx context.Context, limit int) ([]*store.PendingOutboxRow, error)

@@ -190,6 +190,10 @@ func (f *fakeStore) ListHarnesses(_ context.Context, _ string) ([]store.HarnessR
 	return nil, nil
 }
 
+func (f *fakeStore) RebindSessionAgent(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (f *fakeStore) ClaimWorkItem(_ context.Context, _, _ string) error {
 	return nil
 }

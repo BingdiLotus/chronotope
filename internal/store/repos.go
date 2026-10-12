@@ -394,3 +394,17 @@ func (s *Store) ListAgents(ctx context.Context, orgID string) ([]Agent, error) {
 	}
 	return out, rows.Err()
 }
+
+// RebindSessionAgent C1 handoff：会话交接（fork 后换 agent——Pi 的
+// reset/handoff 语义）。
+func (s *Store) RebindSessionAgent(ctx context.Context, sessionID, agentID string) error {
+	const q = `UPDATE sessions SET agent_id = $2 WHERE id = $1`
+	tag, err := s.Pool.Exec(ctx, q, sessionID, agentID)
+	if err != nil {
+		return fmt.Errorf("store: rebind session agent: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
