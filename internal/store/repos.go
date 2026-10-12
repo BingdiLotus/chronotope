@@ -376,3 +376,21 @@ func (s *Store) HasRecentCompleted(ctx context.Context, sessionID string, within
 	}
 	return ok, nil
 }
+
+// ListAgents org 的 agent 列表（B5 配置自省——composed 树的 agent 层）。
+func (s *Store) ListAgents(ctx context.Context, orgID string) ([]Agent, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, org_id, name, config, version, spec_digest FROM agents WHERE org_id = $1 ORDER BY name`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list agents: %w", err)
+	}
+	defer rows.Close()
+	var out []Agent
+	for rows.Next() {
+		var a Agent
+		if err := rows.Scan(&a.ID, &a.OrgID, &a.Name, &a.Config, &a.Version, &a.SpecDigest); err != nil {
+			return nil, fmt.Errorf("store: scan agent: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

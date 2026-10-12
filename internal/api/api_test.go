@@ -190,6 +190,10 @@ func (f *fakeStore) ListHarnesses(_ context.Context, _ string) ([]store.HarnessR
 	return nil, nil
 }
 
+func (f *fakeStore) ListAgents(_ context.Context, _ string) ([]store.Agent, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) RegisterExtension(_ context.Context, _ extension.Definition) error {
 	return nil
 }

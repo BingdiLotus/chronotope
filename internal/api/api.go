@@ -51,6 +51,7 @@ type Store interface {
 	GetActiveHarness(ctx context.Context, orgID, name string) (*store.HarnessRow, error)
 	EnqueueSteering(ctx context.Context, sessionID, input string) error
 	RegisterExtension(ctx context.Context, ext extension.Definition) error
+	ListAgents(ctx context.Context, orgID string) ([]store.Agent, error)
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)

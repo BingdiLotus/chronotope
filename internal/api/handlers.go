@@ -1017,6 +1017,41 @@ func (h *Handler) getArchive(w http.ResponseWriter, r *http.Request) {
 
 // GET /runs/{runID}/audit —— journal 审计导出（正式版架构 期 1）：
 // 该 run 的事件轨迹（类型序列 = 重放轨迹）+ dedupe 键（幂等证据链）→ ndjson。
+// orgConfig B5：配置自省（composed 树——dump-config 形态；三层分离的
+// 可观测：原语（快照语义）/策略缝（配额）/业务（agents/harnesses/
+// extensions））。
+func (h *Handler) orgConfig(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	org, err := h.Store.GetOrg(r.Context(), orgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, 404, err.Error())
+		return
+	}
+	agents, _ := h.Store.ListAgents(r.Context(), orgID)
+	harnesses, _ := h.Store.ListHarnesses(r.Context(), orgID)
+	extensions, _ := h.Store.ListExtensions(r.Context(), orgID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"org_id": orgID,
+		"layers": map[string]any{
+			// 层 0 原语：快照语义的装配（不可绕过）
+			"primitives": map[string]any{
+				"protocol":     "1.0",
+				"spec_digests": len(agents),
+			},
+			// 层 1 策略缝：配额/预算的可观测
+			"policy": map[string]any{
+				"quotas": org.Quotas,
+			},
+			// 层 2 业务：装配的实体清单
+			"business": map[string]any{
+				"agents":     agents,
+				"harnesses":  harnesses,
+				"extensions": extensions,
+			},
+		},
+	})
+}
+
 // registerExtension B2：扩展包注册（tools/prompts/hooks 的可装配包）。
 func (h *Handler) registerExtension(w http.ResponseWriter, r *http.Request) {
 	var req extension.Definition
