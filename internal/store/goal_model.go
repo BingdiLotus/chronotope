@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/wait"
+	"strings"
 	"time"
 )
 
@@ -178,3 +179,95 @@ const (
 
 // Decision 是 DECIDE 的判定结果（期 7 下沉：core/wait）。
 type Decision = wait.Decision
+
+// B3（能力适配矩阵）：task graph 语义——依赖判定 + 状态机（Pi 的 child
+// tasks 与 Claude 的 todo 的最小语义——M2 的 WorkItem 演进）。
+
+// ListReadyWorkItems 可领取切片（open + 依赖全部 done——依赖解析为逗号
+// 分隔的 ID 列表）。
+func (s *Store) ListReadyWorkItems(ctx context.Context, goalID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT id, description, priority, task_class, dependencies FROM work_items WHERE goal_id = $1 AND status = 'open' ORDER BY priority DESC, created_at LIMIT $2`, goalID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list work items: %w", err)
+	}
+	defer rows.Close()
+	type row struct {
+		id, desc, class, deps string
+		prio                  int
+	}
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.desc, &r.prio, &r.class, &r.deps); err != nil {
+			return nil, fmt.Errorf("store: scan work item: %w", err)
+		}
+		all = append(all, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 依赖判定：deps 全 done 才 ready（空 deps 恒 ready）
+	done := map[string]bool{}
+	var out []map[string]any
+	for _, r := range all {
+		if r.deps == "" {
+			out = append(out, map[string]any{"id": r.id, "description": r.desc, "priority": r.prio, "task_class": r.class, "dependencies": r.deps})
+			continue
+		}
+		ready := true
+		for _, dep := range strings.Split(r.deps, ",") {
+			if dep == "" {
+				continue
+			}
+			if !done[strings.TrimSpace(dep)] {
+				// 惰性查依赖状态
+				var st string
+				if err := s.Pool.QueryRow(ctx, `SELECT status FROM work_items WHERE id = $1`, strings.TrimSpace(dep)).Scan(&st); err != nil || st != "done" {
+					ready = false
+					break
+				}
+			}
+		}
+		if ready {
+			done[r.id] = true
+			out = append(out, map[string]any{"id": r.id, "description": r.desc, "priority": r.prio, "task_class": r.class, "dependencies": r.deps})
+		}
+	}
+	return out, nil
+}
+
+// ClaimWorkItem 领取（open → claimed——依赖校验：未满足拒绝）。
+func (s *Store) ClaimWorkItem(ctx context.Context, id, claimedBy string) error {
+	const q = `
+UPDATE work_items SET status = 'claimed', claimed_by = $2, updated_at = now()
+WHERE id = $1 AND status = 'open'
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest(string_to_array(dependencies, ',')) d(dep)
+    WHERE dep <> ''
+      AND (SELECT status FROM work_items w WHERE w.id = trim(dep)) IS DISTINCT FROM 'done'
+  )`
+	tag, err := s.Pool.Exec(ctx, q, id, claimedBy)
+	if err != nil {
+		return fmt.Errorf("store: claim work item: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("store: claim work item: %w", ErrDispatchClaimLost)
+	}
+	return nil
+}
+
+// CompleteWorkItem 完成（claimed → done + 证据引用）。
+func (s *Store) CompleteWorkItem(ctx context.Context, id, evidenceRef string) error {
+	const q = `UPDATE work_items SET status = 'done', evidence_ref = $2, updated_at = now() WHERE id = $1 AND status = 'claimed'`
+	tag, err := s.Pool.Exec(ctx, q, id, evidenceRef)
+	if err != nil {
+		return fmt.Errorf("store: complete work item: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("store: complete work item: %w", ErrDispatchClaimLost)
+	}
+	return nil
+}
