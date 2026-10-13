@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"strings"
 	"time"
 )
 
@@ -79,6 +80,12 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 		// 审计 #3：重投带不可变 command（input/topic 落 Run 行——丢输入反例关闭）
 		if err := a.Ingress.Call(ctx, "/run_workflow/"+run.ID+"/run", "POST",
 			map[string]any{"session_id": run.SessionID, "input": run.Input, "topic": run.Topic}, &out); err != nil {
+			// 409 already invoked = workflow 已调用（幂等命中——重投
+			// 成功语义；标记完成不再 stale 循环——api 忙的根源修复）
+			if strings.Contains(err.Error(), "already invoked") || strings.Contains(err.Error(), "409") {
+				_ = a.Store.MarkAdmissionDispatched(ctx, run.ID)
+				continue
+			}
 			if a.Logger != nil {
 				a.Logger.Warn("admission recovery redeliver failed", "run_id", run.ID, "err", err)
 			}
