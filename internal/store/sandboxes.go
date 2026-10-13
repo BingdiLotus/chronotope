@@ -264,7 +264,7 @@ func (s *Store) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	// 十期 #2：GC 保留合同——只删非 done/unknown 的 execs（done/unknown
 	// 是恢复的幂等证据——008 的跨沙箱生命周期保留合同；真实 E2B destroy
 	// 500 实证的 FK 已移除——清理不是删除沙箱的必要条件）
-	if _, err := tx.Exec(ctx, `DELETE FROM sandbox_execs WHERE sandbox_id = $1 AND status NOT IN ('done', 'unknown')`, sandboxID); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM sandbox_execs WHERE sandbox_id = $1 AND state NOT IN ('done', 'unknown')`, sandboxID); err != nil {
 		return fmt.Errorf("store: delete sandbox execs: %w", err)
 	}
 	const q = `DELETE FROM sandboxes WHERE sandbox_id = $1`
