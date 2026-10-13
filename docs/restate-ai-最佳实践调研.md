@@ -82,3 +82,48 @@ SDK 集成：Vercel AI / OpenAI Agents / Google ADK / Pydantic AI / LangChain /
 ③ 工具错误的模型决策路由（exec 的非 terminal → 回喂）
 ④（触发式）Rollback 的具体形态 + 可观测生态的 exporter 集成
 ```
+
+
+## 附：restatedev/agent 参考架构调研（2026-10-13 追加）
+
+> [github.com/restatedev/agent](https://github.com/restatedev/agent)——
+> 「A durable AI agent on Restate」的 TypeScript 参考实现（Agent +
+> AgentSession 两个 Virtual Object——与我们的 session_object +
+> run_workflow 等价）。
+
+### 六特性对照（官方核心主张）
+
+| 官方主张 | Chronotope | 判定 |
+|---|---|---|
+| STEERABLE（handle 稳定 + interrupt 传播 subagents） | steering 队列 + cancel | ✅ 部分（interrupt 的「总结已完成」语义待补） |
+| STATEFUL（transcript+profile 的 KV） | PG 会话 | ✅ |
+| RECOVERABLE / PAUSABLE / SCALABLE | restate 同源 | ✅ |
+| CONCURRENT（并行工具 + 共享沙箱连接） | 工具串行 | ⭐ 值得学习（后置——重放确定性） |
+
+### 19 特性表对照（值得学习的新增项）
+
+| 官方特性 | Chronotope | 判定 |
+|---|---|---|
+| Queueing/steering/interruption | A4 + cancel | ✅ 部分 |
+| **Parallel tools** | 串行 | ⭐ 后置（④） |
+| **Background operations（pending tools）**——审批/定时挂起时**模型继续**、稍后等/取消 | awaitApproval **阻塞模型** | ⭐ 值得学习（⑤——与调研①超时降级同族：审批不阻塞模型） |
+| Subagents（follow-up 到同 agent） | child run | ✅ |
+| Guardrails / Human approval | class 分级 + awakeable | ✅ |
+| **Programmatic tool calling（PTC）**——模型写 JS 组合工具、中间数据不进 context | 无 | ⭐ 后置（⑥——新颖形态） |
+| **Tool search**——工具 schema 按需加载 | 全量加载 | ⭐ 后置（⑦） |
+| Memory / Compaction / Schedules / Sandboxes | 分层记忆/consolidation/定时/E2B | ✅ |
+| **Client updates**——long-poll + revision tags + offset 重连 | SSE + offset | ✅ 部分（revision 增量待补） |
+| Extensible tools（MCP + handlers as tools） | MCP | ✅ |
+| **Output recovery**——truncated 重试一次更大输出预算 | truncated 落账（无恢复） | ⭐ 值得学习（⑧） |
+
+### 值得学习的完整清单（合并两次调研——按序）
+
+```
+① 审批超时 + 降级路径（SLA——orTimeout 语义）
+② LLM 重试上限（maxRetryAttempts 成本纪律）
+③ 工具错误 → 模型决策（默认路由）
+⑤ Background operations（审批/定时挂起时模型继续——pending tools
+   ——「审批不阻塞模型」是官方参考架构的核心语义）
+⑧ Output recovery（truncated 重试一次更大预算）
+④/⑥/⑦ 后置（并行工具/PTC/tool search——重放确定性与 context 预算）
++ interrupt 的「总结已完成」语义 + client updates 的 revision 增量
