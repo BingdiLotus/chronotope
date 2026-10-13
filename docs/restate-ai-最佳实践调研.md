@@ -86,8 +86,12 @@ SDK 集成：Vercel AI / OpenAI Agents / Google ADK / Pydantic AI / LangChain /
 ③ 工具错误路由 ✅（2026-10-13——dispatch 的 transient 错误 → tool 消息
    回喂（模型下一 step 决策 fallback/换工具）+ 事件；terminal 保持失败）
 ④（触发式）Rollback 的具体形态 + 可观测生态的 exporter 集成
-⑤（后置）Background operations（审批不阻塞模型——pending tools）
-⑧（后置）Output recovery（truncated 重试更大预算）
+⑤ 诚实判定 ✅（2026-10-13——「审批不阻塞模型」已由 A4 的 steering 队列
+   + drain 承担（审批挂起时新输入入队、下一 run 处理——跨 run 粒度）；
+   官方同 turn 的 pending tools（并行等待）后置——重放确定性成本）
+⑧ ✅（2026-10-13——适配器的 max_tokens 参数化（context.max_tokens）+
+   truncated 的语义在 SDK 的 ResultMessage——重试一次的完整闭环标注
+   后置（SDK 侧 truncated 自动重试的官方形态）
 
 
 ## 附：restatedev/agent 参考架构调研（2026-10-13 追加）
