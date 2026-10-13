@@ -323,7 +323,12 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if lease, err := s.Store.GetLease(r.Context(), req.SandboxID); err == nil && lease != nil && !time.Now().After(lease.ExpiresAt) {
+	// 十期 #3：租约读取错误拒绝——无法确认执行权时不放行（读取失败
+	// = 可重试错误而非授予执行权；旧 owner 的 dispatch 不得借错误绕过）
+	if lease, lErr := s.Store.GetLease(r.Context(), req.SandboxID); lErr != nil {
+		writeError(w, http.StatusServiceUnavailable, 503, "sandbox lease 读取失败（无法确认执行权）")
+		return
+	} else if lease != nil && !time.Now().After(lease.ExpiresAt) {
 		if req.RunID != "" && lease.RunID != req.RunID {
 			writeError(w, http.StatusConflict, 409, "lease holder 不匹配（旧 owner 的 dispatch 被拒）")
 			return

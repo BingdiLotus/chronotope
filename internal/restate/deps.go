@@ -77,6 +77,7 @@ type CallLedger interface {
 	MarkLLMCallDispatched(ctx context.Context, runID string, step int) error
 	PutMCPCallPrepared(ctx context.Context, runID string, step int, server, tool, callKey, requestHash string) (*ledger.MCPCallRow, error)
 	PutMCPCallResult(ctx context.Context, runID string, step int, server, tool, callKey, requestHash, resultJSON, errMsg string, durationMs int64) error
+	ClaimMCPDispatch(ctx context.Context, runID string, step int, server, tool, callKey string) (bool, error)
 	ListPendingSteerings(ctx context.Context, sessionID string, limit int) ([]session.Steering, error)
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	ListCredentials(ctx context.Context, orgID string) ([]credential.Row, error)

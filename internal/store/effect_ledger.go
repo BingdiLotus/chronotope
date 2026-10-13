@@ -261,3 +261,15 @@ func (s *Store) CredentialUsage(ctx context.Context, orgID string) ([]map[string
 	}
 	return out, rows.Err()
 }
+
+// ClaimMCPDispatch A1（十期 #1）：MCP 派发权 CAS——prepared → dispatched
+// 的原子转换（WHERE state='prepared'）；0 行 = 已被他人派发/已有结果——
+// 崩溃恢复不重复外部效果（发送前持久化不可重复取得的派发权）。
+func (s *Store) ClaimMCPDispatch(ctx context.Context, runID string, step int, server, tool, callKey string) (bool, error) {
+	const q = `UPDATE mcp_calls SET state = 'dispatched', dispatched_at = now() WHERE run_id = $1 AND step = $2 AND server = $3 AND tool = $4 AND call_key = $5 AND state = 'prepared'`
+	tag, err := s.Pool.Exec(ctx, q, runID, step, server, tool, nullIfEmpty(callKey))
+	if err != nil {
+		return false, fmt.Errorf("store: mcp dispatch claim: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}

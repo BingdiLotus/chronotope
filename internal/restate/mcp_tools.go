@@ -118,6 +118,20 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 		if row.State == "unknown" {
 			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 unknown 停派发（需人工裁决）"))
 		}
+		if row.State == "dispatched" {
+			// A1（十期 #1）：dispatched 无 receipt——不重派发（对账/人工
+			// 裁决；崩溃于落盘前的恢复不再重复外部效果）
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 账本 dispatched 无接受证据（不重派发——对账/人工裁决）"))
+		}
+		// A1（十期 #1）：派发权 CAS（prepared → dispatched 原子转换）——
+		// 失败 = 已被他人派发/状态已变（不重复外部效果）
+		claimed, cErr := deps.Store.ClaimMCPDispatch(rc, runID, step, server, tool, callKey)
+		if cErr != nil {
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 派发权 CAS 失败: %w", cErr))
+		}
+		if !claimed {
+			return "", restate.ToTerminalError(fmt.Errorf("mcp 派发权已被占用（不重复外部效果——对账/人工裁决）"))
+		}
 		// A2：执行耗时测量（Pi 的 tool_execution_end.durationMs 对应——
 		// 账本的时序维度）
 		mcpStarted := time.Now()
