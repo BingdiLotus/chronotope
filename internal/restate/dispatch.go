@@ -254,9 +254,9 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	// 恢复时「上次为什么停」进 causal slice）
 	_ = deps.Store.RegisterWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id(),
 		fmt.Sprintf("审批请求：%s", tc.Name), "expect=approve|reject")
-	// 审计 5.1（九期）：批准/拒绝/取消/超时解除匹配 handle——awaitApproval 的
-	// 每个返回路径都 ResolveWait（后续调度的 DECIDE 不再被已结束的审批拦截）
-	defer func() { _ = deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id()) }()
+	// 十期 #4：defer 在 SDK SuspensionError 展开栈时执行（挂起即提前解决
+	// ——TTL 扫描找不到）——真实完成路径显式 ResolveWait
+	deferFree := true
 
 	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest, tc.Name); err != nil {
 		// 审计 #8 修复后 GitHub 实证：非 terminal 错误 → SDK 重试 → 新
@@ -279,7 +279,18 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	}
 	result, err := awakeable.Result() // 挂起：零进程占用，直到跨 HTTP resolve
 	if err != nil {
+		// 拒绝/超时/取消的完成路径——显式 ResolveWait（defer 不覆盖挂起）
+		_ = deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id())
 		return "", err
+	}
+	// 批准/正常返回的完成路径——显式 ResolveWait
+	_ = deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id())
+	deferFree = false
+	_ = deferFree
+	// 十期 #5：解冻对称——审批挂起时冻结的沙箱在返回路径解冻（普通
+	// request_approval 与 class 2 门禁同一冻结/恢复合同）
+	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {
+		_ = deps.Executor.UnfreezeSandbox(ctx, state.SandboxID)
 	}
 
 	_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunResumed, "resume", "", map[string]any{
