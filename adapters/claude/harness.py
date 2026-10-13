@@ -33,6 +33,8 @@ def can_use_tool(tool_name, input_data):
     """canUseTool 回调（A-1——class 分级的 SDK 侧执行）：
     class 0 → allow；class 2 → ask（SDK 侧审批——平台 HITL 双层）；
     其余 → allow。"""
+    if tool_name.startswith("mcp:"):
+        return {"permission": "deny", "reason": "MCP 工具经平台 MCP 通道——SDK 侧不执行"}
     if tool_name in CLASS0:
         return {"permission": "allow"}
     if tool_name in CLASS2:
@@ -47,14 +49,16 @@ def sse_frames(body):
         system = next((m.get("content", "") for m in messages if m.get("role") == "system"), "")
         prompt = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
         tools = body.get("tools", [])
+        tools = [t.get("name") if isinstance(t, dict) else t for t in body.get("tools", [])]
+        context = body.get("context") or {}
         opts = ClaudeAgentOptions(
             system_prompt=system,
             model=body.get("model", "claude-sonnet-4-6"),
-            allowed_tools=[t for t in tools if not t.startswith("mcp:")],
-            permission_mode="default",
-            # 官方最佳实践：max_turns 有界——SDK 循环不无限（Chronotope 的
-            # step 语义在平台侧）
+            permission_mode="manual",
+            can_use_tool=can_use_tool,
             max_turns=8,
+            skills=context.get("skills") or [],
+            mcp_servers=context.get("mcp_servers") or {},
         )
         seq = 0
         yield {"type": "beat", "seq": seq, "payload": {}}
@@ -72,20 +76,25 @@ def sse_frames(body):
                             yield {"type": "delta", "seq": seq, "payload": {"text": b.text}}
                         elif bn == "ToolUseBlock":
                             seq += 1
+                            tname = (b.name.lower() if b.name and b.name[0].isupper() else b.name)
+                            tname = {"write": "write_file", "read": "read_file", "edit": "write_file"}.get(tname, tname)
                             # A1：hook 注入的审批上下文（class 2 工具的参数
                             # 摘要——进 HITL digest 的 context 字段，审批者
                             # 可见——官方 hooks 的最佳实践映射）
                             ctx = {}
                             args = getattr(b, "input", {}) or {}
-                            if b.name.lower() in ("bash", "run_python", "write_file", "http_request"):
+                            if isinstance(args, dict) and "file_path" in args and "path" not in args:
+                                args = dict(args)
+                                args["path"] = args.pop("file_path")
+                            if tname in ("bash", "run_python", "write_file", "http_request"):
                                 ctx = {
                                     "hook": "PreToolUse",
-                                    "tool": b.name.lower(),
+                                    "tool": tname,
                                     "risk_note": "class 2 危险工具——参数摘要供审批",
                                     "args_summary": json.dumps(args, ensure_ascii=False)[:500],
                                 }
                             yield {"type": "tool_call", "seq": seq, "payload": {
-                                "id": getattr(b, "id", "t_sdk"), "name": b.name.lower(),
+                                "id": getattr(b, "id", "t_sdk"), "name": tname,
                                 "arguments": args,
                                 "approval_context": ctx or None,
                             }}
