@@ -28,13 +28,13 @@ for i in $(seq 1 30); do
   sleep 1
 done
 AID=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
-  -d '{"name":"snake","config":{"model":"claude-sonnet-4-6","instructions":"你是网页开发者。","tools":["write_file","bash","read_file"],"harness_ref":{"name":"claude-sdk"},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+  -d '{"name":"snake","config":{"model":"claude-sonnet-4-6","instructions":"你是网页开发者。","tools":["write_file","read_file"],"harness_ref":{"name":"claude-sdk"},"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
 # ③ 真实 run：编写贪吃蛇网页（单文件 HTML+JS）
 curl -fsS -m 900 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
   -H "Idempotency-Key: $RUN_ID-1" \
-  -d '{"input":"编写一个贪吃蛇网页游戏，单文件 HTML+JS，用 write_file 保存为 snake.html（仅用 write_file——class 1 默认允许）"}' \
+  -d '{"input":"编写一个贪吃蛇网页游戏，单文件 HTML+JS，用 write_file 保存为 snake.html，然后用 read_file 确认写入"}' \
   -o /tmp/snake-run.out 2>&1 || true
 assert "run 完成（真实 Claude 多轮工具调用）" \
   python3 -c 'import json; d=json.load(open("/tmp/snake-run.out")); assert d["status"]=="completed", d' <<< '{}'

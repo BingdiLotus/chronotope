@@ -19,7 +19,11 @@ import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk import ClaudeAgentOptions, InMemorySessionStore, query
+
+# 官方 session-store（进程级——会话跨 query 持久化；工具结果的会话内
+# 回喂——多轮稳定性的最后一环）
+SESSION_STORE = InMemorySessionStore()
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8010
 MARK = "ClaudeSDK"  # 回复标记（路由证据——e2e 断言用）
@@ -49,9 +53,9 @@ def sse_frames(body):
         tools = [t.get("name") if isinstance(t, dict) else t for t in body.get("tools", [])]
         context = body.get("context") or {}
         opts = ClaudeAgentOptions(
-            session_id=str(uuid.uuid4()),  # 每请求唯一会话（SDK 进程内会话
-            # 需顺序——同会话复用报 already in use；跨请求隔离 + 工具结果
-            # 经 prompt 拼写补偿）
+            session_id=str(uuid.uuid4()),  # 每请求隔离（SDK 子进程的会话
+            # 关闭协调超适配器范围——官方 InMemory store 不跨子进程；工具
+            # 结果经 prompt 拼写补偿）
             system_prompt=system,
             model=body.get("model", "claude-sonnet-4-6"),
             permission_mode="manual",
