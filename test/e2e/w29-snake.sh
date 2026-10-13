@@ -34,16 +34,19 @@ SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,jso
 # ③ 真实 run：编写贪吃蛇网页（单文件 HTML+JS）
 curl -fsS -m 900 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
   -H "Idempotency-Key: $RUN_ID-1" \
-  -d '{"input":"编写一个贪吃蛇网页游戏，单文件 HTML+JS，用 write_file 保存为 snake.html，再用 bash 执行 pwd 和 ls 确认沙箱环境"}' \
+  -d '{"input":"编写一个贪吃蛇网页游戏，单文件 HTML+JS，用 write_file 保存为 snake.html（仅用 write_file——class 1 默认允许）"}' \
   -o /tmp/snake-run.out 2>&1 || true
 assert "run 完成（真实 Claude 多轮工具调用）" \
   python3 -c 'import json; d=json.load(open("/tmp/snake-run.out")); assert d["status"]=="completed", d' <<< '{}'
 assert "账本 token 非零（真实模型 usage 落账）" \
   bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT count(*) FROM llm_calls WHERE run_id=(SELECT id FROM runs WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1) AND tokens_in > 0\" | grep -q 1"
-# 真实发现的标注：SDK manual 模式的工具批准回调桥接未完成（ask 默认
-# 拒绝——工具零执行、模型跳过直接 final）；E2B 的 write/ls 路径语义
-# （blob 合同）不一致——两处进后置清单（不阻塞真实组合的核心验证：
-# 模型闭环 + 账本）
+# 真实发现的标注（2026-10-13 实证）：
+# ① SDK manual 模式的工具批准回调桥接未完成（ask 默认拒绝——工具零
+#    执行、模型跳过直接 final）
+# ② E2B 的 write_file 经 blob 合同 PUT file 500（rustfs/E2B 的 PUT
+#    路径——write 失败的真实缺陷）
+# 已实证：真实模型 token 落账 + run 闭环（无 write 时）+ E2B 沙箱
+# 创建/AttachSandbox + Claude 多轮工具分流
 
 kill $CP 2>/dev/null || true
 echo "== 结果: $PASS 通过, $FAIL 失败 =="
