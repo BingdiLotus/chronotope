@@ -40,13 +40,13 @@ assert "run 完成（真实 Claude 多轮工具调用）" \
   python3 -c 'import json; d=json.load(open("/tmp/snake-run.out")); assert d["status"]=="completed", d' <<< '{}'
 assert "账本 token 非零（真实模型 usage 落账）" \
   bash -c "docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc \"SELECT count(*) FROM llm_calls WHERE run_id=(SELECT id FROM runs WHERE session_id='$SID' ORDER BY created_at DESC LIMIT 1) AND tokens_in > 0\" | grep -q 1"
-# 真实发现的标注（2026-10-13 实证）：
-# ① SDK manual 模式的工具批准回调桥接未完成（ask 默认拒绝——工具零
-#    执行、模型跳过直接 final）
-# ② E2B 的 write_file 经 blob 合同 PUT file 500（rustfs/E2B 的 PUT
-#    路径——write 失败的真实缺陷）
-# 已实证：真实模型 token 落账 + run 闭环（无 write 时）+ E2B 沙箱
-# 创建/AttachSandbox + Claude 多轮工具分流
+# 两缺陷的修复状态（2026-10-13）：
+# ① 批准回调：架构修已落地——工具全交棒平台（can_use_tool 全 deny——
+#    SDK 是推理层/平台是执行层）；多轮交棒实证（step 0 bash → step 1
+#    write_file 的 E2B execute）
+# ② E2B write：connectV2 的 404 → ErrSandboxNotFound 哨兵（恢复链
+#    重建——不 500 循环旧容器）；遗留：多轮 harness 调用的适配器
+#    稳定性（write 后的下一步 unknown——待解）
 
 kill $CP 2>/dev/null || true
 echo "== 结果: $PASS 通过, $FAIL 失败 =="

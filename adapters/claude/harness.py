@@ -33,13 +33,9 @@ def can_use_tool(tool_name, input_data):
     """canUseTool 回调（A-1——class 分级的 SDK 侧执行）：
     class 0 → allow；class 2 → ask（SDK 侧审批——平台 HITL 双层）；
     其余 → allow。"""
-    if tool_name.startswith("mcp:"):
-        return {"permission": "deny", "reason": "MCP 工具经平台 MCP 通道——SDK 侧不执行"}
-    if tool_name in CLASS0:
-        return {"permission": "allow"}
-    if tool_name in CLASS2:
-        return {"permission": "ask", "reason": "class 2 危险工具——SDK 侧审批（平台 HITL 双层取严）"}
-    return {"permission": "allow"}
+    # 工具全部交棒平台（SDK 是推理层、平台是执行层——deny 后 SDK 的
+    # tool_use 块仍交棒；平台执行后结果经下一轮 messages 回喂）
+    return {"permission": "deny", "reason": "工具经平台执行（Chronotope 的 class 分级与账本）"}
 
 
 def sse_frames(body):

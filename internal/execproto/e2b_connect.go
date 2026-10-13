@@ -45,6 +45,11 @@ func (c *HTTPE2BAPI) connectV2(ctx context.Context, sandboxID string) (*ConnectE
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		if resp.StatusCode == http.StatusNotFound {
+			// 沙箱已销毁 → 哨兵（worker 的恢复链清绑定重建——不 500
+			// 循环旧容器；真实组合 e2e 实证）
+			return nil, ErrSandboxNotFound
+		}
 		return nil, fmt.Errorf("e2b: connect v2 status %d: %s", resp.StatusCode, truncateStr(string(raw), 200))
 	}
 	var env ConnectEnv
