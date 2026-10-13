@@ -232,13 +232,25 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		}
 		_ = steerInjected
 		if steerInjected {
+			// 十期 #17：steering 只追加转向输入——保留当前 run 已执行的
+			// assistant/tool 链（不重建——模型不重复操作/误判进度）
+			pending, pErr := deps.Store.ListPendingSteerings(ctx, in.SessionID, 20)
+			_ = pending
+			_ = pErr
 			msgs2, mErr := restate.Run(ctx, func(rc restate.RunContext) ([]runs.Message, error) {
 				return buildMessages(rc, deps.Store, deps.Harness, in, runID, cfg, state.Skills)
 			}, restate.WithName("build-messages-after-steer"))
 			if mErr != nil {
 				return RunOutput{}, restate.ToTerminalError(mErr)
 			}
-			msgs = msgs2
+			// 只追加转向输入（在 msgs2 的尾部新 user 消息——保留 msgs
+			// 的既有工具链）
+			for i := len(msgs2) - 1; i >= 0; i-- {
+				if msgs2[i].Role == "user" {
+					msgs = append(msgs, msgs2[i])
+					break
+				}
+			}
 		}
 		// 取消检查点（评审 #6 非抢占式：每步 harness 调用前检查会话取消标志）
 		stepState, err := deps.Sessions.GetState(ctx, in.SessionID)
@@ -467,7 +479,10 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 					if isTransientLLMError(err.Error()) {
 						content, _ := json.Marshal(map[string]string{"tool_call_id": tc.ID,
 							"content": "工具执行 transient 失败：" + err.Error() + "（请决定重试或换策略）"})
+						// 十期 #7：持久化与运行中消息同路径（msgs 追加——
+						// 下一次 ModelRequest 的协议配对）
 						if aErr := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); aErr == nil {
+							msgs = append(msgs, runs.Message{Role: "tool", Content: string(content), Source: "trusted"})
 							_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
 								"step": step, "id": tc.ID, "name": tc.Name, "transient_error": err.Error(),
 							})

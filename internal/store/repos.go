@@ -292,10 +292,8 @@ ORDER BY id ASC`
 		}
 		out = append(out, m)
 	}
-	// 倒序读回 → 正序返回
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
+	// 十期 #6：SQL 外层已 ORDER BY id ASC——不再反转（反转成倒序——
+	// 模型历史顺序破坏）
 	return out, rows.Err()
 }
 
