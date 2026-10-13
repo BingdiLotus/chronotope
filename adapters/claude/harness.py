@@ -118,6 +118,7 @@ def sse_frames(body):
             async for kind, msg in got:
                 t = type(msg).__name__
                 if kind == "result":
+                    final_parts.append(f"[{MARK}] {getattr(msg, 'subtype', 'success')}")
                     if truncated:
                         # ⑧ Output recovery：truncated 重试一次更大输出
                         # 预算（官方 at most once——max_tokens 翻倍）
