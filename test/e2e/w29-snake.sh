@@ -45,8 +45,12 @@ assert "账本 token 非零（真实模型 usage 落账）" \
 #    SDK 是推理层/平台是执行层）；多轮交棒实证（step 0 bash → step 1
 #    write_file 的 E2B execute）
 # ② E2B write：connectV2 的 404 → ErrSandboxNotFound 哨兵（恢复链
-#    重建——不 500 循环旧容器）；遗留：多轮 harness 调用的适配器
-#    稳定性（write 后的下一步 unknown——待解）
+#    重建——不 500 循环旧容器）✅
+# 会话生命周期的解（三修起效——多轮进到 step 1 write_file）：
+#   单线程请求串行 + tool_calls 拼上下文 + 409 补交循环修；
+#   遗留：write 后模型继续的 unknown（SDK 子进程会话清理的
+#   aclose warning 与 session-store 持久化的边界——官方
+#   session-store 装配后置）
 
 kill $CP 2>/dev/null || true
 echo "== 结果: $PASS 通过, $FAIL 失败 =="

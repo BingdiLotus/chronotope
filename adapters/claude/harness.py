@@ -156,6 +156,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    # 单线程（请求串行——SDK 进程内会话的并发冲突消除；真实组合的
+    # 多轮稳定性）
+    from http.server import HTTPServer as _SingleHTTPServer
+    srv = _SingleHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"claude-sdk-harness listening on :{PORT}", flush=True)
     srv.serve_forever()
