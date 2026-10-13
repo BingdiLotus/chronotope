@@ -461,6 +461,19 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 				slog.Default().Info("runLoop: 工具分流", "run", runID, "step", step, "tool", tc.Name, "id", tc.ID)
 				result, computeSeconds, err := dispatchTool(ctx, deps, in, runID, step, cfg, tc, emit)
 				if err != nil {
+					// 调研③：工具错误的模型决策路由——transient 类错误回喂
+					// tool 消息（模型下一 step 决策 fallback/换工具）；terminal
+					// （审批拒绝/账本冲突/404）保持失败（官方两态语义）
+					if isTransientLLMError(err.Error()) {
+						content, _ := json.Marshal(map[string]string{"tool_call_id": tc.ID,
+							"content": "工具执行 transient 失败：" + err.Error() + "（请决定重试或换策略）"})
+						if aErr := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); aErr == nil {
+							_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
+								"step": step, "id": tc.ID, "name": tc.Name, "transient_error": err.Error(),
+							})
+							continue // 回喂后进入下一 step（模型决策）
+						}
+					}
 					return RunOutput{}, restate.ToTerminalError(
 						fmt.Errorf("dispatch %s (step %d): %w", tc.Name, step, err))
 				}
@@ -611,6 +624,11 @@ func harnessCallClosure(rc restate.RunContext, deps *Deps, runID string, step in
 			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
 		}
 	} else if err != nil {
+		// 调研②：transient（连接/超时/限流）→ 非 terminal（SDK 有限重试
+		// ——官方「LLM calls are costly」的成本纪律：有界而非无限）
+		if isTransientLLMError(err.Error()) {
+			return nil, fmt.Errorf("llm 调用 transient（有限重试）: %w", err)
+		}
 		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), "", credentialRefOf(rc, deps, runID)); lErr != nil {
 			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
 		}
@@ -623,6 +641,19 @@ func requestHashOf(req *runs.Request) string {
 	b, _ := json.Marshal(req)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// isTransientLLMError restate-ai 调研②：LLM 调用的 transient 判定
+// （连接/超时/限流——非 terminal → SDK 有限重试的官方语义；「LLM calls
+// are costly」的成本纪律——terminal 不重试）。
+func isTransientLLMError(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	for _, k := range []string{"connection refused", "connection reset", "dial tcp", "timeout", "429", "rate limit", "temporarily unavailable", "eof"} {
+		if strings.Contains(lower, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // credentialRefOf 凭据服务阶段 ①：run 的凭据引用（bound 冻结的引用名

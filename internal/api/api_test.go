@@ -23,6 +23,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"github.com/bingdilotus/chronotope/internal/events"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
@@ -196,6 +197,14 @@ func (f *fakeStore) RegisterCredential(_ context.Context, _, _, _, _, _ string) 
 
 func (f *fakeStore) ListCredentials(_ context.Context, _ string) ([]store.CredentialRow, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ListExpiredOperatorWaits(_ context.Context, _ time.Duration) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ wait.Kind, _ string) error {
+	return nil
 }
 
 func (f *fakeStore) ListCredentialEvents(_ context.Context, _ string, _ int) ([]map[string]any, error) {

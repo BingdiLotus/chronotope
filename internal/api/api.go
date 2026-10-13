@@ -14,6 +14,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"log/slog"
 	"time"
 
@@ -58,6 +59,8 @@ type Store interface {
 	ListCredentials(ctx context.Context, orgID string) ([]store.CredentialRow, error)
 	RevokeCredential(ctx context.Context, id string) error
 	ListCredentialEvents(ctx context.Context, orgID string, limit int) ([]map[string]any, error)
+	ListExpiredOperatorWaits(ctx context.Context, olderThan time.Duration) ([]map[string]any, error)
+	ResolveWait(ctx context.Context, sessionID string, kind wait.Kind, handle string) error
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)

@@ -59,3 +59,22 @@ func (s *Store) ActiveWaits(ctx context.Context, sessionID string) ([]map[string
 	}
 	return out, rows.Err()
 }
+
+// ListExpiredOperatorWaits 审批超时的过期等待（restate-ai 调研①——
+// operator_input 未解决且超 TTL——SLA 的降级路径）。
+func (s *Store) ListExpiredOperatorWaits(ctx context.Context, olderThan time.Duration) ([]map[string]any, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT session_id, handle, intent FROM session_waits WHERE kind = 'operator_input' AND resolved_at IS NULL AND registered_at < now() - $1::interval`, olderThan.String())
+	if err != nil {
+		return nil, fmt.Errorf("store: expired operator waits: %w", err)
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var sid, handle, intent string
+		if err := rows.Scan(&sid, &handle, &intent); err != nil {
+			return nil, fmt.Errorf("store: scan expired wait: %w", err)
+		}
+		out = append(out, map[string]any{"session_id": sid, "handle": handle, "intent": intent})
+	}
+	return out, rows.Err()
+}

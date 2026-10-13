@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
+	"os"
 	"strings"
 	"time"
 )
@@ -64,6 +66,26 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 				fmt.Sprintf("completed-recover:%s", o.RunID)); err != nil {
 				if a.Logger != nil {
 					a.Logger.Warn("completed 补交失败", "run_id", o.RunID, "err", err)
+				}
+			}
+		}
+	}
+	// restate-ai 调研①：审批超时的 SLA 降级——过期的 operator_input
+	// 等待 → restate resolve 拒绝（approval_timeout 的显式路径）
+	ttl := 3 * time.Hour
+	if v := os.Getenv("APPROVAL_TTL"); v != "" {
+		if d, pErr := time.ParseDuration(v); pErr == nil && d > 0 {
+			ttl = d
+		}
+	}
+	if expired, eErr := a.Store.ListExpiredOperatorWaits(ctx, ttl); eErr == nil {
+		for _, w := range expired {
+			// restate 的 awakeable resolve（拒绝语义——payload 空 = 拒绝）
+			if rErr := a.Ingress.Call(ctx, "/restate/awakeables/"+w["handle"].(string)+"/resolve",
+				"POST", map[string]any{"payload": ""}, nil); rErr == nil {
+				_ = a.Store.ResolveWait(ctx, w["session_id"].(string), wait.OperatorInput, w["handle"].(string))
+				if a.Logger != nil {
+					a.Logger.Warn("approval timeout rejected", "session", w["session_id"], "intent", w["intent"])
 				}
 			}
 		}

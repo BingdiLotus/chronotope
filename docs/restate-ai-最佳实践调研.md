@@ -77,11 +77,17 @@ SDK 集成：Vercel AI / OpenAI Agents / Google ADK / Pydantic AI / LangChain /
 ## 五、分阶段落地（按序）
 
 ```
-① 审批超时（awaitApproval 的 TTL + 降级路径）
-② LLM 重试上限（transient 有界 + unknown 显式停）
-③ 工具错误的模型决策路由（exec 的非 terminal → 回喂）
+① 审批超时 ✅（2026-10-13——ListExpiredOperatorWaits + recovery 周期扫描
+   （APPROVAL_TTL 默认 3h）→ restate resolve 拒绝 + ResolveWait——
+   SLA 的显式降级路径）
+② LLM 重试上限 ✅（2026-10-13——isTransientLLMError 判定（连接/超时/
+   限流/EOF）→ transient 非 terminal（SDK 有限重试的官方成本纪律）；
+   terminal 保持 terminal 不重试）
+③ 工具错误路由 ✅（2026-10-13——dispatch 的 transient 错误 → tool 消息
+   回喂（模型下一 step 决策 fallback/换工具）+ 事件；terminal 保持失败）
 ④（触发式）Rollback 的具体形态 + 可观测生态的 exporter 集成
-```
+⑤（后置）Background operations（审批不阻塞模型——pending tools）
+⑧（后置）Output recovery（truncated 重试更大预算）
 
 
 ## 附：restatedev/agent 参考架构调研（2026-10-13 追加）
