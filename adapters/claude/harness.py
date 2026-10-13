@@ -103,8 +103,37 @@ def sse_frames(body):
         yield {"type": "beat", "seq": seq, "payload": {}}
         final_parts = []
         usage = {}
+        truncated = False
+        async def run_query(qopts):
+            nonlocal usage, truncated
+            async for msg in query(prompt=prompt, options=qopts):
+                t = type(msg).__name__
+                if t == "ResultMessage":
+                    truncated = getattr(msg, "stop_reason", "") == "max_tokens" or bool(getattr(msg, "truncated", False))
+                    yield ("result", msg)
+                    return
+                yield ("msg", msg)
         try:
-            async for msg in query(prompt=prompt, options=opts):
+            got = run_query(opts)
+            async for kind, msg in got:
+                t = type(msg).__name__
+                if kind == "result":
+                    if truncated:
+                        # ⑧ Output recovery：truncated 重试一次更大输出
+                        # 预算（官方 at most once——max_tokens 翻倍）
+                        bigger = opts.max_tokens * 2 if opts.max_tokens else 32768
+                        import dataclasses
+                        opts2 = dataclasses.replace(opts, max_tokens=bigger)
+                        truncated = False
+                        async for kind2, msg2 in run_query(opts2):
+                            if kind2 == "result":
+                                continue
+                            msg = msg2
+                            t = type(msg).__name__
+                            break
+                        if kind2 == "result" and t == "unused":
+                            continue
+                    break
                 t = type(msg).__name__
                 if t == "AssistantMessage":
                     for b in getattr(msg, "content", []) or []:
