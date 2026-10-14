@@ -52,7 +52,7 @@ RETURNING id, seq`
 	// M1 哈希链（P1-4）：prev = 同 session 最新 event_hash；nextSeq =
 	// MAX(seq)+1（seq 进哈希输入——删除中间行再重排可检测）
 	prevHash, nextSeq := "", int64(1)
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(event_hash, ''), COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = $1`, sessionID).Scan(&prevHash, &nextSeq); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT event_hash FROM events WHERE session_id = $1 ORDER BY seq DESC LIMIT 1), ''), COALESCE((SELECT MAX(seq) FROM events WHERE session_id = $1), 0) + 1`, sessionID).Scan(&prevHash, &nextSeq); err != nil {
 		return 0, fmt.Errorf("store: prev hash: %w", err)
 	}
 	eventHash := sha256HexEvent(prevHash, sessionID, nextSeq, typ, payload)
