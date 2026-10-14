@@ -203,8 +203,8 @@ func (f *fakeStore) ListExpiredOperatorWaits(_ context.Context, _ time.Duration)
 	return nil, nil
 }
 
-func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ wait.Kind, _ string) error {
-	return nil
+func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ wait.Kind, _ string) (bool, error) {
+	return true, nil
 }
 
 func (f *fakeStore) ListCredentialEvents(_ context.Context, _ string, _ int) ([]map[string]any, error) {

@@ -204,7 +204,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		// B4：step span（OTEL_EXPORTER=stdout 时导出——事件流的 span 族）
 		stepCtx, stepSpan := observability.Step(context.Background(), "chronotope.step", runID, in.SessionID, step)
 		_ = stepCtx
-		defer stepSpan.End()
+		stepSpan.End() // P2-2：立即 End（循环内 defer 累积污染 trace）
 		// A4：steering drain（Pi 的 follow-up inbox——排队转向在每 step 前
 		// 注入消息历史；消费幂等——journal 重放回放同一 drain 结果）
 		steerInjected, sErr := restate.Run(ctx, func(rc restate.RunContext) (bool, error) {
@@ -562,7 +562,7 @@ func finalizeCompleted(ctx restate.Context, deps *Deps, emit *Emitter, in RunInp
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
-		"tokens_in": accTokens, "compute_seconds": accCompute,
+		"tokens_total": accTokens, "compute_seconds": accCompute,
 	})
 	if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)

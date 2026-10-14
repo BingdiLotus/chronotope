@@ -53,7 +53,7 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 				}
 				// 到点即自己的等待结束——先解决再判定（自己的 timer 不算活跃
 				// 等待——否则自杀判定 wait）
-				_ = deps.Store.ResolveWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx))
+				_, _ = deps.Store.ResolveWait(ctx, in.SessionID, wait.Timer, restate.Key(ctx))
 
 				// M2 DECIDE 先行：先判定本轮是否值得运行（run/wait/quiet——
 				// 定时器到点不再直接等价「必须让 Agent 工作」）；判定 journaled

@@ -60,7 +60,7 @@ type Store interface {
 	RevokeCredential(ctx context.Context, id string) error
 	ListCredentialEvents(ctx context.Context, orgID string, limit int) ([]map[string]any, error)
 	ListExpiredOperatorWaits(ctx context.Context, olderThan time.Duration) ([]map[string]any, error)
-	ResolveWait(ctx context.Context, sessionID string, kind wait.Kind, handle string) error
+	ResolveWait(ctx context.Context, sessionID string, kind wait.Kind, handle string) (bool, error)
 	ListExtensions(ctx context.Context, orgID string) ([]extension.Definition, error)
 	UpsertGoal(ctx context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error)
 	GetGoal(ctx context.Context, id string) (*store.GoalRow, error)

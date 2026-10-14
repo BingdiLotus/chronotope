@@ -256,7 +256,6 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 		fmt.Sprintf("审批请求：%s", tc.Name), "expect=approve|reject")
 	// 十期 #4：defer 在 SDK SuspensionError 展开栈时执行（挂起即提前解决
 	// ——TTL 扫描找不到）——真实完成路径显式 ResolveWait
-	deferFree := true
 
 	if err := deps.Sessions.SetPendingAwakeable(ctx, in.SessionID, awakeable.Id(), digest, tc.Name); err != nil {
 		// 审计 #8 修复后 GitHub 实证：非 terminal 错误 → SDK 重试 → 新
@@ -280,13 +279,15 @@ func awaitApproval(ctx restate.Context, deps *Deps, in RunInput, runID string, s
 	result, err := awakeable.Result() // 挂起：零进程占用，直到跨 HTTP resolve
 	if err != nil {
 		// 拒绝/超时/取消的完成路径——显式 ResolveWait（defer 不覆盖挂起）
-		_ = deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id())
+		if ok, _ := deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id()); !ok {
+			_ = emit.Emit(ctx, in.SessionID, "", 0, event.AuditApprovalDenied, "warn", "", map[string]any{"handle_lost": awakeable.Id()})
+		}
 		return "", err
 	}
 	// 批准/正常返回的完成路径——显式 ResolveWait
-	_ = deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id())
-	deferFree = false
-	_ = deferFree
+	if ok, _ := deps.Store.ResolveWait(ctx, in.SessionID, wait.OperatorInput, awakeable.Id()); !ok {
+		_ = emit.Emit(ctx, in.SessionID, "", 0, event.AuditApprovalDenied, "warn", "", map[string]any{"handle_lost": awakeable.Id()})
+	}
 	// 十期 #5：解冻对称——审批挂起时冻结的沙箱在返回路径解冻（普通
 	// request_approval 与 class 2 门禁同一冻结/恢复合同）
 	if state, sErr := deps.Sessions.GetState(ctx, in.SessionID); sErr == nil && state.SandboxID != "" {

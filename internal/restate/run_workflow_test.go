@@ -139,8 +139,8 @@ func (f *fakeStore) RegisterWait(_ context.Context, _ string, _ store.WaitKind, 
 	return nil
 }
 
-func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ store.WaitKind, _ string) error {
-	return nil
+func (f *fakeStore) ResolveWait(_ context.Context, _ string, _ store.WaitKind, _ string) (bool, error) {
+	return true, nil
 }
 
 func (f *fakeStore) ActiveWaits(_ context.Context, _ string) ([]map[string]any, error) {

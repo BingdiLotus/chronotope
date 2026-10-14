@@ -67,7 +67,7 @@ type SessionRegistry interface {
 	ListWorkspaceFiles(ctx context.Context, sessionID string, limit int) ([]memory.WorkspaceFile, error)
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	RegisterWait(ctx context.Context, sessionID string, kind wait.Kind, handle, intent, expect string) error
-	ResolveWait(ctx context.Context, sessionID string, kind wait.Kind, handle string) error
+	ResolveWait(ctx context.Context, sessionID string, kind wait.Kind, handle string) (bool, error)
 	ActiveWaits(ctx context.Context, sessionID string) ([]map[string]any, error)
 }
 

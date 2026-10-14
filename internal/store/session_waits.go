@@ -19,7 +19,22 @@ const (
 )
 
 // RegisterWait 注册等待（yield 时捕获 intent——为什么停 + 期待条件）。
+// 修正方案 P1-2：纯 INSERT 语义——冲突即 no-op（保持已解决状态；
+// 重放不复活已 resolved 的 wait）。
 func (s *Store) RegisterWait(ctx context.Context, sessionID string, kind WaitKind, handle, intent, expect string) error {
+	const q = `
+INSERT INTO session_waits (session_id, kind, handle, intent, expect, registered_at, resolved_at)
+VALUES ($1, $2, $3, $4, $5, now(), NULL)
+ON CONFLICT (session_id, kind, handle) DO NOTHING`
+	if _, err := s.Pool.Exec(ctx, q, sessionID, string(kind), handle, intent, expect); err != nil {
+		return fmt.Errorf("store: register wait: %w", err)
+	}
+	return nil
+}
+
+// RenewWait 显式复活（同 handle 新一轮等待的调用方——P1-2 拆分：
+// 需要覆盖已解决状态时用此方法，不用 upsert 隐式复活）。
+func (s *Store) RenewWait(ctx context.Context, sessionID string, kind WaitKind, handle, intent, expect string) error {
 	const q = `
 INSERT INTO session_waits (session_id, kind, handle, intent, expect, registered_at, resolved_at)
 VALUES ($1, $2, $3, $4, $5, now(), NULL)
@@ -27,18 +42,20 @@ ON CONFLICT (session_id, kind, handle) DO UPDATE
 SET intent = EXCLUDED.intent, expect = EXCLUDED.expect,
     registered_at = now(), resolved_at = NULL`
 	if _, err := s.Pool.Exec(ctx, q, sessionID, string(kind), handle, intent, expect); err != nil {
-		return fmt.Errorf("store: register wait: %w", err)
+		return fmt.Errorf("store: renew wait: %w", err)
 	}
 	return nil
 }
 
-// ResolveWait 解决等待（条件满足/超时/取消）。
-func (s *Store) ResolveWait(ctx context.Context, sessionID string, kind WaitKind, handle string) error {
+// ResolveWait 解决等待（条件满足/超时/取消）。修正方案 P1-1：返回
+// RowsAffected——「解决成功」与「静默失败」在类型上可区分。
+func (s *Store) ResolveWait(ctx context.Context, sessionID string, kind WaitKind, handle string) (bool, error) {
 	const q = `UPDATE session_waits SET resolved_at = now() WHERE session_id = $1 AND kind = $2 AND handle = $3 AND resolved_at IS NULL`
-	if _, err := s.Pool.Exec(ctx, q, sessionID, string(kind), handle); err != nil {
-		return fmt.Errorf("store: resolve wait: %w", err)
+	tag, err := s.Pool.Exec(ctx, q, sessionID, string(kind), handle)
+	if err != nil {
+		return false, fmt.Errorf("store: resolve wait: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() > 0, nil
 }
 
 // ActiveWaits 活跃等待（DECIDE 的可判定查询——「现在在等什么」）。

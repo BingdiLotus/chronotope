@@ -83,7 +83,9 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 			// restate 的 awakeable resolve（拒绝语义——payload 空 = 拒绝）
 			if rErr := a.Ingress.Call(ctx, "/restate/awakeables/"+w["handle"].(string)+"/resolve",
 				"POST", map[string]any{"payload": ""}, nil); rErr == nil {
-				_ = a.Store.ResolveWait(ctx, w["session_id"].(string), wait.OperatorInput, w["handle"].(string))
+				if resolved, _ := a.Store.ResolveWait(ctx, w["session_id"].(string), wait.OperatorInput, w["handle"].(string)); !resolved && a.Logger != nil {
+					a.Logger.Warn("approval timeout resolve 0 行（handle 失配）", "handle", w["handle"])
+				}
 				if a.Logger != nil {
 					a.Logger.Warn("approval timeout rejected", "session", w["session_id"], "intent", w["intent"])
 				}
