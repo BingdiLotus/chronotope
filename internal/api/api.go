@@ -43,6 +43,7 @@ type Store interface {
 	ListCallsForRun(ctx context.Context, runID string) ([]map[string]any, error)
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	ListEventsWithChain(ctx context.Context, sessionID string, limit int) ([]map[string]any, error)
+	VerifyChain(ctx context.Context, sessionID string) (int64, error)
 	SetAuditHold(ctx context.Context, sessionID string) error
 	ListCompletedWithoutEvent(ctx context.Context, limit int) ([]store.CompletedOrphan, error)
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error)

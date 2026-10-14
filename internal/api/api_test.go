@@ -199,6 +199,10 @@ func (f *fakeStore) ListCredentials(_ context.Context, _ string) ([]store.Creden
 	return nil, nil
 }
 
+func (f *fakeStore) VerifyChain(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeStore) ListExpiredOperatorWaits(_ context.Context, _ time.Duration) ([]map[string]any, error) {
 	return nil, nil
 }

@@ -8,16 +8,22 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bingdilotus/chronotope/internal/core/session"
+	"strconv"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/jackc/pgx/v5"
 )
 
-// sha256HexEvent 事件哈希（M1：sha256(prev_hash || type || payload)——防篡改链）。
-func sha256HexEvent(prevHash string, typ event.Type, payload json.RawMessage) string {
+// sha256HexEvent 事件哈希（修正方案 P1-4：sha256(prevHash || sessionID ||
+// seq || type || payload)——删除中间行再重排可被检测）。
+func sha256HexEvent(prevHash, sessionID string, seq int64, typ event.Type, payload json.RawMessage) string {
 	h := sha256.New()
 	h.Write([]byte(prevHash))
+	h.Write([]byte("|"))
+	h.Write([]byte(sessionID))
+	h.Write([]byte("|"))
+	h.Write([]byte(strconv.FormatInt(seq, 10)))
 	h.Write([]byte("|"))
 	h.Write([]byte(typ))
 	h.Write([]byte("|"))
@@ -43,12 +49,13 @@ RETURNING id, seq`
 		return 0, fmt.Errorf("store: append event begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	// M1 哈希链：prev = 同 session 最新事件的 event_hash；event = sha256(prev||event)
-	prevHash := ""
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(event_hash, '') FROM events WHERE session_id = $1 ORDER BY seq DESC LIMIT 1`, sessionID).Scan(&prevHash); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	// M1 哈希链（P1-4）：prev = 同 session 最新 event_hash；nextSeq =
+	// MAX(seq)+1（seq 进哈希输入——删除中间行再重排可检测）
+	prevHash, nextSeq := "", int64(1)
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(event_hash, ''), COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = $1`, sessionID).Scan(&prevHash, &nextSeq); err != nil {
 		return 0, fmt.Errorf("store: prev hash: %w", err)
 	}
-	eventHash := sha256HexEvent(prevHash, typ, payload)
+	eventHash := sha256HexEvent(prevHash, sessionID, nextSeq, typ, payload)
 	var eventID int64
 	err = tx.QueryRow(ctx, insert, sessionID, nullable(runID), string(typ), payload, dedupeKey, nullIfEmpty(prevHash), eventHash).Scan(&eventID, &seq)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -186,4 +193,30 @@ func (s *Store) SetAuditHold(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("store: audit hold: %w", err)
 	}
 	return nil
+}
+
+// VerifyChain 修正方案 P1-4：顺序读逐行重算比对 prev_hash/event_hash——
+// 返回第一个断裂的 seq（0 = 全链完整）。审计导出接入。
+func (s *Store) VerifyChain(ctx context.Context, sessionID string) (brokenAtSeq int64, err error) {
+	rows, err := s.Pool.Query(ctx, `SELECT seq, prev_hash, event_hash, type, payload FROM events WHERE session_id = $1 ORDER BY seq`, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("store: verify chain: %w", err)
+	}
+	defer rows.Close()
+	prev := ""
+	for rows.Next() {
+		var seq int64
+		var prevHash, eventHash, typ string
+		var payload json.RawMessage
+		if err := rows.Scan(&seq, &prevHash, &eventHash, &typ, &payload); err != nil {
+			return 0, fmt.Errorf("store: scan chain row: %w", err)
+		}
+		wantPrev, wantEvent := "", sha256HexEvent(prevHash, sessionID, seq, event.Type(typ), payload)
+		if prevHash != prev || eventHash != wantEvent || prev != wantPrev {
+			_ = wantPrev
+			return seq, nil
+		}
+		prev = eventHash
+	}
+	return 0, rows.Err()
 }

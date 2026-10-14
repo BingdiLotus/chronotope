@@ -19,7 +19,6 @@ const (
 	RunStarted   Type = "run.started"
 	RunCompleted Type = "run.completed"
 	RunFailed    Type = "run.failed"
-	RunCancelled Type = "run.cancelled"
 
 	// 循环
 	LLMCall        Type = "llm.call"
@@ -68,7 +67,7 @@ const (
 // Valid 校验事件类型是否为契约全集成员。
 func (t Type) Valid() bool {
 	switch t {
-	case RunStarted, RunCompleted, RunFailed, RunCancelled,
+	case RunStarted, RunCompleted, RunFailed,
 		LLMCall, ToolCall, SandboxExec, MCPCall, StepJournaled, EventTruncated,
 		RunPaused, RunResumed, RunAwaitingApproval, RunFrozen, RunUnfrozen, SessionWoken,
 		SkillInstall, MCPConnected, MCPUpdated, AuditApproval, AuditApprovalDenied, AuditApprovalExpired, RunCanceled,

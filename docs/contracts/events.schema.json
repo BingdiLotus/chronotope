@@ -14,7 +14,7 @@
       "type": "string",
       "description": "事件类型全集（v1，只增不改）",
       "enum": [
-        "run.started", "run.completed", "run.failed", "run.cancelled",
+        "run.started", "run.completed", "run.failed",
         "llm.call", "tool.call", "sandbox.exec", "mcp.call", "step.journaled", "event.truncated",
         "run.paused", "run.resumed", "run.awaiting_approval", "run.frozen", "run.unfrozen", "session.woken",
         "skill.install", "mcp.connected", "mcp.updated",

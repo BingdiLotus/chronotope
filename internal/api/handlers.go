@@ -1377,7 +1377,14 @@ func (h *Handler) auditExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "events": rows})
+	// 修正方案 P1-4：平台自己的篡改检测结论（审计消费者拿结论而非裸数据）
+	brokenAt, vErr := h.Store.VerifyChain(r.Context(), sessionID)
+	if vErr != nil {
+		writeError(w, http.StatusInternalServerError, 500, vErr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "events": rows,
+		"chain_verified": brokenAt == 0, "broken_at_seq": brokenAt})
 }
 
 // auditHold M1 法定保留（hold 行不可删——删除策略护栏）。

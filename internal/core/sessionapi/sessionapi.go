@@ -37,7 +37,6 @@ const (
 	RunCompleted        RunStatus = "completed"
 	RunCanceled         RunStatus = "canceled"
 	RunFailed           RunStatus = "failed"
-	RunCancelled        RunStatus = "cancelled"
 )
 
 // ActionName 是 POST /sessions/:id/actions 的动作全集。

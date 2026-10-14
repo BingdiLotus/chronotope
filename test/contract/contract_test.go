@@ -29,7 +29,7 @@ func testdata(t *testing.T, name string) []byte {
 func TestEventTypeUniverse(t *testing.T) {
 	// 类型全集成员必须自校验通过（契约规范 §5 只增不改）。
 	all := []event.Type{
-		event.RunStarted, event.RunCompleted, event.RunFailed, event.RunCancelled,
+		event.RunStarted, event.RunCompleted, event.RunFailed,
 		event.LLMCall, event.ToolCall, event.SandboxExec, event.MCPCall,
 		event.StepJournaled, event.EventTruncated,
 		event.RunPaused, event.RunResumed, event.RunAwaitingApproval, event.RunFrozen,

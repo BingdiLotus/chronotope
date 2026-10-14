@@ -101,7 +101,7 @@ func computeUsage(sessionID string, events []store.EventRow) []store.UsageRow {
 	}
 	for i, ev := range events {
 		switch ev.Type {
-		case event.RunCompleted, event.RunFailed, event.RunCancelled, event.RunCanceled:
+		case event.RunCompleted, event.RunFailed, event.RunCanceled:
 			for j := i - 1; j >= 0; j-- {
 				if events[j].Type == event.RunStarted && events[j].RunID == ev.RunID {
 					dur := ev.At.Sub(events[j].At).Seconds()
@@ -158,7 +158,7 @@ func (a *Aggregator) computeDelta(ctx context.Context, rows []store.EventRow) ([
 	}
 	for _, ev := range rows {
 		switch ev.Type {
-		case event.RunCompleted, event.RunFailed, event.RunCancelled, event.RunCanceled:
+		case event.RunCompleted, event.RunFailed, event.RunCanceled:
 			if started, err := a.Store.RunStartedAt(ctx, ev.RunID); err == nil {
 				dur := ev.At.Sub(started).Seconds()
 				if dur < 0 {
