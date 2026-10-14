@@ -93,14 +93,17 @@ VALUES ($1, $2, $3, $4, $5, 'ready')`, newSessionID, orgID, agentID, parentSessi
 	if _, err := tx.Exec(ctx, `
 INSERT INTO events (session_id, run_id, seq, type, payload, dedupe_key, at)
 SELECT $1, run_id, seq, type, payload, NULL, at
-FROM events WHERE session_id = $2 AND seq <= $3 ORDER BY seq`, newSessionID, parentSessionID, atSeq); err != nil {
+FROM events WHERE session_id = $2 AND seq <= $3
+  AND type NOT IN ('llm.call', 'sandbox.exec')  -- 十期 #11：继承时间轴
+  -- 不复制计量类事件（聚合器按真实 operation 唯一消费——不重复计费）
+ORDER BY seq`, newSessionID, parentSessionID, atSeq); err != nil {
 		return fmt.Errorf("store: fork events: %w", err)
 	}
 	// 消息前缀复制（对话真相的投影；id 重置）
 	if _, err := tx.Exec(ctx, `
 INSERT INTO messages (session_id, run_id, step, role, content, created_at)
 SELECT $1, run_id, step, role, content, created_at
-FROM messages WHERE session_id = $2 ORDER BY id`, newSessionID, parentSessionID); err != nil {
+FROM messages WHERE session_id = $2 AND id <= $3 ORDER BY id`, newSessionID, parentSessionID, atSeq); err != nil {
 		return fmt.Errorf("store: fork messages: %w", err)
 	}
 	// 工作区索引复制（期 2 遗留 #1：fork 空间面写时复制——分支会话的沙箱从

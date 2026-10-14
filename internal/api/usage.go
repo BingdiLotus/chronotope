@@ -141,12 +141,17 @@ func computeUsage(sessionID string, events []store.EventRow) []store.UsageRow {
 // computeDelta 纯增量：本批新事件 → usage 增量行。活跃秒跨度经 RunStartedAt
 // 查起始时间（run.started 可能在水位之前——增量语义下不回放旧事件）。
 func (a *Aggregator) computeDelta(ctx context.Context, rows []store.EventRow) ([]store.UsageRow, error) {
-	buckets := map[time.Time]*store.UsageRow{}
+	// 十期 #8：聚桶身份必须含 (session_id, bucket)——跨会话/org 串计修复
+	type bucketKey struct {
+		session string
+		bucket  time.Time
+	}
+	buckets := map[bucketKey]*store.UsageRow{}
 	getBucket := func(sessionID string, at time.Time) *store.UsageRow {
-		key := at.Truncate(usageBucketDuration)
+		key := bucketKey{session: sessionID, bucket: at.Truncate(usageBucketDuration)}
 		u, ok := buckets[key]
 		if !ok {
-			u = &store.UsageRow{SessionID: sessionID, Bucket: key}
+			u = &store.UsageRow{SessionID: sessionID, Bucket: key.bucket}
 			buckets[key] = u
 		}
 		return u

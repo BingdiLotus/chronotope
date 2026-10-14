@@ -51,12 +51,19 @@ FROM events WHERE id > $1 ORDER BY id LIMIT $2`
 	}
 	defer rows.Close()
 	var out []EventRow
+	var lastID int64
 	for rows.Next() {
 		var e EventRow
 		if err := rows.Scan(&e.ID, &e.SessionID, &e.RunID, &e.Seq, &e.Type, &e.Payload, &e.At); err != nil {
 			return nil, fmt.Errorf("store: scan event: %w", err)
 		}
+		// 十期 #9：连续前缀判定——bigserial 的 gap = 未提交事务（序列
+		// 分配序 ≠ 提交序）——gap 后的事件留待下轮（晚提交不漏计）
+		if lastID > 0 && e.ID != lastID+1 {
+			break
+		}
 		out = append(out, e)
+		lastID = e.ID
 	}
 	return out, rows.Err()
 }

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // CommandRunner 是 docker CLI 的薄封装（单测注入 fake；生产为 os/exec 实现）。
@@ -225,7 +226,10 @@ func (d *DockerDriver) Unfreeze(ctx context.Context, sandboxID string) error {
 // 评审 #7：named volume 不进 commit——必须显式打包卷内容，ref 编码
 // "镜像|卷 tar 路径"（恢复时拆解）。
 func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, error) {
-	img := "chronotope-snap:" + sandboxID
+	// 十期 #12：快照产物不可变身份——时间戳后缀（同一沙箱多次快照不
+	// 覆写旧 checkpoint 产物；恢复按 ref 的 digest 校验）
+	gen := time.Now().UnixNano()
+	img := fmt.Sprintf("chronotope-snap:%s-%d", sandboxID, gen)
 	if out, err := d.Runner.Run(ctx, "commit", sandboxID, img); err != nil {
 		return "", fmt.Errorf("docker commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -244,7 +248,7 @@ func (d *DockerDriver) Snapshot(ctx context.Context, sandboxID string) (string, 
 	if err := os.MkdirAll(snapDir, 0o755); err != nil {
 		return "", err
 	}
-	tarPath := filepath.Join(snapDir, "volume.tar")
+	tarPath := filepath.Join(snapDir, fmt.Sprintf("volume-%d.tar", gen))
 	if out, err := d.Runner.Run(ctx, "run", "--rm",
 		"--volumes-from", sandboxID,
 		"-v", snapDir+":/backup",
