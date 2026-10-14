@@ -217,8 +217,8 @@ func TestDockerSnapshotIncludesVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if !strings.Contains(ref, "chronotope-snap:sb_1|") || !strings.HasSuffix(ref, "/sb_1/volume.tar") {
-		t.Fatalf("ref 应编码镜像|卷tar: %q", ref)
+	if !strings.Contains(ref, "chronotope-snap:sb_1-") || !strings.Contains(ref, "/sb_1/volume-") && strings.HasSuffix(ref, ".tar") {
+		t.Fatalf("ref 应编码镜像|卷tar（时间戳后缀的不可变身份）: %q", ref)
 	}
 	var sawCommit, sawTar bool
 	for _, c := range r.calls {
@@ -239,7 +239,7 @@ func TestDockerRestoreUntarsVolume(t *testing.T) {
 	r := newFakeRunner()
 	d := NewDockerDriver(r, "/tmp/ws")
 	_, err := d.CreateSandbox(context.Background(), CreateSandboxRequest{
-		Image: "python:3.11", RestoreFrom: "chronotope-snap:sb_1|/tmp/ws/sb_1/volume.tar",
+		Image: "python:3.11", RestoreFrom: "chronotope-snap:sb_1-/tmp/ws/sb_1/volume.tar",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
