@@ -57,10 +57,17 @@ func schedulerDef(deps *Deps) restate.ServiceDefinition {
 
 				// M2 DECIDE 先行：先判定本轮是否值得运行（run/wait/quiet——
 				// 定时器到点不再直接等价「必须让 Agent 工作」）；判定 journaled
-				// ——「不作为的可问责性」（每次不运行都有依据与记录）
-				decision := wait.Decision{Hint: wait.HintRun, Reason: "no policy"}
-				if deps.SchedulerPolicy != nil {
-					decision = deps.SchedulerPolicy.Decide(ctx, in.SessionID)
+				// 十期 #15：DECIDE 冻结进 journal（restate.Run——重放回放
+				// 同一决策结果；「不作为的可问责性」的判定不随状态漂移）
+				decision, dErr := restate.Run(ctx, func(rc restate.RunContext) (wait.Decision, error) {
+					d := wait.Decision{Hint: wait.HintRun, Reason: "no policy"}
+					if deps.SchedulerPolicy != nil {
+						d = deps.SchedulerPolicy.Decide(rc, in.SessionID)
+					}
+					return d, nil
+				}, restate.WithName("scheduler-decide"))
+				if dErr != nil {
+					return ScheduleOutput{}, restate.ToTerminalError(dErr)
 				}
 				emit := &Emitter{Store: deps.Store}
 				_ = emit.Emit(ctx, in.SessionID, "", 0, event.SchedulerDecide, "decide", restate.Key(ctx), map[string]any{

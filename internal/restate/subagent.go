@@ -53,7 +53,9 @@ func dispatchSubagent(ctx restate.Context, deps *Deps, in RunInput, runID string
 		if err := deps.Store.CreateSession(rc, childSessionID, parent.OrgID, agentID); err != nil {
 			return nil, err
 		}
-		if _, err := deps.Store.CreateRun(rc, childRunID, childSessionID,
+		// 十期 #14：子任务的完整不可变 command（input/topic 落库——恢复
+		// 不丢原任务；background 的 recovery 按行中 input 提交）
+		if _, err := deps.Store.CreateRunWithCommand(rc, childRunID, childSessionID, input, "subagent",
 			json.RawMessage(`{"trigger":"subagent","parent_run_id":"`+runID+`"}`),
 			map[string]any{"model": agent.Config.Model, "agent_id": agentID,
 				"ownership": ownership}); err != nil {

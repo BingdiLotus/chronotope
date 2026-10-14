@@ -60,6 +60,7 @@ type SessionRegistry interface {
 	GetAgent(ctx context.Context, agentID string) (*session.Agent, error)
 	CreateSession(ctx context.Context, id, orgID, agentID string) error
 	CreateRun(ctx context.Context, id, sessionID string, trigger json.RawMessage, bound map[string]any) (bool, error)
+	CreateRunWithCommand(ctx context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (bool, error)
 	UpdateRunStatus(ctx context.Context, runID string, status sessionapi.RunStatus) error
 	FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error
 	GetSandboxBySession(ctx context.Context, sessionID string) (*sandbox.SandboxRow, error)

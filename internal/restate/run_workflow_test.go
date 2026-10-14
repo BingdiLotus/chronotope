@@ -176,6 +176,10 @@ func (f *fakeStore) ConsumeSteerings(_ context.Context, _ string, _ []int64) err
 	return nil
 }
 
+func (f *fakeStore) CreateRunWithCommand(_ context.Context, _, _, _, _ string, _ json.RawMessage, _ map[string]any) (bool, error) {
+	return true, nil
+}
+
 func (f *fakeStore) ClaimMCPDispatch(_ context.Context, _ string, _ int, _, _, _ string) (bool, error) {
 	return true, nil
 }

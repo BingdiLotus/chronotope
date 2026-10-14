@@ -96,10 +96,20 @@ func (d *E2BDriver) Execute(ctx context.Context, req ExecuteRequest, log io.Writ
 	var exit int
 	var err error
 	if d.API.IsOfficial() {
-		// 官方云：命令执行走 envd ConnectRPC（REST 无 commands 端点——诊断实证）
-		stdout, stderr, exit, err = d.API.StartProcess(ctx, req.SandboxID, req.Input)
+		// 十期 #13：统一工具执行语义——按工具名构造执行器（run_python
+		// 的源码/list_files 的路径不被当 shell 命令）
+		cmd := req.Input
+		switch req.Name {
+		case "run_python":
+			cmd = "python3 -c " + shellQuote(req.Input)
+		case "list_files":
+			cmd = "ls -la " + shellQuote(req.Input)
+		}
+		stdout, stderr, exit, err = d.API.StartProcess(ctx, req.SandboxID, cmd)
 		if exit != 0 && err == nil {
-			err = fmt.Errorf("e2b: process exit %d: %s%s", exit, stdout, truncateStr(stderr, 500))
+			// 十期 #13：确定非零退出 = 正常 ExecuteResult（与 Docker 同
+			// 合同——exit 字段落账）——非传输/执行错误
+			err = nil
 		}
 	} else {
 		stdout, stderr, exit, err = d.API.RunCommand(ctx, req.SandboxID, req.Input, "", d.Timeout.Milliseconds())
