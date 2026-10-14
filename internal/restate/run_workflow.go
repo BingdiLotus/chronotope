@@ -309,9 +309,11 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			return deps.Store.MCPToolAllowed(ctx, sess.OrgID, server, tool)
 		})
 		if mcpErr != nil {
-			_ = emit.Emit(ctx, in.SessionID, runID, step, event.EventTruncated, "mcp", "tools", map[string]any{
-				"step": step, "error": mcpErr.Error(),
-			}) // 降级：该 server 工具本步不可用，不阻断 run
+			// 修正方案 P1-6：维度用错误指纹（同错误幂等、不同错误可
+			// 区分——同会话第二次 MCP 降级不被 dedupe 吞）
+			_ = emit.Emit(ctx, in.SessionID, runID, step, event.EventTruncated, "mcp",
+				fmt.Sprintf("tools:%x", sha256.Sum256([]byte(mcpErr.Error()))),
+				map[string]any{"step": step, "error": mcpErr.Error()}) // 降级：该 server 工具本步不可用，不阻断 run
 		} else {
 			stepTools = append(stepTools, mcpTools...)
 		}
@@ -538,7 +540,15 @@ func failRun(ctx context.Context, emit *Emitter, st Store, sessionID, runID stri
 	}); eErr != nil {
 		slog.Default().Warn("run.failed 事件发射失败", "run", runID, "err", eErr)
 	}
-	if uErr := st.UpdateRunStatus(ctx, runID, sessionapi.RunFailed); uErr != nil {
+	// 修正方案 P1-5：终态写 journaled（重放回放同一 UPDATE——补偿动作
+	// 不重复执行外部效果）
+	if rctx, ok := ctx.(restate.Context); ok {
+		if _, uErr := restate.Run(rctx, func(rc2 restate.RunContext) (struct{}, error) {
+			return struct{}{}, st.UpdateRunStatus(rc2, runID, sessionapi.RunFailed)
+		}, restate.WithName(StepName("fail", step, runID))); uErr != nil {
+			slog.Default().Warn("run 终态写失败", "run", runID, "err", uErr)
+		}
+	} else if uErr := st.UpdateRunStatus(ctx, runID, sessionapi.RunFailed); uErr != nil {
 		slog.Default().Warn("run 终态写失败", "run", runID, "err", uErr)
 	}
 	if detail != "" {

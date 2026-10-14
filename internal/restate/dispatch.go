@@ -45,6 +45,13 @@ func sandboxGone(err error) bool {
 	return strings.Contains(s, "sandbox not found") || strings.Contains(s, "sandbox destroyed")
 }
 
+// leaseExpired 修正方案 P0-3：租约过期判定（与 in-flight/holder 不匹配
+// 区分——三者同为 409；lease expired 意味着沙箱仍在运行——恢复链在其
+// 最重要场景「会话休眠超 TTL」里断了）
+func leaseExpired(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "sandbox lease expired")
+}
+
 // execWithSandboxRecovery 执行沙箱操作；沙箱不存在（已销毁/回收）→ 清绑定 +
 // 重建（快照恢复路径）→ 重试一次（评审 #7「一周前会话今天还能继续」的机制）。
 func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg sessionapi.AgentConfig, fn func(sandboxID string) error) error {
@@ -158,7 +165,7 @@ func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, st
 			_, wErr := restate.Run(ctx, func(rc restate.RunContext) (string, error) {
 				// TerminalError 包装（#2 修复纪律：裸错误 → Infinite 重试循环）
 				if e := deps.Executor.WriteFile(rc, sandboxID, path, content); e != nil {
-					if sandboxGone(e) {
+					if sandboxGone(e) || leaseExpired(e) {
 						return "", restate.ToTerminalError(e, restate.WithErrorCode(404))
 					}
 					return "", restate.ToTerminalError(e)

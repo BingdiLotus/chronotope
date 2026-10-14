@@ -125,7 +125,9 @@ func resolveApproval(ctx restate.Context, deps *Deps, in WebhookResolveInput) (s
 		"action_digest": in.ActionDigest, "legacy": false,
 		"decision": approvalGranted(in.Payload),
 	})
-	if _, err := deps.Store.AppendEvent(ctx, run.SessionID, in.RunID, event.AuditApproval, audit, run.SessionID+":audit:approval:"+in.RunID); err != nil {
+	// 修正方案 P1-6：键加决议维度（同 run 内第二次审批不留痕的修复）
+	if _, err := deps.Store.AppendEvent(ctx, run.SessionID, in.RunID, event.AuditApproval, audit,
+		run.SessionID+":audit:approval:"+in.RunID+":"+fmt.Sprint(approvalGranted(in.Payload))); err != nil {
 		return "", err
 	}
 	return "resolved", nil

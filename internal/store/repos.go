@@ -221,7 +221,8 @@ func (s *Store) UpdateRunStatus(ctx context.Context, id string, status sessionap
 UPDATE runs SET status = $2,
   started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
   finished_at = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END
-WHERE id = $1`
+WHERE id = $1
+  AND (status NOT IN ('completed','failed','canceled','cancelled') OR status = $2)`
 	if _, err := s.Pool.Exec(ctx, q, id, string(status)); err != nil {
 		return fmt.Errorf("store: update run status: %w", err)
 	}
