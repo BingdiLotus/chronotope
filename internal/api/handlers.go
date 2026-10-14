@@ -974,10 +974,23 @@ func (h *Handler) archiveSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, 503, "archive 未启用（无 S3 配置）")
 		return
 	}
-	events, err := h.Store.ListEvents(r.Context(), sessionID, 0, 100000)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
+	// 十期 #16：分页导出（不再静默截断——events 按 afterSeq 循环、
+	// messages 按 id 分页到全部）
+	var events []store.EventRow
+	for afterSeq := int64(0); ; {
+		batch, lErr := h.Store.ListEvents(r.Context(), sessionID, afterSeq, 500)
+		if lErr != nil {
+			writeError(w, http.StatusInternalServerError, 500, lErr.Error())
+			return
+		}
+		if len(batch) == 0 {
+			break
+		}
+		events = append(events, batch...)
+		afterSeq = batch[len(batch)-1].Seq
+		if len(batch) < 500 {
+			break
+		}
 	}
 	messages, err := h.Store.ListMessages(r.Context(), sessionID, 100000)
 	if err != nil {
