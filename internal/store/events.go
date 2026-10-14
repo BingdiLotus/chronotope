@@ -61,7 +61,13 @@ RETURNING id, seq`
 	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT event_hash FROM events WHERE session_id = $1 ORDER BY seq DESC LIMIT 1), ''), COALESCE((SELECT MAX(seq) FROM events WHERE session_id = $1), 0) + 1`, sessionID).Scan(&prevHash, &nextSeq); err != nil {
 		return 0, fmt.Errorf("store: prev hash: %w", err)
 	}
-	eventHash := sha256HexEvent(prevHash, sessionID, nextSeq, typ, payload)
+	// P1-4 规范化修：payload 是 jsonb（PG 重排键序/格式）——哈希输入用
+	// PG 的规范化文本（与导出的 payload::text 同源——重算一致）
+	normPayload := payload
+	if err := tx.QueryRow(ctx, `SELECT $1::jsonb::text`, string(payload)).Scan(&normPayload); err == nil {
+		normPayload = json.RawMessage(normPayload)
+	}
+	eventHash := sha256HexEvent(prevHash, sessionID, nextSeq, typ, normPayload)
 	var eventID int64
 	err = tx.QueryRow(ctx, insert, sessionID, nullable(runID), string(typ), payload, dedupeKey, nullIfEmpty(prevHash), eventHash).Scan(&eventID, &seq)
 	if errors.Is(err, pgx.ErrNoRows) {
