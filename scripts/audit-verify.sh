@@ -9,9 +9,14 @@ d = json.load(open(sys.argv[1]))
 events = d["events"]
 prev = ""
 ok = 0
+sid = d.get("session_id", "")
 for e in events:
     h = hashlib.sha256()
     h.update(prev.encode())
+    h.update(b"|")
+    h.update(sid.encode())
+    h.update(b"|")
+    h.update(str(e["seq"]).encode())
     h.update(b"|")
     h.update(e["type"].encode())
     h.update(b"|")
