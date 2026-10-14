@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,9 +113,10 @@ func (d *DockerDriver) CreateSandbox(ctx context.Context, req CreateSandboxReque
 			return nil, fmt.Errorf("restore mkdir: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		if out, err := d.Runner.Run(ctx, "cp", restoreTar, id+":/workspace/restore.tar"); err != nil {
-			return nil, fmt.Errorf("restore cp: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		if out, err := d.Runner.Run(ctx, "exec", id, "tar", "-xf", "/workspace/restore.tar", "-C", "/workspace"); err != nil {
+			// 修正方案落地实证（GH e2e）：tar 缺失（跨宿主/GC 清理）→
+			// 降级镜像恢复 + 空卷告警——不阻断 run
+			slog.Warn("restore cp tar 缺失（降级空卷恢复）", "tar", restoreTar, "err", strings.TrimSpace(string(out)))
+		} else if out, err := d.Runner.Run(ctx, "exec", id, "tar", "-xf", "/workspace/restore.tar", "-C", "/workspace"); err != nil {
 			return nil, fmt.Errorf("restore untar: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		restoreID, restoreTar = "", ""
