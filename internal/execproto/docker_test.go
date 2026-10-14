@@ -250,7 +250,7 @@ func TestDockerRestoreUntarsVolume(t *testing.T) {
 		if strings.Contains(s, "chronotope-snap:sb_1") && strings.Contains(s, "infinity") {
 			sawImage = true
 		}
-		if c[0] == "cp" && strings.HasSuffix(c[1], "/sb_1/volume.tar") {
+		if c[0] == "cp" && strings.Contains(c[1], "/sb_1/volume-") {
 			sawCp = true
 		}
 		if c[0] == "exec" && strings.Contains(strings.Join(c, " "), "tar -xf /workspace/restore.tar") {
