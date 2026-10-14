@@ -198,7 +198,7 @@ func (s *Store) SetAuditHold(ctx context.Context, sessionID string) error {
 // VerifyChain 修正方案 P1-4：顺序读逐行重算比对 prev_hash/event_hash——
 // 返回第一个断裂的 seq（0 = 全链完整）。审计导出接入。
 func (s *Store) VerifyChain(ctx context.Context, sessionID string) (brokenAtSeq int64, err error) {
-	rows, err := s.Pool.Query(ctx, `SELECT seq, prev_hash, event_hash, type, payload FROM events WHERE session_id = $1 ORDER BY seq`, sessionID)
+	rows, err := s.Pool.Query(ctx, `SELECT seq, COALESCE(prev_hash, ''), COALESCE(event_hash, ''), type, payload FROM events WHERE session_id = $1 ORDER BY seq`, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("store: verify chain: %w", err)
 	}
