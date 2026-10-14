@@ -239,7 +239,7 @@ func TestDockerRestoreUntarsVolume(t *testing.T) {
 	r := newFakeRunner()
 	d := NewDockerDriver(r, "/tmp/ws")
 	_, err := d.CreateSandbox(context.Background(), CreateSandboxRequest{
-		Image: "python:3.11", RestoreFrom: "chronotope-snap:sb_1-/tmp/ws/sb_1/volume.tar",
+		Image: "python:3.11", RestoreFrom: "chronotope-snap:sb_1-123||/tmp/ws/sb_1/volume-123.tar",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
