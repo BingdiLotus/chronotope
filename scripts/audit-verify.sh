@@ -10,13 +10,14 @@ events = d["events"]
 prev = ""
 ok = 0
 sid = d.get("session_id", "")
+pos = 1
 for e in events:
     h = hashlib.sha256()
     h.update(prev.encode())
     h.update(b"|")
     h.update(sid.encode())
     h.update(b"|")
-    h.update(str(e["seq"]).encode())
+    h.update(str(pos).encode())  # 链序 = 会话内行序（seq 是全局序列有大 gap）
     h.update(b"|")
     h.update(e["type"].encode())
     h.update(b"|")
@@ -29,6 +30,7 @@ for e in events:
         print(f"链断裂 @seq {e['seq']}: prev 期望 {prev} 实 {e.get('prev_hash','')} / hash 期望 {want} 实 {e.get('event_hash','')}")
         sys.exit(1)
     prev = want
+    pos += 1
     ok += 1
 print(f"链验证通过：{ok} 条事件，末 hash {prev}")
 PYEOF
