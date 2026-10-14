@@ -49,6 +49,12 @@ RETURNING id, seq`
 		return 0, fmt.Errorf("store: append event begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// P1-4 并发修：会话级 advisory lock——nextSeq 预计算与 INSERT 的 seq
+	// 分配在锁内原子（并发插入的哈希 seq 与实际 seq 一致——CI 全量实证
+	// 的链断裂根因）
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, sessionID); err != nil {
+		return 0, fmt.Errorf("store: append event lock: %w", err)
+	}
 	// M1 哈希链（P1-4）：prev = 同 session 最新 event_hash；nextSeq =
 	// MAX(seq)+1（seq 进哈希输入——删除中间行再重排可检测）
 	prevHash, nextSeq := "", int64(1)
