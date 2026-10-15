@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/commitment"
 )
@@ -33,7 +35,7 @@ func TestCommitmentLifecycle(t *testing.T) {
 	s.Pool.Exec(ctx, `INSERT INTO agents (id, org_id, name, config, version) VALUES ($1, 'org-probe', 'probe', '{}', 1) ON CONFLICT DO NOTHING`, agentID)
 	s.Pool.Exec(ctx, `INSERT INTO sessions (id, org_id, agent_id, status) VALUES ('s_commit_probe', 'org-probe', $1, 'ready') ON CONFLICT DO NOTHING`, agentID)
 	s.Pool.Exec(ctx, `INSERT INTO runs (id, session_id, trigger, status, bound) VALUES ('r_probe', 's_commit_probe', '{}', 'running', '{}') ON CONFLICT DO NOTHING`, agentID)
-	intent := CommitIntent{ID: "c_probe_1", AgentID: agentID, MadeInThread: "s_commit_probe", Content: "我明天给你答复", SpeechAct: "commissive"}
+	intent := CommitIntent{ID: fmt.Sprintf("c_probe_%d", time.Now().UnixNano()), AgentID: agentID, MadeInThread: "s_commit_probe", Content: "我明天给你答复", SpeechAct: "commissive"}
 	row, err := s.PutCommitIntent(ctx, intent)
 	if err != nil {
 		t.Fatalf("put: %v", err)
