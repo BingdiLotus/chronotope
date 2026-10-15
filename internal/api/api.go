@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bingdilotus/chronotope/internal/core/commitment"
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
@@ -44,6 +45,9 @@ type Store interface {
 	AdmissionState(ctx context.Context, runID string) (string, error)
 	ListEventsWithChain(ctx context.Context, sessionID string, limit int) ([]map[string]any, error)
 	VerifyChain(ctx context.Context, sessionID string) (int64, error)
+	ListStalePendingCommitments(ctx context.Context, olderThan string, limit int) ([]store.CommitRow, error)
+	ListExpiredCommitments(ctx context.Context, now string, limit int) ([]store.CommitRow, error)
+	TransitionCommit(ctx context.Context, id string, from, to commitment.State) (bool, error)
 	SetAuditHold(ctx context.Context, sessionID string) error
 	ListCompletedWithoutEvent(ctx context.Context, limit int) ([]store.CompletedOrphan, error)
 	AppendEvent(ctx context.Context, sessionID, runID string, typ event.Type, payload json.RawMessage, dedupeKey string) (int64, error)

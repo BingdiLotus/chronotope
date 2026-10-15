@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/bingdilotus/chronotope/internal/core/event"
-	"github.com/bingdilotus/chronotope/internal/core/wait"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/bingdilotus/chronotope/internal/core/commitment"
+	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/wait"
 )
 
 // AdmissionRecovery 接纳屏障恢复（评审 #6）：api 崩溃窗口内「run 行已建但
@@ -89,6 +91,30 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 				if a.Logger != nil {
 					a.Logger.Warn("approval timeout rejected", "session", w["session_id"], "intent", w["intent"])
 				}
+			}
+		}
+	}
+	// 承诺原语（修正版 §2.4 骨架）：反向 reconciler——pending 超时 →
+	// orphaned（前向孤儿有状态可寻址）；due_at 过期 → expired
+	commitTTL := 30 * time.Minute // pending 的发送确认超时（与发送重试窗口对齐）
+	if v := os.Getenv("COMMITMENT_PENDING_TTL"); v != "" {
+		if d, pErr := time.ParseDuration(v); pErr == nil && d > 0 {
+			commitTTL = d
+		}
+	}
+	if stale, cErr := a.Store.ListStalePendingCommitments(ctx, time.Now().Add(-commitTTL).Format(time.RFC3339), 100); cErr == nil {
+		for _, c := range stale {
+			ok, _ := a.Store.TransitionCommit(ctx, c.ID, commitment.StatePending, commitment.StateOrphaned)
+			if ok && a.Logger != nil {
+				a.Logger.Warn("commitment orphaned（发送确认超时）", "id", c.ID, "agent", c.AgentID)
+			}
+		}
+	}
+	if expired, eErr := a.Store.ListExpiredCommitments(ctx, time.Now().Format(time.RFC3339), 100); eErr == nil {
+		for _, c := range expired {
+			ok, _ := a.Store.TransitionCommit(ctx, c.ID, commitment.StateOpen, commitment.StateExpired)
+			if ok && a.Logger != nil {
+				a.Logger.Warn("commitment expired（due_at 已过无兑现证据）", "id", c.ID, "agent", c.AgentID)
 			}
 		}
 	}

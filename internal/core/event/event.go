@@ -28,6 +28,14 @@ const (
 	StepJournaled  Type = "step.journaled"
 	EventTruncated Type = "event.truncated"
 
+	// 承诺原语（修正版 §2.1）——agent 对外义务的一等实体
+	AgentCommitted        Type = "agent.committed"         // 创建承诺（INTENT——pending）
+	AgentCommitmentKept   Type = "agent.commitment_kept"   // 兑现
+	AgentCommitmentBroken Type = "agent.commitment_broken" // 违约
+
+	// 承诺 gate fail-open 的 warning（§2.3——事后核对用）
+	Warning Type = "warning"
+
 	// 控制
 	RunPaused           Type = "run.paused"
 	RunResumed          Type = "run.resumed"
@@ -68,6 +76,8 @@ const (
 func (t Type) Valid() bool {
 	switch t {
 	case RunStarted, RunCompleted, RunFailed,
+		AgentCommitted, AgentCommitmentKept, AgentCommitmentBroken,
+		Warning,
 		LLMCall, ToolCall, SandboxExec, MCPCall, StepJournaled, EventTruncated,
 		RunPaused, RunResumed, RunAwaitingApproval, RunFrozen, RunUnfrozen, SessionWoken,
 		SkillInstall, MCPConnected, MCPUpdated, AuditApproval, AuditApprovalDenied, AuditApprovalExpired, RunCanceled,

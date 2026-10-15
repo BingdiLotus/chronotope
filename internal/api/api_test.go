@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/bingdilotus/chronotope/internal/core/commitment"
 	"github.com/bingdilotus/chronotope/internal/core/event"
 	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
@@ -197,6 +198,18 @@ func (f *fakeStore) RegisterCredential(_ context.Context, _, _, _, _, _ string) 
 
 func (f *fakeStore) ListCredentials(_ context.Context, _ string) ([]store.CredentialRow, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ListStalePendingCommitments(_ context.Context, _ string, _ int) ([]store.CommitRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListExpiredCommitments(_ context.Context, _ string, _ int) ([]store.CommitRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) TransitionCommit(_ context.Context, _ string, _, _ commitment.State) (bool, error) {
+	return true, nil
 }
 
 func (f *fakeStore) VerifyChain(_ context.Context, _ string) (int64, error) {
