@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bingdilotus/chronotope/internal/store"
+
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
@@ -132,10 +134,47 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 		if !claimed {
 			return "", restate.ToTerminalError(fmt.Errorf("mcp 派发权已被占用（不重复外部效果——对账/人工裁决）"))
 		}
+		// 承诺原语 §3.2 出站接入：post_message 类工具在派发权取得后、
+		// 真实调用前过承诺门（gate fail-open → 判定为正写入 fail-closed）
+		var gateRow *store.CommitRow
+		if isOutboundTool(tool) && deps.CommitmentDecider != nil {
+			if st, ok := deps.Store.(*store.Store); ok {
+				gate := &OutboundGate{Decider: deps.CommitmentDecider, Store: st}
+				agentID := ""
+				if sess, sErr := deps.Store.GetSession(rc, in.SessionID); sErr == nil {
+					agentID = sess.AgentID
+				}
+				msg := string(tc.Arguments)
+				gr, gErr := gate.Admit(rc, in.SessionID, runID, agentID, msg, "")
+				if gErr != nil {
+					return "", restate.ToTerminalError(fmt.Errorf("承诺门: %w", gErr))
+				}
+				if gr.Blocked {
+					// fail-closed：义务记录失败阻断出站（修正版 §2.3 反转）
+					return "", restate.ToTerminalError(fmt.Errorf("承诺记录失败阻断出站（fail-closed）: %s", gr.Warning))
+				}
+				if gr.Admitted {
+					gateRow = gr.Commitment
+				}
+			}
+		}
 		// A2：执行耗时测量（Pi 的 tool_execution_end.durationMs 对应——
 		// 账本的时序维度）
 		mcpStarted := time.Now()
 		r, err := deps.MCP.Call(rc, url, tool, json.RawMessage(tc.Arguments))
+		// 出站回执：发送成功 → pending 转 open；失败 → 转 canceled（留在
+		// pending 由反向 reconciler 扫 orphaned 的是「回执本身失败」的
+		// 路径——ConfirmSent 内部处理）
+		if gateRow != nil && deps.CommitmentDecider != nil {
+			if st, ok := deps.Store.(*store.Store); ok {
+				gate := &OutboundGate{Decider: deps.CommitmentDecider, Store: st}
+				if err != nil {
+					gate.ConfirmFailed(rc, gateRow.ID)
+				} else {
+					_ = gate.ConfirmSent(rc, gateRow.ID)
+				}
+			}
+		}
 		durMs := time.Since(mcpStarted).Milliseconds()
 		errMsg := ""
 		if err != nil {
@@ -164,4 +203,16 @@ func dispatchMCP(ctx restate.Context, deps *Deps, in RunInput, runID string, ste
 	}
 	return fmt.Sprintf(`{"name":%q,"result":{"server":%q,"tool":%q,"content":%s}}`,
 		tc.Name, server, tool, mustJSONString(result)), 0, nil
+}
+
+// isOutboundTool 出站消息工具识别（承诺原语 §3.2 接入点——post_message
+// 类 MCP 工具；平台层的完整出站声明后置）。
+func isOutboundTool(tool string) bool {
+	t := strings.ToLower(tool)
+	for _, m := range []string{"post_message", "send_message", "message.create", "send_chat", "post_chat"} {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
 }

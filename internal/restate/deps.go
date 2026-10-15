@@ -148,10 +148,13 @@ type Deps struct {
 	ApprovalRouter  policy.ApprovalRouter
 	SchedulerPolicy policy.SchedulerPolicy
 	MCP             MCPCaller // MCP 客户端（nil = 未启用）
-	Store           Store
-	Harness         Harness
-	Executor        Executor
-	Sessions        SessionSource
+	// CommitmentDecider 承诺准入缝（承诺原语 §2.3；nil = 出站门跳过——
+	// 不阻断任何出站）
+	CommitmentDecider policy.CommitmentDecider
+	Store             Store
+	Harness           Harness
+	Executor          Executor
+	Sessions          SessionSource
 	// ConsolidateThreshold 是记忆消化触发的消息数阈值（默认 40；测试/演示可调小）。
 	ConsolidateThreshold int
 	// HarnessEndpoint 是 worker 级 harness 地址（装配阶段 1：run 快照冻结
