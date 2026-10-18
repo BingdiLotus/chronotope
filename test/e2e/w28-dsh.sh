@@ -11,6 +11,14 @@ fail() { echo -e "  \033[1;31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
 assert() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 
 echo "== W28 dsh 接入 (API=$API RUN_ID=$RUN_ID) =="
+# 环境依赖：dsh 的构建产物（/tmp/dsh 是开发机的一次性运行时——OS 会
+# 清理 /tmp；缺失时明确 SKIP 而非假绿）
+if [ ! -f /tmp/dsh/apps/cli/lib/bin.js ]; then
+  echo "  [1;33mSKIP[0m dsh 运行时缺失（/tmp/dsh/apps/cli/lib/bin.js——"
+  echo "         需重建：git clone DSH + pnpm install && pnpm build）"
+  echo "== 结果: 0 通过, 0 失败（跳过） =="
+  exit 0
+fi
 # api 就绪等待 + 旧残留清理（W28 在 W26 后——api 忙的 502 与断言读旧
 # 残留的假阳性链——与 W25 同款根因）
 rm -f /tmp/ds-run.out
