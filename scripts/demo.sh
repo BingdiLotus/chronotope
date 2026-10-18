@@ -118,6 +118,14 @@ bash test/e2e/w6-mcp.sh "$API" > /tmp/demo-w6m.log 2>&1 && pass "W6 生态 MCP/s
 kill $MCP_FIXTURE_PID 2>/dev/null || true
 HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
 
+# 13.15 w30 承诺原语 e2e（MCP post_message → 承诺门 → pending → open）
+nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/mcp-w30.log 2>&1 &
+MCP30_PID=$!
+sleep 1
+bash test/e2e/w30-commitment.sh "$API" > /tmp/demo-w30.log 2>&1 && pass "W30 承诺原语（7 项断言）" || { fail "W30 承诺原语"; tail -5 /tmp/demo-w30.log; }
+kill $MCP30_PID 2>/dev/null || true
+HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= $DC up -d --force-recreate harness
+
 # 13.14 w28 dsh 接入（headless --json + openai 兼容）
 bash test/e2e/w28-dsh.sh "$API" > /tmp/demo-w28.log 2>&1 && pass "W28 dsh 接入（2 项断言）" || { fail "W28 dsh 接入"; tail -5 /tmp/demo-w28.log; }
 

@@ -74,8 +74,11 @@ func main() {
 			Lookup:    harnessLookupOf(st),
 			GlobalURL: *harnessURL,
 		},
-		Executor:             executorPoolOf(st, *executorURL),
-		MCP:                  restate.NewHTTPMCPClient(),
+		Executor: executorPoolOf(st, *executorURL),
+		MCP:      restate.NewHTTPMCPClient(),
+		// 承诺原语出站门（§2.3）：默认 rule 档（不出站、零依赖）；
+		// COMMITMENT_DECIDER=openai 走 OpenAI Decisions API
+		CommitmentDecider:    policy.DeciderFromConfig(),
 		Sessions:             restate.RestateSessionSource{},
 		ConsolidateThreshold: consolidateThreshold,
 		// 预算策略缝（期 3 §A）：POLICY_BUDGET=none → AllowAll（无业务=无限）；

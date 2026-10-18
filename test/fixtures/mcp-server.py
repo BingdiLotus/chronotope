@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP 测试夹具：HTTP transport 的最小 JSON-RPC 2.0 MCP 服务器。
 
-工具：echo（回显 text）、add（整数求和）。供 w6-mcp.sh e2e 使用。
+工具：echo（回显 text）、add（整数求和）、post_message（出站消息——承诺门 e2e）。
 用法: python3 test/fixtures/mcp-server.py [port]（默认 9100）
 """
 import json
@@ -29,6 +29,11 @@ class Handler(BaseHTTPRequestHandler):
                         "description": "两整数求和",
                         "inputSchema": {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a", "b"]},
                     },
+                    {
+                        "name": "post_message",
+                        "description": "向对话线程发送消息（出站——承诺门拦截点）",
+                        "inputSchema": {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]},
+                    },
                 ]
             }
         elif method == "tools/call":
@@ -39,6 +44,8 @@ class Handler(BaseHTTPRequestHandler):
                 text = f"echo: {args.get('text', '')}"
             elif name == "add":
                 text = f"sum: {int(args.get('a', 0)) + int(args.get('b', 0))}"
+            elif name == "post_message":
+                text = f"posted: {args.get('content', '')}"
             else:
                 result = {"content": [], "isError": True}
                 self._reply(result)

@@ -134,7 +134,7 @@ func (d *OpenAIDecisionsDecider) Decide(ctx context.Context, message string, cou
 
 // DeciderFromConfig 按环境选实现（修正版 §2.3 三实现）。
 func DeciderFromConfig() CommitmentDecider {
-	switch strings.ToLower(strings.TrimSpace(getenv("COMMITMENT_DECIDER", "openai"))) {
+	switch strings.ToLower(strings.TrimSpace(getenv("COMMITMENT_DECIDER", "rule"))) {
 	case "rule", "off":
 		return RuleCommitmentDecider{}
 	default:
