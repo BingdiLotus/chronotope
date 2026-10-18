@@ -230,6 +230,10 @@ bash test/e2e/w13-policy.sh "$API" > /tmp/demo-w13.log 2>&1 && pass "期 3 治�
 #     tool_call_id 配对/write_file 恢复链——7 断言固化 fake 绿真实红缺口）
 bash test/e2e/w14-regression.sh "$API" > /tmp/demo-w14.log 2>&1 && pass "真实 e2e 缺陷回归（7 断言）" || { fail "真实 e2e 缺陷回归"; tail -5 /tmp/demo-w14.log; }
 
+# 20. W31 真实 kill-9 演练（SIGKILL worker → 重启 → 重放恢复——必须
+#     在最后：段内会 kill/重启 worker）
+bash test/e2e/w31-kill9.sh "$API" > /tmp/demo-w31.log 2>&1 && pass "W31 kill-9 恢复演练（5 断言）" || { fail "W31 kill-9 恢复演练"; tail -5 /tmp/demo-w31.log; }og; }
+
 
 echo "== 演示结果: $PASS 通过, $FAIL 失败 =="
 echo "控制台: cd web && pnpm install && pnpm dev（或 compose --profile web up web）→ http://localhost:3000"
