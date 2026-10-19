@@ -1,6 +1,6 @@
 # Harness 装配设计（接入真实 Harness + Agent 可装配/替换/升级）
 
-> MVP 优先级：最新[期 8](./期8-细化落地方案.md)先修一条 Go loop + Python provider 的单模型/全工具回喂路径；其他 adapter、动态装配、跨版本在途接管后置。当前允许破坏协议/schema，无需维护旧内联路径或双版本兼容窗口。本文其它能力为历史/扩展参考。
+> MVP 优先级：最新[Chronotope 期 8](./期8-细化落地方案.md)先修一条 Go loop + Python provider 的单模型/全工具回喂路径；其他 adapter、动态装配、跨版本在途接管后置。当前允许破坏协议/schema，无需维护旧内联路径或双版本兼容窗口。本文其它能力为历史/扩展参考。
 
 > 2026-10-10 设计定稿（先文档后编码）。目标：① 接入真实 harness（第三方按
 > /runs 契约实现的 Claude/OpenAI/Pi/dsh harness）；② agent 可装配 harness——
@@ -8,9 +8,9 @@
 > 原则：并发原语进层 0、业务语义留层 2（三层分离纪律延续）；run 绑定的
 > harness 快照不可变（与 spec digest 同族）。
 
-> 后续扩展（2026-10-18）：[持久 Agent 身份与非模型 RSI 设计](./持久Agent身份与非模型RSI设计.md)在原有装配合同上增加不可变 AgentRelease、候选试验与可信发布。现有 registry 同版本仍可更新 endpoint/capabilities，期 8 B6 将校验制品身份；下文进度作为历史记录保留。
+> 后续扩展（2026-10-18）：[持久 Agent 身份与非模型 RSI 设计](../../bots/docs/持久Agent身份与非模型RSI设计.md)在原有装配合同上增加不可变 AgentRelease、候选试验与可信发布。现有 registry 同版本仍可更新 endpoint/capabilities，后续技术版本设计将校验制品身份（旧 B6 编号不是当前 MVP 前置）；下文进度作为历史记录保留。
 
-> ToB 归属修订（2026-10-19）：[三方职责边界](./Chronotope与Bingdi-Bots职责边界.md)区分 Bots 的组织 BotRelease/人格/治理/loop/SOP 与 Chronotope 的 RuntimeSpecRevision/RuntimeReleaseBinding；Bots 负责 Bot 治理评测/发布批准，外部应用提供业务规则/验收，infra 提供隔离执行、不可变注册与生效机制。
+> ToB 归属修订（2026-10-19）：[三方职责边界](../../bots/docs/Chronotope与Bingdi-Bots职责边界.md)区分 Bots 的组织 BotRelease/人格/治理/loop/SOP 与 Chronotope 的 RuntimeSpecRevision/RuntimeReleaseBinding；Bots 负责 Bot 治理评测/发布批准，外部应用提供业务规则/验收，infra 提供隔离执行、不可变注册与生效机制。
 
 ## 一、现状盘点
 

@@ -1,13 +1,13 @@
 # 多 Agent 持久会话、MCP 消息订阅与父子编排：可行性及方案横评
 
-> MVP 范围修订：本文比较多 Agent/协议的后续路线，不再作为首个闭环的前置清单。当前[期 8](./期8-细化落地方案.md)只做单 Agent、typed HTTP 工具、PG 队列与 Restate timer；完整 MCP 订阅、长 actor/signals、peer/children 在单 Agent 主路径验证后按真实需求启动。无生产数据的协议/库结构可直接改，不建设兼容/迁移框架。
+> MVP 范围修订：本文比较多 Agent/协议的后续路线，不再作为首个闭环的前置清单。当前[Chronotope 期 8](./期8-细化落地方案.md)只做单 Agent、typed HTTP 工具、PG 队列与 Restate timer；完整 MCP 订阅、长 actor/signals、peer/children 在单 Agent 主路径验证后按真实需求启动。无生产数据的协议/库结构可直接改，不建设兼容/迁移框架。
 
 > 调研日期：2026-10-18。Chronotope 源码基线：`9d14760`。
 > 方法：实时阅读官方规范、产品文档与官方开源代码/说明，交叉检查本仓库实现。
 > 证据等级：本文证明相关机制已有规范或实现依据；未部署横评产品，未执行新的 PoC、故障或性能测试。优缺点和迁移成本为基于已读材料的工程判断。
-> 关联：[期 8 细化落地方案](./期8-细化落地方案.md)。本文细化其中的常驻 Supervisor、同会话多 agent、MCP 与持久消息边界。
+> 关联：[期 8 细化落地方案](../../bots/docs/MVP设计.md)。本文细化其中的常驻 Supervisor、同会话多 agent、MCP 与持久消息边界。
 
-> ToB 归属修订（2026-10-19）：按[职责边界](./Chronotope与Bingdi-Bots职责边界.md)，Bots 治理组织 Bot，并拥有其内化知识、经验/技能、原生任务、计划、调度与自身工作承诺；这些可存于 Bots 或 Chronotope。外部应用保有源 Conversation 和它自己的对象/规则/权限；不是所有业务相关状态都必须外置。成员交互留外部，DM 不产生个人 Bot，当前仍待实施。
+> ToB 归属修订（2026-10-19）：按[职责边界](../../bots/docs/Chronotope与Bingdi-Bots职责边界.md)，Bots 治理组织 Bot，并拥有其内化知识、经验/技能、原生任务、计划、调度与自身工作承诺；这些可存于 Bots 或 Chronotope。外部应用保有源 Conversation 和它自己的对象/规则/权限；不是所有业务相关状态都必须外置。成员交互留外部，DM 不产生个人 Bot，当前仍待实施。
 
 ## 1. 结论与适用范围
 
@@ -25,11 +25,9 @@
 
 因此，可行性应分为三项验证：**会话与协作形态可行、持久执行有机制支撑、端到端可靠性与任务质量尚待本项目 PoC。**
 
-### 1.1 范围扩展：持久主体、多 channel 与非模型 RSI
+### 1.1 应用语义的文档归属
 
-后续需求明确：组织 Bot 身份跨应用、session 与 harness 版本延续，可内化业务知识/技能并自主创建任务和调度，不必先有外部 issue/calendar。Bot 原生工作责任与外部系统合同/工单分别持有权威，harness、memory 方法及 loop/SOP 可受控改进。结构见[持久身份与 RSI 设计](./持久Agent身份与非模型RSI设计.md)，既有协议证据不等于所有集成或 RSI 已完成。
-
-主体 `agent_id`、参与会话 `AgentSession`、执行账号 `ExecutionIdentity` 与不可变 `AgentRelease` 分开；memory policy 的升级不同于事实纠错，承诺事实权威也不属于可由反思覆写的记忆。模型权重不在本期自改进范围。
+本文保留 runtime、协议和持久协作机制研究。组织 Bot 身份、原生知识/任务与 RSI 已迁入 [Bots 设计](../../bots/docs/持久Agent身份与非模型RSI设计.md)；当前运行时实现范围见[Chronotope 期 8](./期8-细化落地方案.md)，不在本仓库另定 Bot 产品策略。
 
 ## 2. 需求拆解与比较口径
 
@@ -136,13 +134,9 @@ Agent Framework 用明确边连接独立输入/输出的子 workflow。基础 ch
 
 主持与平级模式可以共享内核，区别放在 ConversationPolicy。一个平级 agent 内部仍可以是父子树，组内交流不要求把所有 agent 强制挂成一个总父节点的工具。
 
-### 5.1 最新实验约束：可运行不等于值得协作
+### 5.1 执行能力与协作收益分开
 
-2026-10-19 的[前沿调研](./前沿调研-持久Agent与非模型自改进-2026-10.md)补充了正式发表的 [Capable language models can outgrow the benefits of collaboration](https://www.nature.com/articles/s42256-026-01268-y)：在控制工具、prompt 和系统预算的 260 个配置中，强单 agent 基线是最稳健的协作收益预测量。作者将其限定为 practical selection rule，不是多 agent 普适缩放规律；部分协调税关联经校正后不显著，不应推导为所有任务的固定性能损失。
-
-因此，Bots 应为强单 agent、Supervisor+children 与候选 peer 做同任务、同模型、**全团队总预算**的准入对照，收益不明确时保留现行/单 agent。Chronotope 提供全部父子调用、任务/attempt/operation、通信和预算证据，不决定协作价值；同会话多个 Bot 可长期存在，不要求每条消息都激活全部参与者。
-
-MAST 与 Agents of Chaos 进一步支持交接、错误 child 结果、资源循环和假完成的反例测试；它们不证明本项目的 mailbox、claim 或恢复合同已正确。具体研究版本、局限与期 8 增量见前沿调研 F12–F15。
+可运行的多 Agent 拓扑不证明任务质量或成本更好。应用侧应与强单 Agent 做同预算对照；完整研究和指标由 [Bots 前沿调研](../../bots/docs/前沿调研-持久Agent与非模型自改进-2026-10.md)维护，Chronotope 只提供关联执行与用量证据。
 
 ## 6. MCP 与 A2A：版本、能力和边界
 
@@ -205,37 +199,33 @@ task.get(child_ref) / task.cancel(child_ref)
 
 ```mermaid
 flowchart TD
-    S[多 Channel Events / Webhook / Stream] --> G[Channel Adapter / MCP Gateway]
-    G --> I[外部源引用及获准快照 / 持久 Inbox]
-    I --> F[授权后的定向 Fan-out]
-    F --> A[AgentSession A / Mailbox]
-    F --> B[AgentSession B / Mailbox]
-    A --> PA[Supervisor A 有限 Activation]
-    B --> PB[Supervisor B 有限 Activation]
-    PA --> T[TaskRegistry / 子 Run / Claim]
+    APP[应用事件 / 消费者 Gateway] --> I[通用 Envelope / 持久 Inbox]
+    I --> F[有权定向投递]
+    F --> A[技术 Session A / Mailbox]
+    F --> B[技术 Session B / Mailbox]
+    A --> PA[有限 Activation A]
+    B --> PB[有限 Activation B]
+    PA --> T[Child Run / Claim]
     PB --> T
-    T --> R[完成 Outbox 回投对应父邮箱]
+    T --> R[完成 Outbox / 回投]
     R --> F
-    PA --> D[受控回复与效果账本]
+    PA --> D[受控工具 / 操作结果]
     PB --> D
-    D --> G
-    G --> W[各 Channel Provider 的回复 API]
+    D --> C[应用回调 / 最终 Sender]
 ```
 
-### 8.1 逻辑实体与身份
+### 8.1 通用运行时实体
 
 | 实体 | 定位 |
 |---|---|
-| BotIdentity / RuntimeBinding / Release | 组织所有的 BotID 与治理配置在 Bots；runtime agent/spec/effective binding 在 Chronotope，映射保持迁移连续性 |
-| Conversation | 源交流空间/成员协作/业务可见性归外部应用；Bots 只配 session 策略和外部引用索引，infra 使用有权引用/快照 |
-| AgentSession | `(context_ref, agent_id, scope_id)` 的持久实例；context_ref 可为 ExternalConversationRef 或原生 BotWorkScope（task/plan/loop），按 SessionPolicy 分配状态/邮箱，无须先有外部会话 |
-| Activation / Run | 一次有界决策或执行；记录输入事件集合、模型请求、操作及结果 |
-| Subscription / Delivery | 业务 watch、收件人投递、领取与处理状态；连接通知仅用于唤醒 |
-| BotKnowledge / BotTask / Plan / Schedule / BotCommitment | Bots 拥有内化知识及原生工作台账/验收，可存于 Bots 或 Chronotope；外部工作引用可选，不要求同一对象先存在于外部应用 |
-| RuntimeTaskRegistry | Chronotope 管 run/child/attempt/claim 和结果；原生 BotTask 可能跨多个 run，外部 issue 也可能关联多个 BotTask，ID/终态不混同 |
-| ReplyTarget | adapter/installation、外部会话地址、受众与逻辑 delivery 身份；由可信入口绑定 |
+| Runtime agent / config | 技术注册与不可变执行快照；产品主体为 opaque subject_ref，不定义 Bot 人格/所有权 |
+| Context/session | 应用授权的外部或原生工作 context_ref；私态/邮箱/消费进度独立，不解释 Slack thread |
+| Activation/run | 有界执行，绑定输入、模型/工具配置和结果 |
+| Input/delivery | 定向投递、领取/消费与可恢复进度；连接通知只用于唤醒 |
+| Runtime child/claim | child/attempt、lease、完成/迟到结果约束；不代替应用的原生任务台账 |
+| Callback/action ref | 应用提供的受信地址配置及 opaque action ref；最终 sender 与 provider receipt 由应用负责 |
 
-共享日志不等于共享全部私态。同一 Conversation 的不同参与者也可能具有不同读取范围；fan-out、上下文选择和输出发布各有授权点。
+应用语义及当前消费行为见 [Bots MVP](../../bots/docs/MVP设计.md)；通用 wire 合同见[应用接入契约](./应用接入契约.md)。本图是后续完整协作路线，MVP 不先实现 actor/signals/多 Agent。
 
 ### 8.2 一次消息如何变成可恢复的决策
 
@@ -304,18 +294,9 @@ Slack 普通频道回复经 Web API，不以入站 HTTP ACK 或订阅流作为�
 | 后置 | A2A、独立 JetStream/Redis 消息层、全框架替换 | 出现异构互操作或可测瓶颈后再支付额外复杂度 |
 | 不作为新基础 | AutoGen | 官方归档与停止维护状态不适合新增长期依赖 |
 
-### 10.1 持久身份与非模型 RSI 的适用性
+### 10.1 产品原生能力与改进设计已迁出
 
-| 参考路径 | 已读取材料能支持什么 | 仍需本项目建立的合同 |
-|---|---|---|
-| Restate/Chronotope 增量 | 技术会话恢复、版本绑定、隔离执行与审计 | Bots 管组织 BotID、业务知识/技能资产、原生任务/调度/承诺及其验收；外部对象保持原权威，infra 可承载通用存储和执行 |
-| OpenClaw | 多渠道 binding、独立 persona/workspace/session、记忆与后台专家 | 本次来源未证明完整的受控 RSI 发布闭环；不能将改写文件等同可验证改进 |
-| LangGraph / Agent Framework | 状态、子流程、checkpoint 与可组合决策机制 | 核心身份、跨渠道授权、候选隔离、固定评测和发布权仍须定义；状态持久不自动保证改进有效 |
-| Reflexion 作者实现 | 使用反馈/反思和持续记忆影响后续尝试 [S28] | 反思可能错误，仍需来源验证、隐私隔离、独立任务证据与正式发布合同 |
-| GEPA | 对 prompts/code/config 等文本参数进行反思、变异与评测选择 [S29] | 不替代生产身份、工具授权、义务账本或发布流程，也不保证每轮单调提升 |
-| MCP / A2A | 可将工具、外部任务与反馈作为接口接入 | 不是 agent 主体生命周期或 RSI 控制面的标准；协议版本/状态与业务权威分开 |
-
-Reflexion 与 GEPA 是非模型机制参考，非部署实验。[前沿调研](./前沿调研-持久Agent与非模型自改进-2026-10.md)加入技能两道检查、来源屏障与三类评测。可将内化业务经验形成 skill，并改进检索/上下文和 loop/SOP；Bots 评测原生任务质量及治理合规，涉及外部对象时采用该方验证。候选不能改既定成功口径或承诺历史，普通记忆积累/建任务则按已授权日常能力执行。联合验收见[身份与 RSI 设计](./持久Agent身份与非模型RSI设计.md)。
+BotIdentity、BotKnowledge/Task/Commitment、候选评测和晋升批准由 [Bots 身份与 RSI 设计](../../bots/docs/持久Agent身份与非模型RSI设计.md)维护；Reflexion/GEPA 等方法证据见 [Bots 前沿调研](../../bots/docs/前沿调研-持久Agent与非模型自改进-2026-10.md)。Chronotope 仅提供相应受限执行/记录机制，不把产品成功或义务验收写入内核。
 
 ## 11. PoC 与反例验收：计划，未执行
 

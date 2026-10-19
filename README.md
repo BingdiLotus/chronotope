@@ -4,11 +4,11 @@
 
 > **时空可组合持久运行时** — An agent runtime that persists. Any time, any space, composably.
 
-> 当前是未上生产的 MVP。下一里程碑以[知识与提醒闭环](./docs/期8-细化落地方案.md)的 G1 为发布门：允许破坏性 API/schema 调整和开发全栈重建，不建设旧数据迁移/兼容层。历史阶段完成记录不代表生产就绪。
+> 当前是未上生产的 MVP。下一里程碑只建设[应用执行闭环](./docs/期8-细化落地方案.md)；Bots 是首个参考应用，其产品范围和 G0/G1/G2 在 [Bots MVP](../bots/docs/MVP设计.md)维护。允许破坏性 API/schema 调整和开发全栈重建，历史完成记录不代表生产就绪。
 
 Chronotope（chrono 时间 + tope 空间）是一个**基础设施底座的 Agent 持久运行时**：以「只追加事件日志 + journal 重放」为地基，以「可插拔 Executor 协议」为空间边界，以「会话生命周期（创建→任务→休眠→唤醒→续跑）」为主轴。harness、模型、沙箱、记忆四者可替换；业务语义（计费/审批）经**策略缝**注入，默认无业务 = 无限/全过。
 
-配套 ToB 设计中，**Bingdi Bots 治理组织 Bot，并提供原生知识、经验/技能、任务/计划、工作承诺与调度能力**；其资产可存于 Bots 或 Chronotope。管理员配置人格、策略、应用账号、session 和 loop/SOP，Bot 可在授权内自主积累知识、建待办或闹钟。成员通过 Slack、GitHub、Linear 等外部应用交互；外部系统保有自己对象、规则及权限的权威。Chronotope 提供耐久执行与通用存储。当前待实施范围见[职责边界](./docs/Chronotope与Bingdi-Bots职责边界.md)。
+配套 ToB 设计中，**Bingdi Bots 治理组织 Bot，并提供原生知识、经验/技能、任务/计划、工作承诺与调度能力**；其资产可存于 Bots 或 Chronotope。管理员配置人格、策略、应用账号、session 和 loop/SOP，Bot 可在授权内自主积累知识、建待办或闹钟。成员通过 Slack、GitHub、Linear 等外部应用交互；外部系统保有自己对象、规则及权限的权威。Chronotope 提供耐久执行与通用存储。当前待实施范围见[职责边界](../bots/docs/Chronotope与Bingdi-Bots职责边界.md)。
 
 ## 快速开始
 
@@ -138,13 +138,11 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 
 | 文档 | 内容 |
 |---|---|
-| [Chronotope与Bingdi-Bots职责边界](./docs/Chronotope与Bingdi-Bots职责边界.md) | 外部业务应用、ToB Bot 治理控制面与执行 infra 三方权威、身份/release 映射及调用合同 |
-| [期8-细化落地方案.md](./docs/期8-细化落地方案.md) | MVP 收敛：单 Bot/Slack/模型，工具回喂、知识、自建提醒、重启与 receipt；G0/G1/G2，删除兼容迁移前置 |
-| [Bots 本地启动设计](../bots/docs/MVP设计.md) | 空项目的首条主路径、最少记录与 typed tools；只建立设计，尚无产品代码 |
-| [多Agent持久协作方案横评](./docs/调研-多Agent持久协作方案横评.md) | 官方依据与方案横评：常驻 Supervisor、同会话多 agent、MCP/A2A、持久邮箱及父子任务；含期 8 PoC 验收 |
-| [持久Agent身份与非模型RSI设计](./docs/持久Agent身份与非模型RSI设计.md) | 组织身份、session、业务知识/技能资产、Bot 原生任务/承诺/调度与受控改进；外部对象权威独立 |
-| [前沿调研：持久Agent与非模型自改进](./docs/前沿调研-持久Agent与非模型自改进-2026-10.md) | 2026-10-19 研究依据：协作准入、行动型记忆评测、技能污染、来源失效及独立发布审计；含方案取舍与待执行 PoC |
-| [工业产品调研：持久Agent与托管平台](./docs/工业产品调研-持久Agent与托管运行平台-2026-10.md) | Claude Tag/Managed Agents、OpenAI API/SDK/dots、Grok Bot、Muse、Cue：产品定位、权限/隔离、记忆改进、部署与恢复边界 |
+| [期8-细化落地方案.md](./docs/期8-细化落地方案.md) | Chronotope 通用 runtime P0：工具回喂、异步接纳、身份隔离、durable timer 与故障验收 |
+| [应用接入契约](./docs/应用接入契约.md) | 应用工具 bridge、opaque context、run 查询及 timer/fire 的目标合同（待实施） |
+| [多Agent持久协作方案横评](./docs/调研-多Agent持久协作方案横评.md) | runtime/framework、MCP/A2A、持久邮箱与 child 机制研究，非 MVP 全量前置 |
+| [Bots 产品设计入口](../bots/README.md) | Bot 原生知识/任务/治理、联合 MVP、身份/RSI、承诺与产品调研的唯一维护仓库 |
+| [Bots 职责边界](../bots/docs/Chronotope与Bingdi-Bots职责边界.md) | 消费方、执行 infra 与外部应用的语义 owner；本地并列仓库引用 |
 | [正式版架构.md](./docs/正式版架构.md) | 三期规划与风险清单（期 1/2/3 全落地） |
 | [期2-实施进度.md](./docs/期2-实施进度.md) | 期 2 交付记录（时间旅行/blob/归档/时空视图） |
 | [期3-实施进度.md](./docs/期3-实施进度.md) | 期 3 交付记录（策略缝/审批/MCP/知识 + 审计复审） |
