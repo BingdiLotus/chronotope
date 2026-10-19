@@ -2,7 +2,7 @@
 
 > 权威定义：根目录 [契约规范.md](../../契约规范.md) 与 [边界语义设计.md](../../边界语义设计.md)。
 > 本目录是契约的**机器可读/样例形态**，与 `test/contract` 契约测试、`internal/core` Go 类型三者同源，
-> 任何改动必须同步（CI 以契约测试守护）。总原则：**只增不改**（废弃走版本窗口）；
+> 任何改动必须同步（CI 以契约测试守护）。当前开发代次允许破坏性 API/schema 调整，不提供旧版行为兼容层；
 > **版本绑定在 run**；**幂等键贯穿全链路**；错误码稳定。
 
 | 文件 | 内容 |
@@ -15,7 +15,7 @@
 样例数据（Go 契约测试读取）：
 
 - `../../test/contract/testdata/runs.request.json` — /runs 请求样例
-- `../../test/contract/testdata/runs.frames.ndjson` — SSE 帧序列样例（含截断 done）
+- `../../test/contract/testdata/runs.frames.ndjson` — SSE 帧序列样例（全部工具、参数错误及 done）
 - `../../test/contract/testdata/events.sample.json` — 事件行样例
 
 ## 版本与 Changelog（M4，2026-10-09）
@@ -27,4 +27,4 @@
 | events.schema | v1.0 | 初始（类型全集只增不改）+ M1 哈希链字段（prev_hash/event_hash/hold） |
 | seam | v1.0 | 新增（可替换接缝的一等公民声明） |
 
-原则：只增不改（废弃走版本窗口）；版本绑定在 run；幂等键贯穿全链路。
+2026-10-19 应用 profile：创建幂等、run 202/GET、全部工具交棒与原 call ID、固定 bridge、通用 timer。历史场景不自动构成当前门禁证据。

@@ -54,6 +54,9 @@ curl -N -X POST http://localhost:8000/runs \
   `timeout_ms` 同时约束请求 timeout 和整段流。SDK 自动重试关闭，派发/重试由 worker 管理；
 - 成功段以 `done` 结束；失败以 `error` 结束。没有 harness 内部模型/工具循环。
 
+Provider 字段依据 [OpenAI Chat Completions 官方文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)：
+`max_completion_tokens` 限制生成 token，流末 `include_usage` 可能在中断时缺失，工具结果以 `tool_call_id` 关联。
+
 Fake 脚本按 `step` 选段，同 run/step 重发保持同结果；既支持单条 `tool_call`，
 也支持一段多条 `tool_calls`。`raw_arguments` 可用于非法参数故障 fixture。
 

@@ -1,3 +1,4 @@
-{"type":"delta","seq":0,"payload":{"text":"好的，"}}
-{"type":"tool_call","seq":1,"payload":{"id":"t_3","name":"bash","arguments":{"command":"pytest"}}}
-{"type":"done","seq":2,"payload":{"final":"已完成。","usage":{"tokens_in":120,"tokens_out":80},"truncated":true}}
+{"type":"delta","seq":1,"payload":{"text":"先检索并保存。"}}
+{"type":"tool_call","seq":2,"payload":{"id":"t_3","name":"knowledge_search","arguments":{"query":"规则"},"raw_arguments":"{\"query\":\"规则\"}"}}
+{"type":"tool_call","seq":3,"payload":{"id":"t_4","name":"knowledge_remember","arguments":null,"raw_arguments":"{invalid","arguments_error":"invalid tool arguments JSON"}}
+{"type":"done","seq":4,"payload":{"final":"先检索并保存。","usage":{"tokens_in":120,"tokens_out":80}}}

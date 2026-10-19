@@ -4,6 +4,7 @@
 package contract
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -96,7 +97,7 @@ func TestRunsRequestSample(t *testing.T) {
 	if req.Protocol != runs.ProtocolVersion || req.RunID != "r_1" || req.SessionID != "s_1" || req.Step != 12 {
 		t.Fatalf("unexpected sample content: %+v", req)
 	}
-	if req.MaxTurns != 8 || req.MaxOutputBytes != 524288 {
+	if req.MaxOutputTokens != 4096 || req.TimeoutMS != 30000 || req.MaxOutputBytes != 524288 {
 		t.Fatalf("defaults mismatch: %+v", req)
 	}
 }
@@ -111,14 +112,14 @@ func TestRunsFramesSample(t *testing.T) {
 		}
 		frames = append(frames, f)
 	}
-	if len(frames) != 3 {
-		t.Fatalf("want 3 frames, got %d", len(frames))
+	if len(frames) != 4 {
+		t.Fatalf("want 4 frames, got %d", len(frames))
 	}
 	if frames[0].Type != runs.FrameDelta || frames[1].Type != runs.FrameToolCall {
 		t.Fatalf("unexpected frame order: %+v", frames)
 	}
-	// 唯一合法终态：done（截断语义字段在位）
-	last := frames[2]
+	// 一次模型产生的完整 calls 必须以 done 终结。
+	last := frames[len(frames)-1]
 	if last.Type != runs.FrameDone {
 		t.Fatalf("last frame must be done, got %s", last.Type)
 	}
@@ -126,8 +127,8 @@ func TestRunsFramesSample(t *testing.T) {
 	if err := json.Unmarshal(last.Payload, &done); err != nil {
 		t.Fatalf("unmarshal done payload: %v", err)
 	}
-	if done.Truncated == nil || !*done.Truncated {
-		t.Fatal("sample done payload must carry truncated:true（截断是 journaled 事实）")
+	if done.Usage.TokensIn != 120 || done.Usage.TokensOut != 80 {
+		t.Fatalf("sample must retain per-inference usage: %+v", done.Usage)
 	}
 }
 
@@ -154,20 +155,24 @@ func TestRunsRequestToolSchemaNeverNull(t *testing.T) {
 	}
 }
 
-func TestToolVocabulary(t *testing.T) {
-	for _, name := range []string{
-		runs.ToolBash, runs.ToolRunPython, runs.ToolReadFile, runs.ToolWriteFile,
-		runs.ToolListFiles, runs.ToolWebSearch, runs.ToolHTTPRequest,
-		runs.ToolRequestApproval, runs.ToolSpawnSubagent, "mcp:github:search_repos",
-	} {
-		if !runs.IsVocabularyName(name) {
-			t.Errorf("%q must be a vocabulary name", name)
-		}
+func TestApplicationToolFramesPreserveAliasesAndParameterErrors(t *testing.T) {
+	var stream bytes.Buffer
+	for _, line := range splitLines(t, string(testdata(t, "runs.frames.ndjson"))) {
+		stream.WriteString("data: " + line + "\n\n")
 	}
-	for _, name := range []string{"run_shell", "exec_command", "files.read"} {
-		if runs.IsVocabularyName(name) {
-			t.Errorf("%q must NOT be a vocabulary name（框架自有工具名必须映射后发出）", name)
-		}
+	result, err := restate.ParseFrames(&stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Done || len(result.ToolCalls) != 2 {
+		t.Fatalf("all calls and done must be present: %+v", result)
+	}
+	if result.ToolCalls[0].Name != "knowledge_search" || result.ToolCalls[0].ID != "t_3" || result.ToolCalls[0].RawArguments != "{\"query\":\"规则\"}" {
+		t.Fatalf("model alias/call identity must survive: %+v", result.ToolCalls[0])
+	}
+	bad := result.ToolCalls[1]
+	if bad.ID != "t_4" || bad.ArgumentsError == "" || bad.RawArguments != "{invalid" {
+		t.Fatalf("invalid parameters must stay attached to original call: %+v", bad)
 	}
 }
 
@@ -253,8 +258,8 @@ func TestHarnessFrameConformance(t *testing.T) {
 		case "beat":
 			// 心跳帧合法（M1 后的帧类型）
 		case "error":
-			if payload == nil || payload["error"] == nil {
-				t.Fatalf("error 帧缺 payload.error: %v", f)
+			if payload == nil || payload["code"] == nil || payload["message"] == nil {
+				t.Fatalf("error 帧缺 payload.code/message: %v", f)
 			}
 		default:
 			t.Fatalf("未知帧类型 %q（协议只增不改——新类型需契约同步）", typ)
