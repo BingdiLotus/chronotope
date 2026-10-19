@@ -15,15 +15,17 @@ const ProtocolVersion = "1.0"
 
 // Request 是 POST /runs 的请求体。
 type Request struct {
-	Protocol       string    `json:"protocol"` // 默认 "1.0"
-	RunID          string    `json:"run_id"`   // 幂等键 (run_id, step)
-	SessionID      string    `json:"session_id"`
-	Step           int       `json:"step"`
-	Model          string    `json:"model"`
-	Messages       []Message `json:"messages"`
-	Tools          []Tool    `json:"tools"`
-	MaxTurns       int       `json:"max_turns"`        // 默认 8
-	MaxOutputBytes int       `json:"max_output_bytes"` // 默认 512KB
+	Protocol        string    `json:"protocol"` // 默认 "1.0"
+	RunID           string    `json:"run_id"`   // 幂等键 (run_id, step)
+	SessionID       string    `json:"session_id"`
+	Step            int       `json:"step"`
+	Model           string    `json:"model"`
+	Messages        []Message `json:"messages"`
+	Tools           []Tool    `json:"tools"`
+	MaxTurns        int       `json:"max_turns"`        // 默认 8
+	MaxOutputBytes  int       `json:"max_output_bytes"` // 默认 512KB
+	MaxOutputTokens int       `json:"max_output_tokens,omitempty"`
+	TimeoutMS       int64     `json:"timeout_ms,omitempty"`
 }
 
 // Message 是会话消息；source 标记用于注入防护（边界语义 §2）。
@@ -39,10 +41,11 @@ type Message struct {
 
 // Tool 是模型可见工具；risk_class 见边界语义 §2（0 安全 / 1 敏感 / 2 强制审批）。
 type Tool struct {
-	Type      string          `json:"type"`             // function|mcp
-	Name      string          `json:"name"`             // 必须是工具名词汇表规范名
-	Schema    json.RawMessage `json:"schema,omitempty"` // 空时省略，不得序列化为 null（契约样例）
-	RiskClass int             `json:"risk_class"`
+	Type        string          `json:"type"`             // function|mcp
+	Name        string          `json:"name"`             // 必须是工具名词汇表规范名
+	Schema      json.RawMessage `json:"schema,omitempty"` // 空时省略，不得序列化为 null（契约样例）
+	RiskClass   int             `json:"risk_class"`
+	Description string          `json:"description,omitempty"`
 }
 
 // FrameType 是 SSE 帧类型（契约规范 §3）。
