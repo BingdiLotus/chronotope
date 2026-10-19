@@ -14,6 +14,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/observability"
@@ -866,41 +867,114 @@ func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, runI
 			msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
 		}
 	}
-	for _, m := range history {
-		// tool 消息：还原 tool_call_id 配对（Anthropic 硬校验；历史旧数据无
-		// 该结构时降级为纯文本 tool 消息——研发期清库后不再出现）
-		if m.Role == "tool" {
-			var tr struct {
+	msgs = append(msgs, restoreHistoryMessages(history)...)
+	// 用户输入已写回历史（每 run 一次），此处不再注入——重复注入会随轮次复读
+	return msgs, nil
+}
+
+// restoreHistoryMessages reconstructs complete assistant/tool groups for the
+// provider. The bounded database window may begin inside an older group, and a
+// failed run may have committed its assistant before all tool receipts were saved.
+// This changes only the model view: it never writes a receipt or repeats a tool.
+func restoreHistoryMessages(history []memory.Message) []runs.Message {
+	var messages []runs.Message
+	var assistant *runs.Message
+	var callIDs []string
+	var groupRun string
+	var groupStep int
+	results := map[string]runs.Message{}
+	flush := func() {
+		if assistant == nil {
+			return
+		}
+		messages = append(messages, *assistant)
+		for _, id := range callIDs {
+			if result, ok := results[id]; ok {
+				messages = append(messages, result)
+				continue
+			}
+			content, _ := json.Marshal(map[string]any{
+				"error":          map[string]string{"code": "history_result_unconfirmed", "message": "No durable result was found for this historical tool call. Its effect may have occurred; do not infer success or failure, or repeat it without reconciliation."},
+				"result_unknown": true,
+			})
+			messages = append(messages, runs.Message{Role: "tool", ToolCallID: id, Content: string(content), Source: "untrusted"})
+		}
+		assistant = nil
+		callIDs = nil
+		results = map[string]runs.Message{}
+	}
+	for _, row := range history {
+		if row.Role == "tool" {
+			// An orphaned prefix, foreign group, malformed result or duplicate never
+			// becomes an unpaired tool message in the next model request.
+			if assistant == nil || row.RunID != groupRun || row.Step != groupStep {
+				continue
+			}
+			var result struct {
 				ToolCallID string `json:"tool_call_id"`
 				Content    string `json:"content"`
 				Source     string `json:"source"`
 			}
-			if err := json.Unmarshal(m.Content, &tr); err == nil && tr.ToolCallID != "" {
-				msgs = append(msgs, runs.Message{Role: "tool", Content: tr.Content, ToolCallID: tr.ToolCallID, Source: messageSource(tr.Source)})
+			if err := json.Unmarshal(row.Content, &result); err != nil || result.ToolCallID == "" {
 				continue
 			}
-			var text string
-			if err := json.Unmarshal(m.Content, &text); err == nil {
-				msgs = append(msgs, runs.Message{Role: "tool", Content: text, Source: "trusted"})
+			if _, duplicate := results[result.ToolCallID]; duplicate {
+				continue
+			}
+			for _, id := range callIDs {
+				if id == result.ToolCallID {
+					results[id] = runs.Message{Role: "tool", ToolCallID: id, Content: result.Content, Source: messageSource(result.Source)}
+					break
+				}
 			}
 			continue
 		}
+		flush()
 		var text string
-		if err := json.Unmarshal(m.Content, &text); err == nil {
-			msgs = append(msgs, runs.Message{Role: m.Role, Content: text, Source: "trusted"})
+		if err := json.Unmarshal(row.Content, &text); err == nil {
+			messages = append(messages, runs.Message{Role: row.Role, Content: text, Source: "trusted"})
 			continue
 		}
-		// assistant 工具调用消息：还原 tool_calls（tool 消息必须成对引用——
-		// Anthropic 兼容 API 硬校验；跳过会破坏消息形状）
-		var tc struct {
+		if row.Role != "assistant" {
+			continue
+		}
+		var stored struct {
+			Content   string            `json:"content"`
 			ToolCalls []json.RawMessage `json:"tool_calls"`
 		}
-		if err := json.Unmarshal(m.Content, &tc); err == nil && len(tc.ToolCalls) > 0 {
-			msgs = append(msgs, runs.Message{Role: m.Role, Content: "", ToolCalls: tc.ToolCalls, Source: "trusted"})
+		if err := json.Unmarshal(row.Content, &stored); err != nil {
+			continue
 		}
+		ids := make([]string, 0, len(stored.ToolCalls))
+		seen := map[string]bool{}
+		valid := len(stored.ToolCalls) > 0
+		for _, raw := range stored.ToolCalls {
+			var call struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			}
+			if err := json.Unmarshal(raw, &call); err != nil || call.ID == "" || seen[call.ID] || call.Type != "function" || call.Function.Name == "" {
+				valid = false
+				break
+			}
+			seen[call.ID] = true
+			ids = append(ids, call.ID)
+		}
+		if !valid {
+			if stored.Content != "" {
+				messages = append(messages, runs.Message{Role: "assistant", Content: stored.Content, Source: "trusted"})
+			}
+			continue
+		}
+		assistant = &runs.Message{Role: "assistant", Content: stored.Content, ToolCalls: stored.ToolCalls, Source: "trusted"}
+		callIDs, groupRun, groupStep = ids, row.RunID, row.Step
 	}
-	// 用户输入已写回历史（每 run 一次），此处不再注入——重复注入会随轮次复读
-	return msgs, nil
+	flush()
+	return messages
 }
 
 // protocolToolCall 把工具调用转成 /runs 协议形状（id/type/function）。
