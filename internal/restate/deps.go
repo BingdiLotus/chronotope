@@ -142,6 +142,7 @@ type SessionSource interface {
 // 已删）——若未来某服务需要独立测试隔离或拆分为独立部署单元，届时引入
 // 窄接口（interface segregation），模式在此留档。
 type Deps struct {
+	ApplicationTools ApplicationToolCaller
 	// BudgetPolicy 预算策略缝（期 3 §A；nil = AllowAll）
 	BudgetPolicy BudgetPolicy
 	// ApprovalRouter 审批人路由缝（期 3 §B；nil = ManualOnly 人工）

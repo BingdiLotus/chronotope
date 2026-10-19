@@ -609,7 +609,7 @@ func TestRunLoopHappyPath(t *testing.T) {
 }
 
 func TestRunLoopToolCallContinuesLoop(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
 	harness := &fakeHarness{script: []*Result{
 		{Done: false, ToolCalls: []ToolCall{{ID: "t_1", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)}}},
 		{Done: true, Final: "完成。", Usage: runs.LLMUsage{TokensIn: 5, TokensOut: 2}},
@@ -710,7 +710,7 @@ func TestRunLoopUninitializedSession(t *testing.T) {
 }
 
 func TestRunLoopMaxSteps(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
 	// 永不 done 的脚本：每次返回工具调用，打到 maxSteps 封顶。
 	// 参数逐次变化：绕开无进展检测（同指纹 5 轮即熔断——那是另一个用例）。
 	script := make([]*Result, 0, maxSteps)
@@ -1109,7 +1109,7 @@ func TestRunLoopHarnessErrorNoPanic(t *testing.T) {
 	st := &fakeStore{runs: map[string]*store.Run{"r_nil": {ID: "r_nil", SessionID: "s_nil"}}}
 	har := &fakeHarness{err: restate.ToTerminalError(fmt.Errorf("model 400"))}
 	deps := &Deps{Store: st, Harness: har, Sessions: &fakeSessions{state: SessionState{}}}
-	ctx := restate.WithMockContext(mocks.NewMockContext(t))
+	ctx := newMockedLoop(t)
 	_, err := runLoop(ctx, deps, RunInput{SessionID: "s_nil", Input: "hi"}, "r_nil")
 	if err == nil {
 		t.Fatal("harness 错误应返回 error（且不 panic）")

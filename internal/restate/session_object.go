@@ -2,6 +2,7 @@ package restate
 
 import (
 	"fmt"
+	"reflect"
 	"time"
 
 	restate "github.com/restatedev/sdk-go"
@@ -230,6 +231,16 @@ func setParticipants(ctx restate.ObjectContext, participants []sessionapi.Partic
 func createSessionObject(ctx restate.ObjectContext, cfg sessionapi.AgentConfig) (SessionState, error) {
 	if cfg.Model == "" {
 		return SessionState{}, restate.ToTerminalError(fmt.Errorf("agent config missing model"))
+	}
+	existing, err := restate.Get[SessionState](ctx, sessionStateKey)
+	if err != nil {
+		return SessionState{}, err
+	}
+	if existing.Phase != "" {
+		if !reflect.DeepEqual(existing.AgentConfig, cfg) {
+			return SessionState{}, restate.ToTerminalError(fmt.Errorf("session configuration is immutable"))
+		}
+		return existing, nil
 	}
 	state := SessionState{Phase: sessionapi.PhaseReady, AgentConfig: cfg}
 	restate.Set(ctx, sessionStateKey, state)
