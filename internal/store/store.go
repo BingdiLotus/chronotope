@@ -44,16 +44,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("store: list migrations: %w", err)
 	}
 	sort.Strings(names)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: begin schema initialization: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	// API startup and integration tests can initialize the same database.
+	// Serialize DDL, keeping a partially applied schema invisible on failure.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(729461830)`); err != nil {
+		return err
+	}
 	for _, name := range names {
 		sqlBytes, err := migrationsFS.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("store: read %s: %w", name, err)
 		}
-		if _, err := s.Pool.Exec(ctx, string(sqlBytes)); err != nil {
+		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
 			return fmt.Errorf("store: apply %s: %w", name, err)
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // Close 释放连接池。

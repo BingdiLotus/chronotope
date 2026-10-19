@@ -95,10 +95,10 @@ VALUES ($1, $2, $3, 'created', $1)`
 
 // GetSession 读取会话。
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
-	const q = `SELECT id, org_id, agent_id, status, restate_key, last_active_at, deleted_at, archived_at, forked_from_session, forked_at_seq FROM sessions WHERE id = $1`
+	const q = `SELECT id, org_id, agent_id, status, restate_key, last_active_at, deleted_at, archived_at, forked_from_session, forked_at_seq, subject_ref, scope_id FROM sessions WHERE id = $1`
 	var sess Session
 	err := s.Pool.QueryRow(ctx, q, id).Scan(
-		&sess.ID, &sess.OrgID, &sess.AgentID, &sess.Status, &sess.RestateKey, &sess.LastActiveAt, &sess.DeletedAt, &sess.ArchivedAt, &sess.ForkedFromSession, &sess.ForkedAtSeq)
+		&sess.ID, &sess.OrgID, &sess.AgentID, &sess.Status, &sess.RestateKey, &sess.LastActiveAt, &sess.DeletedAt, &sess.ArchivedAt, &sess.ForkedFromSession, &sess.ForkedAtSeq, &sess.SubjectRef, &sess.ScopeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -201,10 +201,10 @@ RETURNING id`
 // GetRun 读取 run（含不可变 command——审计 #3：投影缺 input/topic 使
 // 幂等比较恒空失效）。
 func (s *Store) GetRun(ctx context.Context, id string) (*Run, error) {
-	const q = `SELECT id, session_id, status, bound, COALESCE(input, ''), COALESCE(topic, '') FROM runs WHERE id = $1`
+	const q = `SELECT r.id, r.session_id, r.status, r.bound, COALESCE(r.input, ''), COALESCE(r.topic, ''), r.request_hash, COALESCE(d.payload, 'null'::jsonb) FROM runs r LEFT JOIN deliverables d ON d.run_id=r.id WHERE r.id = $1`
 	var r Run
 	var boundJSON json.RawMessage
-	err := s.Pool.QueryRow(ctx, q, id).Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON, &r.Input, &r.Topic)
+	err := s.Pool.QueryRow(ctx, q, id).Scan(&r.ID, &r.SessionID, &r.Status, &boundJSON, &r.Input, &r.Topic, &r.RequestHash, &r.Result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -220,7 +220,7 @@ func (s *Store) UpdateRunStatus(ctx context.Context, id string, status sessionap
 	const q = `
 UPDATE runs SET status = $2,
   started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
-  finished_at = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END
+  finished_at = CASE WHEN $2 IN ('completed','failed','canceled') THEN now() ELSE finished_at END
 WHERE id = $1
   AND (status NOT IN ('completed','failed','canceled','cancelled') OR status = $2)`
 	if _, err := s.Pool.Exec(ctx, q, id, string(status)); err != nil {
