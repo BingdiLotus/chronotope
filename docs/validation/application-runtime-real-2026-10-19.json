@@ -1,0 +1,100 @@
+{
+  "mode": "real",
+  "real_model": true,
+  "model": "claude-sonnet-4-6",
+  "config_version": 1,
+  "spec_digest": "d3788418fc90990ad2d51cde2cb6fcdc27d6c853a4c622417961b05e61357c7a",
+  "scenario": "case_c06a7ec0ef28",
+  "run_id": "r_7536bb0ce429530e28e25f993269ac2a",
+  "timer_id": "fixture_8dc251475700a9ba7957c7e3",
+  "fire_id": "fire_66e4aa7b77a92551c58af7c8f01a28b13eb21ddb776dd29d0d242037273cfb5b",
+  "callback_requests": 2,
+  "timer_callback_attempts": 2,
+  "restart_verified": true,
+  "api_admission_restart_verified": true,
+  "timer_restart_verified": true,
+  "api_admission_restart_evidence": {
+    "run_id_before": "r_7536bb0ce429530e28e25f993269ac2a",
+    "status_before_api_kill": "queued",
+    "restate_stopped_before_submit": true,
+    "api_kill_signal": "SIGKILL",
+    "run_id_after": "r_7536bb0ce429530e28e25f993269ac2a",
+    "status_after_restart": "running",
+    "idempotent_after_restart": true
+  },
+  "sleep_journal_before_restart": {
+    "invocation_id": "inv_18u6zL7CYO6c4Kwkl18WfpNXzLm3GosA8T",
+    "target": "application_timer/timer_66e4aa7b77a92551c58af7c8f01a28b13eb21ddb776dd29d0d242037273cfb5b/run",
+    "status": "running",
+    "sleep_index": 3,
+    "sleep_name": "timer-until-due",
+    "completion_id": 2,
+    "wake_up_time": 1792387227531,
+    "sleep_completed": false,
+    "due_at": "2026-10-19T05:20:27.531749+00:00",
+    "observed_at": "2026-10-19T05:18:42.819035+00:00"
+  },
+  "sleep_journal_after_restart": {
+    "invocation_id": "inv_18u6zL7CYO6c4Kwkl18WfpNXzLm3GosA8T",
+    "target": "application_timer/timer_66e4aa7b77a92551c58af7c8f01a28b13eb21ddb776dd29d0d242037273cfb5b/run",
+    "status": "backing-off",
+    "sleep_index": 3,
+    "sleep_name": "timer-until-due",
+    "completion_id": 2,
+    "wake_up_time": 1792387227531,
+    "sleep_completed": false,
+    "due_at": "2026-10-19T05:20:27.531749+00:00",
+    "observed_at": "2026-10-19T05:18:43.650273+00:00"
+  },
+  "checks": [
+    "API_AUTH_MODE=on and separate tenant/service credentials",
+    "agent/session creation is idempotent",
+    "PG admission survived API SIGKILL before Restate accepted it; same run ID recovered",
+    "202 run, idempotency before busy, and cross-tenant denial",
+    "real model through Python HTTP provider consumed actual tool nonce and both results",
+    "timer idempotency, payload conflict, tenant and scope checks",
+    "fixture SQLite and worker restarted while timer waits; volumes preserved",
+    "new session in same scope reads application-owned persisted value",
+    "lost callback ACK caused Restate retry with same fire ID; one durable application event"
+  ],
+  "completed_at": "2026-10-19T05:20:28.727788+00:00",
+  "runtime_source_revision": "105dc983c226c43ac1b6f835085c12c79b9697bf",
+  "harness_protocol": "1.0",
+  "go_toolchain": "1.26.0",
+  "restate_sdk": "v1.1.0",
+  "images": [
+    {
+      "service": "/chronotope-api-1",
+      "image_id": "sha256:7444a8c0bff97bfeab7bc525f18b9c2cdd3c9286ae85c594c9bb3d7ade5f104b",
+      "reference": "chronotope-api"
+    },
+    {
+      "service": "/chronotope-worker-1",
+      "image_id": "sha256:bbdc1710694f46f22233b3fa745a3e55473bbf7551ddd0da152a8b87727dd52a",
+      "reference": "chronotope-worker"
+    },
+    {
+      "service": "/chronotope-harness-1",
+      "image_id": "sha256:b4dae8f2155b1a6534be0131667b3a4718c93912e98f7b5b1e67e1bdee68c065",
+      "reference": "chronotope-harness"
+    },
+    {
+      "service": "/chronotope-restate-1",
+      "image_id": "sha256:18026360723a87b1519a22dc85a8826b65f3bae4d95df1e4db921ca30de06478",
+      "reference": "docker.io/restatedev/restate@sha256:65abc8016d408b8b424f5e492a5da37c24573207e217a3d43242dd8b3fd8dc61"
+    },
+    {
+      "service": "/chronotope-litellm-1",
+      "image_id": "sha256:cc9e4264aae20011c78a8cb27a55e7401cbd98f38547af1edcff92c9360c3271",
+      "reference": "ghcr.io/berriai/litellm@sha256:3d88bd757134a00e8c00237b85a021ab1f6d54abb9c1df750f411dbe7256a500"
+    },
+    {
+      "service": "/chronotope-postgres-1",
+      "image_id": "sha256:f40e48eca747184a758d8f04b465186c04f1c9d7c2bee3935cc38cebdaf52326",
+      "reference": "pgvector/pgvector:pg16"
+    }
+  ],
+  "driver_sha256": "a9620b4b21086b1ee6831379fe900e26a6729b5d164af9c6f91f0a6275f33ce7",
+  "fixture_sha256": "44efd3df641b659f2988d52d9a9535730c759feefac06454e91d2cd06312025e",
+  "python_lock_sha256": "916c0bf5b129a44b6deb565f7946b885b81078ff06964f9385d41723dcdfbb96"
+}
