@@ -6,9 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       run_real:
-        description: 真实模型 × 真实 E2B（需 ANTHROPIC_API_KEY/E2B_API_KEY secrets）
+        description: 真实模型应用执行门禁（需 ANTHROPIC_API_KEY；不验证 E2B 或 Slack）
         type: boolean
         default: false
+      run_legacy:
+        description: 历史全场景诊断（未适配当前合同，可能失败；非当前门禁）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   go:
@@ -18,7 +25,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: chronotope
+          POSTGRES_DB: chronotope_test
           POSTGRES_USER: chronotope
           POSTGRES_PASSWORD: chronotope_dev
         ports: ["5432:5432"]
@@ -29,18 +36,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.x" # 模块要求 go ≥1.25（restate-sdk-go v1.1.0）
+          go-version-file: go.mod
       - name: build
         run: go build ./...
       - name: vet
         run: go vet ./...
-      - name: test（单测 + store 集成 + golden journal 重放）
+      - name: test（单测 + 独立 PG 集成 + golden journal 重放）
         env:
-          STORE_TEST_DATABASE_URL: postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable
+          STORE_TEST_DATABASE_URL: postgres://chronotope:chronotope_dev@localhost:5432/chronotope_test?sslmode=disable
         run: go test ./...
 
   harness:
-    name: harness（/runs 契约测试）
+    name: harness（单段推理/工具协议）
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,7 +61,7 @@ jobs:
         run: uv run pytest -q
 
   spike:
-    name: spike（Restate Go SDK 五项原语，独立 module）
+    name: spike（Restate Go SDK 原语，独立 module）
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -63,266 +70,88 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.x" # sdk-go v1.1.0 要求
-      - name: build（GOWORK=off，spike 为独立模块）
+          go-version-file: go.mod
+          cache-dependency-path: spike/go.sum
+      - name: build
         run: GOWORK=off go build ./...
-      - name: test（五项原语 spike 测试）
+      - name: test
         run: GOWORK=off go test ./...
 
   e2e:
-    name: e2e（compose 全链路 W1/W2 闭环，fake 模型无密钥）
+    name: e2e（W1 202/GET + application runtime，fake HTTP 模型）
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: 启动全栈（api/worker/harness/executor + postgres/restate/rustfs/litellm）
-        run: |
-          HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker executor api
-      - name: 等待 api 就绪
-        run: |
-          for i in $(seq 1 90); do
-            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
-            sleep 2
-          done
-          curl -fsS http://localhost:8080/healthz
-      - name: 注册 worker 端点到 Restate
-        run: |
-          curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
-            -d '{"uri":"http://worker:9080","version":"v1","use_http_11":true,"force":true}'
-      - name: W1 闭环 e2e
-        run: bash test/e2e/w1-loop.sh http://localhost:8080
-      - name: W2 沙箱闭环 e2e（harness 切脚本模式 → 重启容器）
+      - name: 当前完整 fake 门禁（保留卷验证恢复）
         env:
-          HARNESS_FAKE_MODEL: "1" # 必带：否则 harness 落入真实模式调 litellm（demo 实证）
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/hello.py","content":"print(42)"}}},{"tool_call":{"name":"bash","arguments":{"command":"python3 /workspace/hello.py"}}},{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/hello.py"}}},{"final":"沙箱闭环完成，输出 42。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w2-sandbox.sh http://localhost:8080
-      - name: W3 HITL e2e（harness 切审批脚本 → 重启）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"request_approval","arguments":{"question":"允许删除生产数据吗？"}}},{"final":"已获批准，执行完成。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w3-hitl.sh http://localhost:8080
-      - name: W3 定时唤醒 e2e（harness 回默认 fake）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: ""
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w3-schedule.sh http://localhost:8080
-      - name: W5 分层记忆 e2e（worker 阈值调小 → 消化触发）
-        env:
-          CONSOLIDATE_THRESHOLD: "4"
-          HARNESS_FAKE_MODEL: "1" # 显式重建 harness 为 fake：compose 解析 env 引用，
-          HARNESS_FAKE_SCRIPT: "" # 步骤 env 缺失时 harness 会落回真实模式调 litellm（CI 实证 401）
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate worker harness
-          curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
-            -d '{"uri":"http://worker:9080","version":"v1","use_http_11":true,"force":true}'
-          sleep 3
-          bash test/e2e/w5-memory.sh http://localhost:8080
-      - name: W5 工具风险分级 e2e（class 2 强制审批：批准/拒绝双路径）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"bash","arguments":{"command":"sleep 1; echo ok"}}},{"final":"危险操作已批准执行。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w5-risk.sh http://localhost:8080
-      - name: W6 子 Agent e2e（父派发 → 子会话独立执行 → 结果回喂）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-        run: |
-          CHILD_ID=$(curl -fsS -X POST http://localhost:8080/orgs/org-ci-child/agents -H 'content-type: application/json' \
-            -d '{"name":"ci-child","config":{"model":"chronotope-subagent","instructions":"子任务助手。","tools":[],"version":1}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-          HARNESS_FAKE_SCRIPT='[{"tool_call":{"name":"spawn_subagent","arguments":{"agent":"'"$CHILD_ID"'","input":"计算 2+2"}}},{"final":"子任务已完成，父任务收尾。"}]' \
-            docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          CHILD_AGENT_ID="$CHILD_ID" bash test/e2e/w6-subagent.sh http://localhost:8080
-      - name: W5 org 预算 + 欠费冻结 e2e（超限冻结 → 充值解冻）
-        env:
-          HARNESS_FAKE_MODEL: "1" # 预算 e2e 依赖 plain fake（4/7 tokens）——
-          HARNESS_FAKE_SCRIPT: "" # 前一阶段（W6 子 Agent）的脚本残留会破坏断言（CI 实证）
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate api harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w5-budget.sh http://localhost:8080
-      - name: W7 群聊多 Agent e2e（moderator 主持循环 + 成员 child run）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"next_speaker","arguments":{"participant":0,"instruction":"请就方案选择发表意见"}}},{"tool_call":{"name":"next_speaker","arguments":{"participant":1,"instruction":"请评审上一轮发言"}}},{"final":"讨论完成：采用方案 A 并限定范围。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w7-group.sh http://localhost:8080
-      - name: 多租户身份 e2e（API_AUTH_MODE=on：401/403/隔离/key 一次性）
-        run: |
-          API_AUTH_MODE=on API_ADMIN_KEY=ck_admin_bootstrap docker compose -f deploy/docker-compose.yml up -d --force-recreate api
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/auth.sh http://localhost:8080
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate api
-      - name: W6 生态 e2e（MCP 连接 + skill 安装）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"mcp:echo:echo","arguments":{"text":"你好"}}},{"final":"MCP 回显完成。"}]'
-        run: |
-          nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/mcp-fixture.log 2>&1 &
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w6-mcp.sh http://localhost:8080
-          pkill -f 'mcp-server.py' || true
-      - name: 快照含卷恢复 e2e（named volume 显式打包/解回）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/a.txt","content":"快照前内容"}}},{"final":"已写入。"}]'
-          HARNESS_FAKE_SCRIPT_ALT: '[{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/a.txt"}}},{"final":"读取完成。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w2-snapshot.sh http://localhost:8080
-      - name: W8 后置 e2e（交付清单 + 事件投递 + PITR 恢复演练）
-        env:
-          HARNESS_FAKE_MODEL: "1" # W8 交付依赖 plain fake——前一阶段（W6 生态）的
-          HARNESS_FAKE_SCRIPT: "" # MCP 脚本残留 + fixture 已停 → run 502（CI 实证）
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w8-delivery.sh http://localhost:8080
-          nohup python3 test/fixtures/notify-sink.py 9300 > /tmp/sink.log 2>&1 &
-          OUTBOX_INTERVAL=2s OUTBOX_ALLOW_PRIVATE=true docker compose -f deploy/docker-compose.yml up -d --force-recreate api
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w8-notify.sh http://localhost:8080 http://host.docker.internal:9300
-          bash test/chaos/pitr.sh
-      - name: 时间旅行 e2e（checkpoint 树 + fork/diff/rollback）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/a.txt","content":"快照前内容"}}},{"final":"已写入。"}]'
-          HARNESS_FAKE_SCRIPT_ALT: '[{"tool_call":{"name":"read_file","arguments":{"path":"/workspace/a.txt"}}},{"final":"读取完成。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w10-timetravel.sh http://localhost:8080
-      - name: 工作区 blob 合同 e2e（内容寻址 + 销毁后 blob 恢复）
-        env:
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: '[{"tool_call":{"name":"write_file","arguments":{"path":"/workspace/b.txt","content":"blob合同内容"}}},{"final":"已写入。"}]'
-          HARNESS_FAKE_SCRIPT_ALT: '[{"tool_call":{"name":"bash","arguments":{"command":"cat /workspace/b.txt"}}},{"final":"读取完成。"}]'
-        run: |
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w11-blob.sh http://localhost:8080
-      - name: 冷层归档 e2e（老会话 → RustFS 冷层 + 清单）
-        env:
-          ARCHIVE_MIN_AGE: "0s"
-          HARNESS_FAKE_MODEL: "1"
-          HARNESS_FAKE_SCRIPT: ""
-        run: |
-          ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= docker compose -f deploy/docker-compose.yml up -d --force-recreate harness
-          for i in $(seq 1 60); do
-            curl -fsS http://localhost:8000/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          sleep 5
-          ARCHIVE_MIN_AGE=0s HARNESS_FAKE_MODEL=1 HARNESS_FAKE_SCRIPT= docker compose -f deploy/docker-compose.yml up -d --force-recreate api worker
-          for i in $(seq 1 90); do
-            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
-            sleep 2
-          done
-          for i in $(seq 1 60); do
-            curl -fsS http://localhost:9080/discover > /dev/null 2>&1 && break
-            sleep 1
-          done
-          bash test/e2e/w12-archive.sh http://localhost:8080
-      - name: W18 账本/quiesce/unknown e2e（calls 对账 + freeze + exec 未知态）
-        run: bash test/e2e/w18-ledger.sh http://localhost:8080
-      - name: W19 合规验收 e2e（Goal→审批→Evidence→审计链验证）
-        run: bash test/e2e/w19-compliance.sh http://localhost:8080
-      - name: W20 WaitFor 等待收敛 e2e（timer 注册/解决 + 审批 intent + DECIDE 判定）
-        run: bash test/e2e/w20-waitfor.sh http://localhost:8080
-      - name: W21 信任拓扑 e2e（MCP 注入 untrusted 标记 + class 2 不执行）
-        run: |
-          nohup python3 test/fixtures/mcp-server.py 9100 > /tmp/mcp-fixture.log 2>&1 &
-          sleep 2
-          bash test/e2e/w21-trust.sh http://localhost:8080
-      - name: 容器日志（失败时诊断）
+          E2E_STATE_DIR: ${{ runner.temp }}/application-runtime-fake
+        run: bash scripts/demo.sh
+      - name: 容器日志（失败诊断）
         if: failure()
-        run: docker compose -f deploy/docker-compose.yml logs --tail=100
+        run: docker compose -f deploy/docker-compose.yml logs --tail=150
+      - name: 保存应用门禁报告与 fixture 证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-runtime-fake
+          path: |
+            ${{ runner.temp }}/application-runtime-fake/report.json
+            ${{ runner.temp }}/application-runtime-fake/fixture.log
+          if-no-files-found: warn
+      - name: 清理当前 runner 容器
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down --remove-orphans
 
   real:
-    name: real（真实模型 + 真实 E2B 官方云，手动触发需 secrets）
-    if: inputs.run_real
+    name: real（手动、真实模型应用门禁；不含 E2B/Slack）
+    if: github.event_name == 'workflow_dispatch' && inputs.run_real
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }}
+      EXECUTOR_DRIVER: docker
     steps:
       - uses: actions/checkout@v4
-      - name: 启动全栈（真实模式）
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          EXECUTOR_DRIVER: e2b_selfhosted
-          E2B_API_URL: https://api.e2b.dev
-        run: docker compose -f deploy/docker-compose.yml up -d --build postgres restate litellm harness worker executor api
-      - name: 等待 api 就绪
+      - name: 检查明确请求的真实模型凭据
         run: |
-          for i in $(seq 1 90); do
-            curl -fsS http://localhost:8080/healthz > /dev/null 2>&1 && break
-            sleep 2
-          done
-      - name: 注册 worker 端点到 Restate
-        run: |
-          curl -fsS -X POST http://localhost:9070/deployments -H 'content-type: application/json' \
-            -d '{"uri":"http://worker:9080","version":"real-v1","use_http_11":true,"force":true}'
-      - name: 真实模型全链路（6 断言——secrets 守卫：缺 key 时 skip 非红）
-        run: bash test/e2e/real-model.sh http://localhost:8080
-      - name: 真实 E2B 官方云（7 断言——secrets 守卫：缺 key 时 skip 非红）
-        run: bash test/e2e/w17-real-e2b.sh http://localhost:8080
-      - name: 容器日志（失败时诊断）
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo '::error::run_real requires ANTHROPIC_API_KEY; a skipped provider is not a passing real-model gate'
+            exit 1
+          fi
+      - name: 真实模型工具回喂与 durable timer 恢复
+        run: python3 test/e2e/application-runtime.py --mode real --state-dir "$RUNNER_TEMP/application-runtime-real"
+      - name: 容器日志（失败诊断）
         if: failure()
-        run: docker compose -f deploy/docker-compose.yml logs --tail=100
+        run: docker compose -f deploy/docker-compose.yml logs --tail=150
+      - name: 保存真实模型门禁报告与 fixture 证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-runtime-real
+          path: |
+            ${{ runner.temp }}/application-runtime-real/report.json
+            ${{ runner.temp }}/application-runtime-real/fixture.log
+          if-no-files-found: warn
+      - name: 清理当前 runner 容器
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down --remove-orphans
 
-  # TODO(W3)：chaos 套件（kill -9 矩阵）在专用 runner 上执行
+  legacy:
+    name: legacy（手动诊断、未适配当前合同；非本期证据）
+    if: github.event_name == 'workflow_dispatch' && inputs.run_legacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 历史场景（保留原断言，失败正常标红）
+        run: |
+          echo '::warning::Legacy scenarios are not adapted to current creation keys, asynchronous runs, and tool aliases. This job is diagnostic, not current C0-C3 evidence.'
+          bash scripts/demo-legacy.sh
+      - name: 容器日志（失败诊断）
+        if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs --tail=150
+      - name: 清理当前 runner 容器
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down --remove-orphans
