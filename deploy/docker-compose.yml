@@ -28,7 +28,7 @@ services:
       retries: 10
 
   restate:
-    image: docker.io/restatedev/restate:latest
+    image: ${RESTATE_IMAGE:-docker.io/restatedev/restate@sha256:65abc8016d408b8b424f5e492a5da37c24573207e217a3d43242dd8b3fd8dc61}
     environment:
       RESTATE_AUTO_TIP: "false"
       # 固定节点名：数据卷跨容器重建时节点身份不变（否则 Restate 拒绝启动）
@@ -40,7 +40,7 @@ services:
       - "9070:9070" # admin/observability
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-stable
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm@sha256:3d88bd757134a00e8c00237b85a021ab1f6d54abb9c1df750f411dbe7256a500}
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-chronotope-dev}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
