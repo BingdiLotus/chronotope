@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PROTOCOL_VERSION = "1.0"
 
@@ -19,27 +19,6 @@ Role = Literal["system", "user", "assistant", "tool"]
 Source = Literal["trusted", "sandbox", "network", "untrusted"]
 FrameType = Literal["delta", "tool_call", "turn_end", "done", "error", "beat"]
 
-# 工具名词汇表（硬约束，只增不改）——框架自有工具名必须映射后发出
-VOCABULARY = {
-    "next_speaker",  # 群聊主持（W7 控制工具——CONTROL_TOOLS 同列，词汇表补录）
-    "bash",
-    "run_python",
-    "read_file",
-    "write_file",
-    "list_files",
-    "web_search",
-    "http_request",
-    "request_approval",
-    "spawn_subagent",
-}
-
-# 代码类工具：harness 只发 tool_call 交棒，由 worker 转 executor（harness 从不直连 executor）
-CODE_TOOLS = {"bash", "run_python", "read_file", "write_file", "list_files"}
-
-# 控制类工具：harness 交棒给 worker 的控制面（awakeable/子 Agent），harness 不内联
-CONTROL_TOOLS = {"request_approval", "spawn_subagent", "next_speaker"}
-
-DEFAULT_MAX_TURNS = 8
 DEFAULT_MAX_OUTPUT_BYTES = 512 * 1024
 
 
@@ -55,7 +34,9 @@ class Tool(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["function", "mcp"] = "function"
-    name: str
+    # 模型 alias；worker 持有 alias → 内部工具引用的固定注册表。
+    name: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
+    description: str = ""
     tool_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
     risk_class: int = 0
 
@@ -68,8 +49,16 @@ class RunRequest(BaseModel):
     model: str
     messages: list[Message]
     tools: list[Tool] = Field(default_factory=list)
-    max_turns: int = DEFAULT_MAX_TURNS
-    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
+    max_output_bytes: int = Field(default=DEFAULT_MAX_OUTPUT_BYTES, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    timeout_ms: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def unique_tool_aliases(self) -> RunRequest:
+        names = [tool.name for tool in self.tools]
+        if len(names) != len(set(names)):
+            raise ValueError("tool aliases must be unique")
+        return self
 
 
 class LLMUsage(BaseModel):
@@ -117,7 +106,3 @@ def done(final: str, usage: LLMUsage, *, truncated: bool | None = None, seq: int
 
 def error(code: str, message: str, seq: int = 0) -> Frame:
     return frame("error", seq, ErrorPayload(code=code, message=message).model_dump())
-
-
-def is_vocabulary_name(name: str) -> bool:
-    return name.startswith("mcp:") or name in VOCABULARY
