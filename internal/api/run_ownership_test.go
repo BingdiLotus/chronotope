@@ -62,3 +62,21 @@ func TestRunAuditAndCallsRequireResourceTenant(t *testing.T) {
 		})
 	}
 }
+
+func TestApplicationSessionsExposeOnlySelectedMethods(t *testing.T) {
+	h, fs, ing := setup(t)
+	agentID, sessionID := seedAgentSession(t, h, fs)
+	fs.agents[agentID].Config.ApplicationProfile = true
+	for _, entry := range []struct{ method, suffix string }{{"DELETE", ""}, {"POST", "/actions"}, {"POST", "/schedules"}, {"POST", "/mcp"}, {"POST", "/skills"}, {"GET", "/memory"}} {
+		rec := doJSON(t, h.Router(), entry.method, "/sessions/"+sessionID+entry.suffix, `{"action":"pause"}`, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: %d %s", entry.method, entry.suffix, rec.Code, rec.Body.String())
+		}
+	}
+	if fs.sessions[sessionID].DeletedAt != nil || ing.callCount() != 0 {
+		t.Fatal("blocked application endpoint mutated state or dispatched control")
+	}
+	if rec := doJSON(t, h.Router(), http.MethodGet, "/sessions/"+sessionID, "", nil); rec.Code != 200 {
+		t.Fatalf("session read rejected: %d", rec.Code)
+	}
+}

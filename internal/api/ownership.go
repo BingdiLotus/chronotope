@@ -58,9 +58,9 @@ func (h *Handler) authorizeSession(next http.Handler) http.Handler {
 		}
 		if agent.Config.ApplicationProfile {
 			suffix := strings.TrimPrefix(r.URL.Path, "/sessions/"+id)
-			switch suffix {
-			case "", "/", "/runs", "/events":
-			default:
+			read := r.Method == http.MethodGet && (suffix == "" || suffix == "/" || suffix == "/events")
+			submit := r.Method == http.MethodPost && suffix == "/runs"
+			if !read && !submit {
 				writeError(w, 403, 403, "endpoint is not enabled for application sessions")
 				return
 			}
