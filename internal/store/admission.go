@@ -18,6 +18,13 @@ var (
 	ErrSessionBusy         = errors.New("session has an active run")
 )
 
+// CompleteSessionInitialization must not overwrite a pause or any later state
+// when two retries finish initializing the same remote session out of order.
+func (s *Store) CompleteSessionInitialization(ctx context.Context, id string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE sessions SET status='ready',last_active_at=now() WHERE id=$1 AND status='created'`, id)
+	return err
+}
+
 // RequestHash canonicalizes nested JSON objects before hashing. Authentication,
 // connection details and retry timestamps are deliberately not part of a request.
 func RequestHash(request any) (string, error) {

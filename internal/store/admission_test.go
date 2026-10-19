@@ -41,6 +41,22 @@ func TestApplicationCreationAndConcurrentAdmission(t *testing.T) {
 	if err != nil || sess.SubjectRef != "bot" || sess.ScopeID != "channel" {
 		t.Fatalf("session binding: %+v %v", sess, err)
 	}
+	if err := s.CompleteSessionInitialization(ctx, ns+"s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSessionStatus(ctx, ns+"s", sessionapi.PhasePaused); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteSessionInitialization(ctx, ns+"s"); err != nil {
+		t.Fatal(err)
+	}
+	sess, err = s.GetSession(ctx, ns+"s")
+	if err != nil || sess.Status != sessionapi.PhasePaused {
+		t.Fatalf("late initialization overwrote paused: %+v %v", sess, err)
+	}
+	if err := s.UpdateSessionStatus(ctx, ns+"s", sessionapi.PhaseReady); err != nil {
+		t.Fatal(err)
+	}
 	results := make(chan error, 8)
 	fresh := make(chan bool, 8)
 	var wg sync.WaitGroup

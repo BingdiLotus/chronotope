@@ -14,7 +14,7 @@ import (
 
 // httpIngress 是 Restate ingress 的 HTTP 客户端实现（api → worker 控制面，
 // worker-架构设计 §8：run 启动信号 / 事件回调等 LISTEN/NOTIFY 之外的控制面调用）。
-// 调用保持短连接 + 长超时：W1 的 run_workflow 为同步对话闭环（分钟级）。
+// 有限控制调用与异步工作流提交分开；HTTP 连接不承载运行生命周期。
 type httpIngress struct {
 	baseURL string
 	client  *http.Client
@@ -24,16 +24,23 @@ type httpIngress struct {
 func NewHTTPIngress(restateURL string) RestateIngress {
 	return &httpIngress{
 		baseURL: strings.TrimRight(restateURL, "/"),
-		client:  &http.Client{Timeout: 10 * time.Minute},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-// Call 调用 ingress 路径（Void 输入端点传 body=nil，不携带 content-type）。
-// 关键：请求生命周期独立于调用方 ctx——durable 语义要求「提交后 invocation
-// 不受 api 请求断开影响」。早期实现随 r.Context() 取消，客户端 60s 超时断开
-// 会把 Restate invocation 半死（journal 的 Run 条目 in-flight），后续同
-// run_id 恢复永久等待（blob e2e 实证 28 超时循环）。
-func (h *httpIngress) Call(_ context.Context, path, method string, body any, out any) error {
+// Send waits only for Restate's durable acceptance, not workflow completion.
+func (h *httpIngress) Send(ctx context.Context, path string, body any) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return h.call(ctx, strings.TrimRight(path, "/")+"/send", http.MethodPost, body, nil, http.StatusAccepted)
+}
+
+// Call is reserved for short control operations such as session initialization.
+func (h *httpIngress) Call(ctx context.Context, path, method string, body any, out any) error {
+	return h.call(ctx, path, method, body, out, 0)
+}
+
+func (h *httpIngress) call(ctx context.Context, path, method string, body any, out any, expected int) error {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -42,7 +49,7 @@ func (h *httpIngress) Call(_ context.Context, path, method string, body any, out
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(context.Background(), method, h.baseURL+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, h.baseURL+path, rd)
 	if err != nil {
 		return fmt.Errorf("ingress: build request: %w", err)
 	}
@@ -56,7 +63,7 @@ func (h *httpIngress) Call(_ context.Context, path, method string, body any, out
 		return fmt.Errorf("ingress: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || (expected != 0 && resp.StatusCode != expected) {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("ingress: %s %s: status %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
