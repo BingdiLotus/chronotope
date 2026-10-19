@@ -143,6 +143,7 @@ type SessionSource interface {
 // 窄接口（interface segregation），模式在此留档。
 type Deps struct {
 	ApplicationTools ApplicationToolCaller
+	Timers           *TimerDeps
 	// BudgetPolicy 预算策略缝（期 3 §A；nil = AllowAll）
 	BudgetPolicy BudgetPolicy
 	// ApprovalRouter 审批人路由缝（期 3 §B；nil = ManualOnly 人工）
