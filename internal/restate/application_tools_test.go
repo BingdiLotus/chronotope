@@ -59,7 +59,7 @@ func applicationFixture(t *testing.T) (*applicationStore, *fakeSessions, session
 		{ModelAlias: "remember", ToolRef: "knowledge.remember", Description: "Remember scoped information", InputSchema: json.RawMessage(`{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}`)},
 		{ModelAlias: "create_reminder", ToolRef: "task.create_reminder", Description: "Create one native reminder", InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)},
 	}}
-	s := &applicationStore{fakeStore: &fakeStore{runs: map[string]*store.Run{"r_app": {ID: "r_app", SessionID: "s_app", Bound: map[string]any{"tenant_id": "tenant_one", "subject_ref": "bot_one", "scope_id": "channel_one", "origin_command_id": "command_one", "deadline_at": time.Now().Add(5 * time.Second).UTC().Format(time.RFC3339Nano)}}}}, session: &store.Session{ID: "s_app", OrgID: "tenant_one", SubjectRef: "bot_one", ScopeID: "channel_one"}}
+	s := &applicationStore{fakeStore: &fakeStore{runs: map[string]*store.Run{"r_app": {ID: "r_app", SessionID: "s_app", Input: "x", Bound: map[string]any{"tenant_id": "tenant_one", "subject_ref": "bot_one", "scope_id": "channel_one", "origin_command_id": "command_one", "deadline_at": time.Now().Add(5 * time.Second).UTC().Format(time.RFC3339Nano)}}}}, session: &store.Session{ID: "s_app", OrgID: "tenant_one", SubjectRef: "bot_one", ScopeID: "channel_one"}}
 	return s, &fakeSessions{state: SessionState{Phase: sessionapi.PhaseReady, AgentConfig: cfg}}, cfg
 }
 
@@ -93,7 +93,7 @@ func TestApplicationRunAllCallsAndRealResults(t *testing.T) {
 	}
 	h := &fakeHarness{script: []*Result{{Done: true, ToolCalls: []ToolCall{{ID: "call_1", Name: "remember", Arguments: json.RawMessage(`{"content":"meeting"}`)}, {ID: "call_2", Name: "create_reminder", Arguments: json.RawMessage(`{"text":"meeting"}`)}}}, {Done: true, Final: "stored"}}}
 	d := &Deps{Store: s, Sessions: se, Harness: h, ApplicationTools: client, ConsolidateThreshold: 1}
-	out, err := runLoop(newMockedLoop(t), d, RunInput{SessionID: "s_app", Input: "remember and remind"}, "r_app")
+	out, err := runLoop(newMockedLoop(t), d, RunInput{SessionID: "s_app", Input: "x"}, "r_app")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,11 +194,12 @@ func TestApplicationUnknownStopsFollowingEffects(t *testing.T) {
 }
 
 func TestApplicationExecutionLimitsStopBeforeDispatch(t *testing.T) {
-	for _, mode := range []string{"deadline", "steps", "truncated", "tenant", "scope"} {
+	for _, mode := range []string{"deadline", "steps", "truncated", "tenant", "scope", "input", "topic"} {
 		t.Run(mode, func(t *testing.T) {
 			s, se, cfg := applicationFixture(t)
 			client := &countingApplicationCaller{}
 			h := &fakeHarness{script: []*Result{{Done: true, Truncated: mode == "truncated", ToolCalls: []ToolCall{{ID: "one", Name: "remember", Arguments: json.RawMessage(`{"content":"x"}`)}}}}}
+			input := RunInput{SessionID: "s_app", Input: "x"}
 			switch mode {
 			case "deadline":
 				s.runs["r_app"].Bound["deadline_at"] = time.Now().Add(-time.Second).Format(time.RFC3339Nano)
@@ -207,17 +208,21 @@ func TestApplicationExecutionLimitsStopBeforeDispatch(t *testing.T) {
 				se.state.AgentConfig = cfg
 			case "tenant":
 				s.runs["r_app"].Bound["tenant_id"] = "other"
+			case "input":
+				input.Input = "forged input"
+			case "topic":
+				input.Topic = "forged topic"
 			case "scope":
 				s.runs["r_app"].Bound["scope_id"] = "other"
 			}
-			_, err := runLoop(newMockedLoop(t), &Deps{Store: s, Sessions: se, Harness: h, ApplicationTools: client}, RunInput{SessionID: "s_app", Input: "x"}, "r_app")
+			_, err := runLoop(newMockedLoop(t), &Deps{Store: s, Sessions: se, Harness: h, ApplicationTools: client}, input, "r_app")
 			if err == nil || s.terminal.Error == nil {
 				t.Fatalf("limit/binding was ignored: %v", err)
 			}
 			if mode != "steps" && client.calls != 0 {
 				t.Fatal("blocked tool dispatched")
 			}
-			if (mode == "deadline" || mode == "tenant" || mode == "scope") && len(h.calls) != 0 {
+			if (mode == "deadline" || mode == "tenant" || mode == "scope" || mode == "input" || mode == "topic") && len(h.calls) != 0 {
 				t.Fatal("blocked model dispatched")
 			}
 		})

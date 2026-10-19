@@ -118,7 +118,7 @@ func applicationToolFromConfig(cfg sessionapi.AgentConfig, name string) (session
 
 func applicationContext(ctx context.Context, deps *Deps, in RunInput, runID string, step int, tc ToolCall) (ApplicationCallContext, error) {
 	run, err := deps.Store.GetRun(ctx, runID)
-	if err != nil || run == nil || run.SessionID != in.SessionID {
+	if err != nil || run == nil || run.SessionID != in.SessionID || run.Input != in.Input || run.Topic != in.Topic {
 		return ApplicationCallContext{}, fmt.Errorf("application run binding missing")
 	}
 	session, err := deps.Store.GetSession(ctx, in.SessionID)
