@@ -26,13 +26,19 @@ sleep 6
 for i in $(seq 1 20); do curl -fsS localhost:8080/healthz > /dev/null 2>&1 && break; sleep 1; done
 
 # 1. 写会话 + run（fake harness 已由 demo/CI 环境提供——脚本仅走 API）
-AGENT=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H 'content-type: application/json' \
+AGENT=$(curl -fsS -X POST "$API/orgs/org-$RUN_ID/agents" -H "Idempotency-Key: $RUN_ID-agent" -H 'content-type: application/json' \
   -d '{"name":"dr-agent","config":{"model":"claude-sonnet-4-6","instructions":"一句话。","tools":[],"version":1}}')
 AID=$(echo "$AGENT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-curl -fsS -m 120 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
-  -H "Idempotency-Key: $RUN_ID" -d '{"input":"hello"}' > /dev/null 2>&1 || true
-# 2. 归档
+SID=$(curl -fsS -X POST "$API/agents/$AID/sessions" -H "Idempotency-Key: $RUN_ID-session" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+RUN_JSON=$(curl -fsS -m 120 -X POST "$API/sessions/$SID/runs" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $RUN_ID" -d '{"input":"hello"}')
+RID=$(echo "$RUN_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))')
+for i in $(seq 1 30); do
+  STATUS=$(curl -fsS "$API/runs/$RID" 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+  [ "$STATUS" = "completed" ] && break
+  sleep 1
+done
+# 2. 归档（必须等 run 终态，否则归档事件数为 0）
 curl -fsS -m 30 -X POST "$API/sessions/$SID/archive" > /tmp/dr2-archive.out 2>&1
 BUCKET_PATH=$(python3 -c 'import json;print(json.load(open("/tmp/dr2-archive.out")).get("bucket_path",""))' 2>/dev/null || echo "")
 assert "归档 201（bucket_path 记录）" test -n "$BUCKET_PATH"
@@ -44,13 +50,12 @@ pass "基线事件数记录 events=${BASE_EVENTS}"
 
 # 3. 破坏：删 PG 事件
 docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -qc "DELETE FROM events WHERE session_id='$SID'" 2>/dev/null
-AFTER_EVENTS=$(curl -fsS -m 5 -N "$API/sessions/$SID/events?after=0" 2>/dev/null | grep -c '"type"' || echo 0)
-AFTER_EVENTS=$(echo "$AFTER_EVENTS" | tr -d '[:space:]')
-[ "$AFTER_EVENTS" -le 0 ] && pass "破坏 (PG 事件清空)" || fail "破坏不彻底: $AFTER_EVENTS"
+AFTER_EVENTS=$(docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELECT count(*) FROM events WHERE session_id='$SID'" 2>/dev/null | tr -d '[:space:]')
+[ "${AFTER_EVENTS:-x}" = "0" ] && pass "破坏 (PG 事件清空)" || fail "破坏不彻底: ${AFTER_EVENTS:-unknown}"
 
 # 4. 从 RustFS S3 网关取归档对象（SigV4 签名——Basic 头 invalid 实证）
 # → ndjson 解析回放（物化重建链）
-python3 test/dr/s3get.py "http://localhost:9000" "workspaces" "archives/org-$RUN_ID/$SID/events.ndjson.gz" chronotope chronotope_dev /tmp/dr2-obj.gz 2>&1 || true
+python3 test/dr/s3get.py "http://localhost:9000" "workspaces" "archives/org-$RUN_ID/$SID/events.ndjson.gz" "$RUSTFS_ACCESS_KEY" "$RUSTFS_SECRET_KEY" /tmp/dr2-obj.gz 2>&1 || true
 if [ -s /tmp/dr2-obj.gz ]; then
   REPLAY_COUNT=$(gunzip -c /tmp/dr2-obj.gz 2>/dev/null | python3 -c 'import sys,json;print(sum(1 for l in sys.stdin if l.strip() and json.loads(l).get("SessionID")))' 2>/dev/null || echo 0)
   echo "  replay=$REPLAY_COUNT base=$BASE_EVENTS"
