@@ -76,43 +76,46 @@ var ErrDeliveryAckConflict = errors.New("delivery ack conflict")
 // ErrFinalizeConflict 终态提交冲突（审计 5.2——已终态或同 key 异 payload）。
 var ErrFinalizeConflict = errors.New("finalize conflict (run 已终态)")
 
-// FinalizeRun E2：终态原子性——run 终态状态 + deliverable 结果引用同事务
-// （canonical terminal 与 owner outbox 的原子提交——deliverable 失败不再被吞，
-// 终态与交付要么同存要么同无）。
+// FinalizeRun commits terminal state and result together. Replaying the same
+// terminal result is a no-op; a different status, session, kind or result conflicts.
 func (s *Store) FinalizeRun(ctx context.Context, runID, sessionID string, status sessionapi.RunStatus, kind string, payload json.RawMessage) error {
+	if status != sessionapi.RunCompleted && status != sessionapi.RunFailed && status != sessionapi.RunCanceled {
+		return fmt.Errorf("store: finalize requires a terminal status")
+	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("store: finalize begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	const q = `
-UPDATE runs SET status = $2,
-  started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
-  finished_at = CASE WHEN $2 IN ('completed','failed','cancelled') THEN now() ELSE finished_at END
-WHERE id = $1
-  AND status NOT IN ('completed','failed','cancelled')`
-	tag, err := tx.Exec(ctx, q, runID, string(status))
+	var current sessionapi.RunStatus
+	var owner string
+	if err := tx.QueryRow(ctx, `SELECT status,session_id FROM runs WHERE id=$1 FOR UPDATE`, runID).Scan(&current, &owner); err != nil {
+		return fmt.Errorf("store: finalize read: %w", err)
+	}
+	if owner != sessionID {
+		return ErrFinalizeConflict
+	}
+	if current == sessionapi.RunCompleted || current == sessionapi.RunFailed || current == sessionapi.RunCanceled {
+		var same bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deliverables WHERE run_id=$1 AND session_id=$2 AND kind=$3 AND payload=$4::jsonb)`, runID, sessionID, kind, payload).Scan(&same); err != nil {
+			return err
+		}
+		if current == status && same {
+			return nil
+		}
+		return ErrFinalizeConflict
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET status=$2,finished_at=now() WHERE id=$1`, runID, string(status)); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO deliverables(run_id,session_id,kind,payload) VALUES($1,$2,$3,$4)
+ON CONFLICT(run_id) DO UPDATE SET payload=EXCLUDED.payload
+WHERE deliverables.session_id=EXCLUDED.session_id AND deliverables.kind=EXCLUDED.kind AND deliverables.payload=EXCLUDED.payload`, runID, sessionID, kind, payload)
 	if err != nil {
-		return fmt.Errorf("store: finalize status: %w", err)
+		return fmt.Errorf("store: finalize result: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		// 审计 4.2（九期）：expected 状态校验——已终态的 run 重复提交 0 行
-		// 不得静默成功
-		return fmt.Errorf("store: finalize: %w", ErrFinalizeConflict)
-	}
-	const dq = `
-INSERT INTO deliverables (run_id, session_id, kind, payload)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (run_id) DO UPDATE SET payload = EXCLUDED.payload
-WHERE deliverables.payload = EXCLUDED.payload`
-	dtag, err := tx.Exec(ctx, dq, runID, sessionID, kind, payload)
-	if err != nil {
-		return fmt.Errorf("store: finalize deliverable: %w", err)
-	}
-	if dtag.RowsAffected() == 0 {
-		// 审计 4.2（九期）：payload 冲突的 0 行不得提交成功（同 key 异 payload
-		// 的覆盖关闭）
-		return fmt.Errorf("store: finalize deliverable: %w", ErrFinalizeConflict)
+	if tag.RowsAffected() != 1 {
+		return ErrFinalizeConflict
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("store: finalize commit: %w", err)

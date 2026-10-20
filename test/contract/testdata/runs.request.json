@@ -7,13 +7,14 @@
   "messages": [
     { "role": "system", "content": "你是一个编码助手。", "source": "trusted" },
     { "role": "user", "content": "写一个能通过测试的模块。" },
-    { "role": "assistant", "content": "好的，我先写实现。", "tool_calls": [] },
-    { "role": "tool", "content": "exit: 2\n...", "source": "sandbox" }
+    { "role": "assistant", "content": "先检索。", "tool_calls": [{"id":"prior_call","type":"function","function":{"name":"knowledge_search","arguments":"{\"query\":\"规则\"}"}}] },
+    { "role": "tool", "content": "{\"nonce\":\"known-tool-result\"}", "tool_call_id": "prior_call", "source": "trusted" }
   ],
   "tools": [
-    { "type": "function", "name": "bash", "schema": { "type": "object", "properties": { "command": { "type": "string" } } }, "risk_class": 1 },
-    { "type": "function", "name": "write_file", "schema": {}, "risk_class": 1 }
+    { "type": "function", "name": "knowledge_search", "description": "检索当前作用域内的知识", "schema": {"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}, "risk_class": 0 },
+    { "type": "function", "name": "knowledge_remember", "description": "保存允许的知识", "schema": {"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}, "risk_class": 0 }
   ],
-  "max_turns": 8,
-  "max_output_bytes": 524288
+  "max_output_bytes": 524288,
+  "max_output_tokens": 4096,
+  "timeout_ms": 30000
 }

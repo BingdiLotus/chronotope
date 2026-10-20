@@ -27,10 +27,12 @@ async def test_fragment_accumulation():
     frames = []
     async for f in m._run(m.p.RunRequest(protocol="1.0", run_id="r1", session_id="s", step=0, model="m",
                                          messages=[m.p.Message(role="user", content="x")],
-                                         tools=[m.p.Tool(type="function", name="next_speaker")],
-                                         max_turns=2), provider):
+                                         tools=[m.p.Tool(type="function", name="next_speaker")]), provider):
         frames.append(f)
     tool_call = next(f for f in frames if json.loads(f["data"])["type"] == "tool_call")
     payload = json.loads(tool_call["data"])["payload"]
     assert payload["name"] == "next_speaker"
     assert payload["arguments"] == {"participant": 0, "instruction": "发言"}, payload
+    assert payload["raw_arguments"] == '{"participant": 0,"instruction": "发言"}'
+    assert json.loads(frames[-1]["data"])["type"] == "done"
+    assert provider.calls == 1

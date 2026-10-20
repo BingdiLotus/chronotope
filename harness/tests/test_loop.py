@@ -1,4 +1,4 @@
-"""agent 循环单测：脚本化 LLMProvider 注入，覆盖 done/交棒/内联工具/截断/max_turns。"""
+"""单段推理：全部工具交棒、原始参数、限额与流错误。"""
 
 from __future__ import annotations
 
@@ -84,10 +84,12 @@ async def test_code_tool_hands_off():
         StreamChunk(delta="我来跑测试。", tool_calls=[tc(0, "t_9", "bash", '{"command":"pytest"}')]),
     ]])
     frames = await collect(provider, base_request())
-    assert frames[-1].type == "tool_call", "代码工具必须交棒（不内联执行）"
-    assert frames[-1].payload["name"] == "bash"
-    assert frames[-1].payload["arguments"] == {"command": "pytest"}, "arguments 应为 JSON 对象（契约样例）"
-    assert frames[-1].payload["id"] == "t_9"
+    call = next(f for f in frames if f.type == "tool_call")
+    assert call.payload["name"] == "bash"
+    assert call.payload["arguments"] == {"command": "pytest"}
+    assert call.payload["id"] == "t_9"
+    assert frames[-1].type == "done"
+    assert provider.i == 1
 
 
 async def test_control_tool_hands_off():
@@ -96,45 +98,36 @@ async def test_control_tool_hands_off():
         StreamChunk(delta="需要审批。", tool_calls=[tc(0, "t_2", "request_approval", '{"question":"允许吗？"}')]),
     ]])
     frames = await collect(provider, base_request())
-    assert frames[-1].type == "tool_call"
-    assert frames[-1].payload["name"] == "request_approval"
-    assert frames[-1].payload["arguments"] == {"question": "允许吗？"}
-
-
-async def test_api_tool_inline_then_done(monkeypatch):
-    """API 工具内联执行 → 结果回喂 → 下一轮终答（两轮流式脚本）。"""
-    async def fake_http_request(name, arguments):
-        return json.dumps({"status": 200, "body": "ok"})
-
-    monkeypatch.setattr("app.main.run_api_tool", fake_http_request)
-
-    script = [
-        # 第一轮：工具调用（http_request 属 API 工具，内联）
-        [StreamChunk(delta="查一下。", tool_calls=[tc(0, "t_1", "http_request", '{"url":"https://example.com"}')])],
-        # 第二轮：模型拿到工具结果后终答
-        [StreamChunk(delta="查询成功。"), StreamChunk(usage={"tokens_in": 3, "tokens_out": 2})],
-    ]
-    frames = await collect(ScriptedProvider(script), base_request())
-    types = [f.type for f in frames]
-    assert "turn_end" in types, "内联工具完成后应发 turn_end"
+    call = next(f for f in frames if f.type == "tool_call")
+    assert call.payload["name"] == "request_approval"
+    assert call.payload["arguments"] == {"question": "允许吗？"}
     assert frames[-1].type == "done"
-    assert frames[-1].payload["final"] == "查询成功。"
-    assert not any(f.type == "tool_call" for f in frames), "API 工具不应交棒"
 
 
-async def test_max_turns_errors(monkeypatch):
-    """永远产出 API 工具调用（内联不终结）→ max_turns 封顶 → error 终态。"""
-    async def fake_http_request(name, arguments):
-        return json.dumps({"ok": True})
+async def test_all_tools_handed_off_once_without_inline_execution(monkeypatch):
+    async def forbidden_http(*args, **kwargs):
+        raise AssertionError("harness must not execute API tools")
 
-    monkeypatch.setattr("app.main.run_api_tool", fake_http_request)
-    script = [
-        [StreamChunk(tool_calls=[tc(0, f"t_{i}", "http_request", '{"url":"https://example.com"}')])]
-        for i in range(8)
-    ]
-    frames = await collect(ScriptedProvider(script), base_request(max_turns=2))
-    assert frames[-1].type == "error"
-    assert frames[-1].payload["code"] == "max_turns"
+    monkeypatch.setattr("httpx.AsyncClient.get", forbidden_http)
+    provider = ScriptedProvider([[
+        StreamChunk(delta="查一下。", tool_calls=[
+            tc(1, "t_2", "knowledge_search", '{"query":"规则"}'),
+            tc(0, "t_1", "http_request", '{"url":"https://example.com"}'),
+        ]),
+        StreamChunk(usage={"tokens_in": 12, "tokens_out": 9}),
+    ]])
+    req = base_request(tools=[p.Tool(name="http_request"), p.Tool(name="knowledge_search")])
+    frames = await collect(provider, req)
+    calls = [f.payload for f in frames if f.type == "tool_call"]
+    assert [c["id"] for c in calls] == ["t_1", "t_2"]
+    assert [c["name"] for c in calls] == ["http_request", "knowledge_search"]
+    assert calls[1]["raw_arguments"] == '{"query":"规则"}'
+    assert provider.i == 1
+    assert frames[-1].type == "done"
+    assert frames[-1].payload["final"] == "查一下。"
+    assert frames[-1].payload["usage"]["tokens_in"] == 12
+    assert "turn_end" not in [f.type for f in frames]
+    assert [f.seq for f in frames if f.type != "beat"] == list(range(1, len(frames)))
 
 
 async def test_unsupported_protocol_defensive_error():
@@ -143,21 +136,79 @@ async def test_unsupported_protocol_defensive_error():
     assert frames[-1].payload["code"] == "protocol_unsupported"
 
 
-async def test_invalid_tool_arguments_json_fallback():
-    """arguments 非法 JSON → 内联工具收到 {}，不崩溃。"""
-    async def fake_http_request(name, arguments):
-        return json.dumps({"got": arguments})
-
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr("app.main.run_api_tool", fake_http_request)
-
-    script = [
-        [StreamChunk(delta="x", tool_calls=[tc(0, "t_1", "http_request", "{oops")])],
-        [StreamChunk(delta="done"), StreamChunk(usage={"tokens_in": 1, "tokens_out": 1})],
-    ]
-    frames = await collect(ScriptedProvider(script), base_request())
+@pytest.mark.parametrize("raw", ["{oops", "", "[]", "null", '{"x":NaN}'])
+async def test_invalid_tool_arguments_retained_as_error(raw):
+    provider = ScriptedProvider([[
+        StreamChunk(tool_calls=[tc(0, "t_bad", "knowledge_search", raw)]),
+    ]])
+    frames = await collect(provider, base_request())
+    call = next(f.payload for f in frames if f.type == "tool_call")
+    assert call["id"] == "t_bad"
+    assert call["arguments"] is None
+    assert call["raw_arguments"] == raw
+    assert call["arguments_error"]
     assert frames[-1].type == "done"
-    monkeypatch.undo()
+    assert provider.i == 1
+
+
+async def test_missing_usage_preserves_known_result_and_marks_partial():
+    frames = await collect(ScriptedProvider([[StreamChunk(delta="known result")]]), base_request())
+    assert frames[-1].payload["final"] == "known result"
+    assert frames[-1].payload["usage_partial"] is True
+
+
+async def test_length_finish_keeps_usage_and_does_not_dispatch_incomplete_calls():
+    frames = await collect(ScriptedProvider([[
+        StreamChunk(tool_calls=[tc(0, "t_1", "bash", '{"command":')]),
+        StreamChunk(finish_reason="length"),
+        StreamChunk(usage={"tokens_in": 3, "tokens_out": 5}),
+    ]]), base_request())
+    assert not any(f.type == "tool_call" for f in frames)
+    assert frames[-1].payload["truncated"] is True
+    assert frames[-1].payload["usage"]["tokens_out"] == 5
+    assert frames[-1].payload["usage"]["usage_partial"] is False
+
+
+async def test_argument_bytes_are_bounded_and_stream_is_closed():
+    class LongArguments(LLMProvider):
+        closed = False
+
+        async def stream(self, req):
+            try:
+                yield StreamChunk(tool_calls=[tc(0, "t_1", "bash", '{"command":"' + "x" * 1000)])
+                raise AssertionError("stream must be closed at byte limit")
+            finally:
+                self.closed = True
+
+    provider = LongArguments()
+    frames = await collect(provider, base_request(max_output_bytes=16))
+    assert provider.closed
+    assert not any(f.type == "tool_call" for f in frames)
+    assert frames[-1].payload["truncated"] is True
+    assert frames[-1].payload["usage_partial"] is True
+
+
+@pytest.mark.parametrize("first_delta", [False, True])
+async def test_timeout_stops_stream_with_explicit_error(first_delta):
+    import asyncio
+
+    class SlowProvider(LLMProvider):
+        closed = False
+
+        async def stream(self, req):
+            try:
+                if first_delta:
+                    yield StreamChunk(delta="before timeout")
+                await asyncio.sleep(1)
+                yield StreamChunk(delta="late")
+            finally:
+                self.closed = True
+
+    provider = SlowProvider()
+    frames = await collect(provider, base_request(timeout_ms=10))
+    assert frames[-1].type == "error"
+    assert "timed out after 10 ms" in frames[-1].payload["message"]
+    assert provider.closed
 
 
 async def test_stream_error_yields_error_frame(monkeypatch):

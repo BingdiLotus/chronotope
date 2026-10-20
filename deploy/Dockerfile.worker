@@ -4,7 +4,9 @@ WORKDIR /src
 COPY go.mod go.sum go.work ./
 COPY cmd/ cmd/
 COPY internal/ internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/chronotope-worker ./cmd/worker
+RUN --mount=type=cache,id=chronotope-go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=chronotope-go-build,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/chronotope-worker ./cmd/worker
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 65532 chronotope

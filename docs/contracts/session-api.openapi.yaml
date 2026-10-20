@@ -4,22 +4,25 @@ info:
   version: 1.0.0
   description: |
     Session API（契约规范 §2，权威定义见仓库根目录 契约规范.md）。
-    总原则：只增不改；版本绑定在 run；幂等键贯穿全链路；错误码稳定。
+    当前开发代次允许破坏性变更，不提供旧协议兼容层；版本绑定在 run。
+    应用 profile 使用不可变 agent、有限异步 run、固定应用工具 bridge 和单次 timer。
+    认证启用时，所有资源查询/创建校验租户归属；应用 session 绑定 subject_ref/scope_id。
 
     状态机（唯一权威）：
       session: created → ready → running → sleeping / paused / awaiting_approval
                → completed → archived / deleted
       run:     queued → running → paused / awaiting_approval / frozen
-               → completed / failed / cancelled
+               → completed / failed / canceled
 
     幂等键传递链路：Idempotency-Key(api) → run_id(worker) → (run_id, step)(harness/executor)。
 paths:
   /orgs/{orgId}/agents:
     post:
-      summary: 创建/升级 agent（config 全量，version+1）
+      summary: 幂等创建不可变 agent 配置快照
       operationId: createAgent
       parameters:
         - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -27,7 +30,11 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateAgentRequest"
       responses:
-        "201": { description: agent 已创建（含 version） }
+        "201": { description: agent 已创建，返回 id/config/spec_digest，version=1 }
+        "200": { description: 同键同请求返回原 id/config/spec_digest，idempotent=true }
+        "400": { description: 缺失或无效 Idempotency-Key }
+        "403": { description: 租户归属不符 }
+        "409": { description: 同键异请求，error_code=idempotency_conflict }
         "422": { $ref: "#/components/responses/Error422" }
   /agents/{agentId}/sessions:
     post:
@@ -35,11 +42,23 @@ paths:
       operationId: createSession
       parameters:
         - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSessionRequest" }
       responses:
-        "201": { description: session 已创建，status=created → ready }
+        "201": { description: session 已创建，返回 id/agent_id/status/subject_ref/scope_id }
+        "200": { description: 同键同请求返回原 session，idempotent=true }
+        "400": { description: 缺失或无效 Idempotency-Key }
+        "403": { description: agent 租户归属不符 }
+        "409": { description: 同键异请求或原 session 已删除 }
+        "422": { description: 应用 session 缺少 subject_ref/scope_id，或请求非法 }
+        "503": { description: 初始化尚未确认，必须用同 key 重试原资源 }
   /sessions/{sessionId}/runs:
     post:
-      summary: 提交任务；Idempotency-Key 必带，返回同一 run
+      summary: 耐久接纳有限 run，返回稳定 handle；不等待模型或工具完成
       operationId: submitRun
       parameters:
         - $ref: "#/components/parameters/SessionId"
@@ -51,9 +70,73 @@ paths:
             schema:
               $ref: "#/components/schemas/SubmitRunRequest"
       responses:
-        "201": { description: run_id（queued） }
-        "409": { description: 双开（带 active_run_id，可 queue:true 排队） }
-        "422": { description: 超预算（budget.exceeded） }
+        "202":
+          description: run/command/admission outbox 已提交；返回 run_id/status=queued/idempotent=false
+          headers:
+            Location: { schema: { type: string }, description: "GET /runs/{runId}" }
+        "200": { description: 同键同请求返回原 run_id 与 canonical status，idempotent=true；先于 busy/限流检查 }
+        "400": { description: 缺失或无效 Idempotency-Key }
+        "403": { description: session 租户归属不符 }
+        "409": { description: 同键异完整请求冲突，或新请求遇 session busy（带 active_run_id）；由应用持久排队 }
+        "422": { description: 请求非法，或应用 run 缺少绑定上下文/origin_command_id }
+        "429": { description: 接纳限流，带 Retry-After }
+  /runs/{runId}:
+    get:
+      summary: 受权查询 canonical run 状态与结果；无需保持 SSE 连接
+      operationId: getRun
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 终态和 final/error/usage 同一次提交后可见，未产生的结果字段为 null
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunResult" }
+        "403": { description: run 所属 session 的租户归属不符 }
+        "404": { $ref: "#/components/responses/Error404" }
+  /timers:
+    post:
+      summary: 耐久接纳一次性 timer，逻辑幂等键为 tenant_id/timer_id/revision
+      operationId: createTimer
+      description: |
+        同键同规范请求返回原 handle，异 due_at/action/context 冲突。
+        due_at 规范到 UTC 微秒精度。回调地址与服务认证只来自部署配置，
+        由 tenant_id/subject_ref/scope_id 选择固定目标；请求不能提供 URL。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TimerRequest" }
+      responses:
+        "202":
+          description: timer 及待提交责任已持久化；同键重试仍返回原记录
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimerRecord" }
+          headers:
+            Location: { schema: { type: string }, description: 含 tenant_id/subject_ref/scope_id/revision 的受权查询路径 }
+        "400": { description: 标识/时间/revision 非法或存在未声明字段 }
+        "403": { description: 租户不符或 subject/scope 未在部署配置中注册 }
+        "409": { description: 同 timer 键复用了不同请求 }
+  /timers/{timerId}:
+    get:
+      summary: 查询 timer 提交、回调接纳状态及最近错误
+      operationId: getTimer
+      parameters:
+        - { name: timerId, in: path, required: true, schema: { type: string } }
+        - { name: tenant_id, in: query, required: true, schema: { type: string } }
+        - { name: subject_ref, in: query, required: true, schema: { type: string } }
+        - { name: scope_id, in: query, required: true, schema: { type: string } }
+        - { name: revision, in: query, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        "200":
+          description: acknowledged 只证明应用耐久接纳 fire，不证明最终业务完成或送达
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimerRecord" }
+        "400": { description: 缺少查询上下文或 revision 非法 }
+        "403": { description: 租户不符 }
+        "404": { description: timer 不存在或不属于该 subject/scope }
   /sessions/{sessionId}/events:
     get:
       summary: SSE 时间轴；断线重连按 after=seq 续读；seq 允许 gap
@@ -158,7 +241,7 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 256 }
 
   responses:
     Error404:
@@ -181,15 +264,16 @@ components:
         error: { type: string }
         detail: { type: string }
       description: |
-        错误码（契约规范 §6）：客户端 400/401/403/404/409/422 不重试；
+        错误码（契约规范 §6）：输入/权限错误 400/401/403/404/422 不盲目重试；
+        409 idempotency_conflict 必须修正逻辑请求，session_busy 则由应用持久排队后重试；
         429 幂等重试 + 指数退避 + Retry-After；500/502/503 幂等重试；504 幂等重试（≤3 次后失败事件）。
     AgentConfig:
       type: object
-      required: [model, instructions, tools, version]
+      required: [model]
       properties:
         model: { type: string, description: model+版本 }
         instructions: { type: string }
-        tools: { type: array, items: { type: string }, description: 工具名词汇表规范名 }
+        tools: { type: array, items: { type: string }, description: 旧 executor 工具；application_profile 不暴露此通道 }
         mcp_servers: { type: array, items: { type: string } }
         skills: { type: array, items: { type: string } }
         environment:
@@ -202,22 +286,149 @@ components:
                 limits: { type: object, additionalProperties: { type: string } }
                 ttl: { type: string }
         budget: { type: object }
-        version: { type: integer, description: 每次变更 +1；run 启动时绑定 }
+        version: { type: integer, description: 当前不可变创建规范为 1；配置变更应创建新快照 }
+        application_profile:
+          type: boolean
+          default: false
+          description: true 时只暴露固定应用工具，关闭 tenant knowledge 注入、自动 consolidation 和旧 SDK/MCP/executor 入口
+        application_bridge_ref:
+          type: string
+          description: 必须指向部署中归属本 tenant 的 bridge；不接收 URL 或凭据
+        application_tools:
+          type: array
+          items: { $ref: "#/components/schemas/ApplicationTool" }
+        max_output_tokens: { type: integer, minimum: 0, description: 每次模型输出上限；0 使用默认 4096 }
+        max_steps: { type: integer, minimum: 0, description: 有限 run 的模型派发上限；0 使用默认 16 }
+        max_duration_ms: { type: integer, format: int64, minimum: 0, description: run deadline；0 使用默认 300000ms }
+    ApplicationTool:
+      type: object
+      required: [model_alias, tool_ref, description, input_schema]
+      properties:
+        model_alias: { type: string, pattern: "^[a-zA-Z0-9_-]{1,64}$" }
+        tool_ref: { type: string, minLength: 1 }
+        description: { type: string, minLength: 1 }
+        input_schema:
+          type: object
+          description: 有效 JSON Schema，顶层 type=object；只接受本地 $ref；alias/ref 均不能重复
+    ApplicationToolCall:
+      type: object
+      required: [context, tool_ref, arguments]
+      description: |
+        Worker POST 到部署固定 bridge URL；Bearer 服务认证来自部署配置，
+        Idempotency-Key 为稳定 operation_id。应用验证主体、scope 及参数，
+        持久保存业务写入和原返回值；2xx/4xx JSON 都可作为原 call 的工具结果回喂。
+      properties:
+        context:
+          type: object
+          required: [tenant_id, subject_ref, scope_id, origin_command_id, run_id, operation_id, tool_call_id]
+          description: 全部从 bound run/工具调用派生，不能由模型 arguments 提供
+          properties:
+            tenant_id: { type: string }
+            subject_ref: { type: string }
+            scope_id: { type: string }
+            origin_command_id: { type: string }
+            run_id: { type: string }
+            operation_id: { type: string }
+            tool_call_id: { type: string }
+        tool_ref: { type: string }
+        arguments: { type: object }
     CreateAgentRequest:
       type: object
+      additionalProperties: false
       required: [name, config]
       properties:
         name: { type: string }
         config: { $ref: "#/components/schemas/AgentConfig" }
     SubmitRunRequest:
       type: object
+      additionalProperties: false
       required: [input]
       properties:
         input: { type: string }
         trigger: { type: object }
-        queue:
-          type: boolean
-          description: true 时同 session 双开改排队（queued 态按序执行）
+        topic: { type: string }
+        origin_command_id: { type: string, description: 应用 profile 必填，作为 opaque 来源引用绑定到 run }
+      description: 幂等摘要包括完整 input/topic/trigger/origin_command_id；模型参数和 metadata 不授予访问权
+    CreateSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        subject_ref: { type: string, description: 应用 profile 必填的 opaque 主体引用 }
+        scope_id: { type: string, description: 应用 profile 必填的 opaque 作用域引用 }
+        participants:
+          type: array
+          description: 应用 profile 不接受群聊 participants
+          items:
+            type: object
+            required: [agent_id]
+            properties:
+              agent_id: { type: string }
+              role: { type: string }
+    RunResult:
+      type: object
+      required: [run_id, session_id, status, final, error, usage, bound]
+      properties:
+        run_id: { type: string }
+        session_id: { type: string }
+        status: { type: string, enum: [queued, running, paused, awaiting_approval, frozen, completed, failed, canceled] }
+        final: { type: string, nullable: true }
+        error: { type: object, nullable: true, additionalProperties: true }
+        usage:
+          type: object
+          nullable: true
+          properties:
+            tokens_in: { type: integer, format: int64 }
+            tokens_out: { type: integer, format: int64 }
+            tokens_total: { type: integer, format: int64 }
+            usage_unknown: { type: boolean, description: 仅计量未知；不把已知模型结果当作 result_unknown 重做 }
+        bound: { type: object, description: 不可变 agent/config/protocol/model 与 tenant/subject/scope/origin 引用 }
+        steps: { type: integer }
+        truncated: { type: boolean }
+    TimerRequest:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, subject_ref, scope_id, timer_id, revision, due_at, opaque_action_ref]
+      properties:
+        tenant_id: { type: string, minLength: 1, maxLength: 256 }
+        subject_ref: { type: string, minLength: 1, maxLength: 256 }
+        scope_id: { type: string, minLength: 1, maxLength: 256 }
+        timer_id: { type: string, minLength: 1, maxLength: 256 }
+        revision: { type: integer, format: int64, minimum: 1 }
+        due_at: { type: string, format: date-time, description: 绝对时间；过期立即触发，不周期请求模型 }
+        opaque_action_ref: { type: string, minLength: 1, maxLength: 2048 }
+    TimerRecord:
+      type: object
+      required: [tenant_id, subject_ref, scope_id, timer_id, revision, due_at, opaque_action_ref, timer_handle, fire_id, state]
+      properties:
+        tenant_id: { type: string }
+        subject_ref: { type: string }
+        scope_id: { type: string }
+        timer_id: { type: string }
+        revision: { type: integer, format: int64 }
+        due_at: { type: string, format: date-time }
+        opaque_action_ref: { type: string }
+        timer_handle: { type: string }
+        fire_id: { type: string, description: 重投保持同一身份 }
+        state: { type: string, enum: [pending, scheduled, firing, retrying, blocked, acknowledged] }
+        submit_attempts: { type: integer }
+        callback_attempts: { type: integer }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
+        submitted_at: { type: string, format: date-time, nullable: true }
+        acknowledged_at: { type: string, format: date-time, nullable: true }
+    TimerFire:
+      type: object
+      required: [tenant_id, timer_id, revision, fire_id, opaque_action_ref]
+      description: |
+        Worker POST 到固定回调目标；Bearer 服务认证与 Idempotency-Key=fire_id。
+        只有应用耐久接纳后才返回 2xx；网络/响应未知可重投同一 payload/fire_id。
+        这一跳的 ACK 不证明最终发送或应用动作完成，改期/取消由应用检查 revision/status。
+      properties:
+        tenant_id: { type: string }
+        timer_id: { type: string }
+        revision: { type: integer, format: int64 }
+        fire_id: { type: string }
+        opaque_action_ref: { type: string }
     ActionRequest:
       type: object
       required: [action]

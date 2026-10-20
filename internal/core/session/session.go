@@ -32,6 +32,8 @@ type Session struct {
 	ID                string
 	OrgID             string
 	AgentID           string
+	SubjectRef        string
+	ScopeID           string
 	Status            sessionapi.SessionPhase
 	RestateKey        *string
 	LastActiveAt      *time.Time
@@ -43,12 +45,14 @@ type Session struct {
 
 // Run run 行（不可变 command + 终态投影）。
 type Run struct {
-	ID        string
-	Input     string // 不可变 command（审计 #3 修复——重投按行重放）
-	Topic     string
-	SessionID string
-	Status    sessionapi.RunStatus
-	Bound     map[string]any
+	ID          string
+	Input       string // 不可变 command（审计 #3 修复——重投按行重放）
+	Topic       string
+	SessionID   string
+	Status      sessionapi.RunStatus
+	Bound       map[string]any
+	RequestHash string
+	Result      json.RawMessage
 }
 
 // EventRow 事件行（append-only 投影）。

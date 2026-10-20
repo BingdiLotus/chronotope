@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/bingdilotus/chronotope/internal/api"
+	"github.com/bingdilotus/chronotope/internal/appconfig"
 	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/events"
 	"github.com/bingdilotus/chronotope/internal/restate"
@@ -53,6 +54,17 @@ func main() {
 	defer st.Close()
 
 	h := api.New(st, events.NewHub(), api.NewHTTPIngress(*restateURL))
+	applications, err := appconfig.Load()
+	if err != nil {
+		log.Fatalf("application configuration: %v", err)
+	}
+	h.ApplicationBridgeTenants = map[string]string{}
+	for _, bridge := range applications.Bridges {
+		h.ApplicationBridgeTenants[bridge.Ref] = bridge.TenantID
+	}
+	h.Timers = &api.TimerHandler{Store: st, Targets: applications.TimerTargets}
+	timers := &api.TimerRecovery{Store: st, Ingress: h.Ingress, Logger: slog.Default()}
+	go timers.Run(ctx, time.Second)
 	// 嵌入门面（期 3 §D：共享知识写入的向量来源——harness /embed）
 	if hu := os.Getenv("HARNESS_URL"); hu != "" {
 		h.Embedder = restate.NewHarnessClient(hu)
@@ -104,7 +116,7 @@ func main() {
 	}
 	// 接纳屏障恢复（评审 #6）：queued 遗留 run 重投扫描
 	admission := &api.AdmissionRecovery{Store: st, Ingress: h.Ingress, Logger: slog.Default()}
-	go admission.Run(ctx, time.Minute)
+	go admission.Run(ctx, time.Second)
 
 	deliverer := &api.Deliverer{
 		SigningSecret: deliverSigningSecret,
@@ -129,7 +141,7 @@ func main() {
 	r.Use(h.AuthMiddleware(h.AuthMode, os.Getenv("API_ADMIN_KEY")))
 	r.Use(middleware.Recoverer)
 	// 不设全局 Timeout：SSE 时间轴是长连接（由客户端断开控制生命周期）；
-	// 提交任务的阻塞时长由 ingress 客户端超时（10min）约束
+	// run/timer 只耐久接纳，执行生命周期由 Restate 管理。
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","service":"chronotope-api"}`))

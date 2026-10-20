@@ -115,7 +115,7 @@ func (s *Store) AdmissionState(ctx context.Context, runID string) (string, error
 // PutLLMCallResult 结果落账（usage 三字段 + 状态 result/unknown）。
 func (s *Store) PutLLMCallResult(ctx context.Context, runID string, step int, tokensIn, tokensOut int64, partial, unknown bool, errMsg, resultJSON, credentialRef string) error {
 	state := "result"
-	if unknown || errMsg != "" {
+	if resultJSON == "" && (unknown || errMsg != "") {
 		state = "unknown"
 	}
 	const q = `

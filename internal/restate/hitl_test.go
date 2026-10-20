@@ -22,7 +22,7 @@ import (
 // TestRunLoopRequestApprovalHITL：控制工具 → awakeable 挂起 → awaiting_approval 事件
 // → resolve 后 resumed 事件 → 结果回喂 → 下一轮终答。
 func TestRunLoopRequestApprovalHITL(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{runs: map[string]*store.Run{"r_1": {ID: "r_1", SessionID: "s_1"}}}
 	harness := &fakeHarness{script: []*Result{
 		{Done: false, ToolCalls: []ToolCall{{ID: "t_1", Name: "request_approval", Arguments: json.RawMessage(`{"question":"允许吗？"}`)}}},
 		{Done: true, Final: "已获批准，继续。", Usage: runs.LLMUsage{TokensIn: 2, TokensOut: 1}},

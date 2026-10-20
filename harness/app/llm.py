@@ -28,6 +28,7 @@ class StreamChunk:
     delta: str | None = None
     tool_calls: list[dict] = field(default_factory=list)  # 原始 OpenAI 格式片段
     usage: dict | None = None  # tokens_in/tokens_out
+    finish_reason: str | None = None
 
 
 class LLMProvider(ABC):
@@ -49,7 +50,7 @@ def openai_tools(tools: list[Tool]) -> list[dict] | None:
             "type": "function",
             "function": {
                 "name": t.name,
-                "description": f"risk_class={t.risk_class}",  # 风险分级提示（边界语义 §2）
+                "description": t.description,
                 "parameters": t.tool_schema or {"type": "object", "properties": {}},
             },
         }
@@ -74,59 +75,58 @@ class OpenAIProvider(LLMProvider):
             for m in req.messages
         ]
         # stream_options.include_usage：流末返回 usage（截断/断流时 usage_partial 兜底，契约规范 §3）
-        response = await self.client.chat.completions.create(
+        options = {}
+        if req.max_output_tokens is not None:
+            options["max_completion_tokens"] = req.max_output_tokens
+        if req.timeout_ms is not None:
+            options["timeout"] = req.timeout_ms / 1000
+        # 派发和重试由 worker 记账；SDK 不额外重发一次模型推理。
+        response = await self.client.with_options(max_retries=0).chat.completions.create(
             model=req.model,
             messages=messages,
             tools=openai_tools(req.tools),
             stream=True,
             stream_options={"include_usage": True},
+            **options,
         )
-        tool_call_fragments: dict[int, dict] = {}
-        async for chunk in response:
-            # 流末 usage 块（stream_options.include_usage）可能无 choices，先取 usage
-            usage = None
-            if chunk.usage is not None:
-                usage = {
-                    "tokens_in": chunk.usage.prompt_tokens or 0,
-                    "tokens_out": chunk.usage.completion_tokens or 0,
-                }
-            if not chunk.choices:
-                if usage:
-                    yield StreamChunk(usage=usage)
-                continue
-            choice = chunk.choices[0]
-            delta = choice.delta
-            if delta is None:
-                continue
-            text = delta.content or ""
-            calls = []
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index
-                    tool_call_fragments.setdefault(
-                        idx, {"index": idx, "id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                    )
-                    # 契约（StreamChunk 文档）：yield 原始 delta 片段（非累计），
-                    # 由 harness 侧按 index 累计合并。曾误 yield 累计副本 → harness
-                    # 再合并 → 工具名双写（"next_speakernext_speaker"，真实模型 e2e 实证）
-                    calls.append({
-                        "index": idx,
-                        "id": tc.id or "",
-                        "type": "function",
-                        "function": {
-                            "name": (tc.function.name if tc.function else "") or "",
-                            "arguments": (tc.function.arguments if tc.function else "") or "",
-                        },
-                    })
-            if text or calls or usage:
-                yield StreamChunk(delta=text or None, tool_calls=calls, usage=usage)
+        async with response:
+            async for chunk in response:
+                # 流末 usage 块可能无 choices，先取 usage。
+                usage = None
+                if chunk.usage is not None:
+                    usage = {
+                        "tokens_in": chunk.usage.prompt_tokens or 0,
+                        "tokens_out": chunk.usage.completion_tokens or 0,
+                    }
+                if not chunk.choices:
+                    if usage is not None:
+                        yield StreamChunk(usage=usage)
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                text = (delta.content or "") if delta else ""
+                calls = []
+                if delta and delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        # 原始 delta，仅由 main 按 index 合并一次。
+                        calls.append({
+                            "index": tc.index,
+                            "id": tc.id or "",
+                            "type": "function",
+                            "function": {
+                                "name": (tc.function.name if tc.function else "") or "",
+                                "arguments": (tc.function.arguments if tc.function else "") or "",
+                            },
+                        })
+                if text or calls or usage is not None or choice.finish_reason:
+                    yield StreamChunk(delta=text or None, tool_calls=calls, usage=usage,
+                                      finish_reason=choice.finish_reason)
 
 
 class FakeProvider(LLMProvider):
     """e2e/演示实现：流式回放固定回复（模拟 delta 帧，可配延迟）。
 
-    脚本模式（script 非空）：按轮产出工具调用/终答——
-    第 n 次 stream() 消费第 n 轮；tool_call 轮发交棒帧，final 轮流式终答。
+    脚本模式（script 非空）：按 req.step 选择工具调用/终答；同一步重发不推进脚本。
     """
 
     def __init__(
@@ -140,12 +140,9 @@ class FakeProvider(LLMProvider):
         self.chunk_ms = chunk_ms
         self.script = script
         self.alt_script = alt_script
-        self._last_key: tuple | None = None
-        self._calls = 0
         self._seen_runs: set[str] = set()   # 每个 run_id 只计一次（session 分组见 _run_counts）
         self._run_counts: dict[str, int] = {}  # session_id → run 序数
         self._active_scripts: dict[str, list[dict] | None] = {}
-        self._active_script = script
 
     async def stream(self, req: RunRequest) -> AsyncIterator[StreamChunk]:
         # 记忆消化摘要模式：run_id 带 #consolidation 后缀（worker 分层记忆调用；
@@ -189,30 +186,23 @@ class FakeProvider(LLMProvider):
                     self._seen_runs.add(req.run_id)
                     self._run_counts[req.session_id] = self._run_counts.get(req.session_id, 0) + 1
                     is_first = self._run_counts[req.session_id] == 1
-                    self._active_scripts[req.session_id] = self.script if is_first else self.alt_script
-                self._active_script = self._active_scripts.get(req.session_id, self.script)
-            # 脚本索引 = run 内 step + 本次 /runs 内的调用序：
-            # - 代码/控制工具交棒 → 新 /runs（step+1）→ 下一轮；
-            # - 内联 API 工具 → 同一 /runs 内再次 stream() → 调用序推进到下一轮；
-            # - 重发（同 run_id+step）→ 从头开始，确定性重放。
-            key = (req.run_id, req.step)
-            if key != self._last_key:
-                self._last_key = key
-                self._calls = 0
-            else:
-                self._calls += 1
-            turn = self._active_script[(req.step + self._calls) % len(self._active_script)]
-            if "tool_call" in turn:
-                tc = turn["tool_call"]
+                    self._active_scripts[req.run_id] = self.script if is_first else self.alt_script
+            active_script = self._active_scripts.get(req.run_id, self.script)
+            # 每段只调用一次，脚本索引只依赖 step；同段重发不推进模型历史。
+            turn = active_script[req.step % len(active_script)]
+            calls = turn.get("tool_calls")
+            if calls is None and "tool_call" in turn:
+                calls = [turn["tool_call"]]
+            if calls:
                 yield StreamChunk(tool_calls=[{
-                    "index": 0,
-                    "id": tc.get("id", "t_fake"),
+                    "index": idx,
+                    "id": tc.get("id", "t_fake" if idx == 0 else f"t_fake_{idx}"),
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": json.dumps(tc.get("arguments", {})),
+                        "arguments": tc.get("raw_arguments", json.dumps(tc.get("arguments", {}))),
                     },
-                }])
+                } for idx, tc in enumerate(calls)], usage={"tokens_in": 4, "tokens_out": 4})
                 return
             final = turn.get("final", self.reply)
             for i in range(0, len(final), 3):  # 每 3 字符一个 delta

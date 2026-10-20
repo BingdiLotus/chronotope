@@ -30,6 +30,7 @@ async def test_request_shape_and_stream_parsing():
         captured["url"] = str(request.url)
         captured["body"] = json.loads(request.content)
         captured["auth"] = request.headers.get("authorization")
+        captured["timeout"] = request.extensions.get("timeout")
         body = (
             'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n'
             'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t_1","function":{"name":"bash","arguments":"{\\"command\\":"}}]}}]}\n\n'
@@ -43,7 +44,8 @@ async def test_request_shape_and_stream_parsing():
     req = p.RunRequest(
         protocol="1.0", run_id="r_1", session_id="s_1", step=0, model="claude-sonnet-4-6",
         messages=[p.Message(role="user", content="跑测试")],
-        tools=[p.Tool(name="bash", risk_class=1)],
+        tools=[p.Tool(name="bash", description="Execute a command", risk_class=1)],
+        max_output_tokens=128, timeout_ms=1500,
     )
     chunks = [c async for c in provider.stream(req)]
 
@@ -53,6 +55,9 @@ async def test_request_shape_and_stream_parsing():
     assert captured["body"]["stream"] is True
     assert captured["body"]["stream_options"]["include_usage"] is True
     assert captured["body"]["tools"][0]["function"]["name"] == "bash"
+    assert captured["body"]["tools"][0]["function"]["description"] == "Execute a command"
+    assert captured["body"]["max_completion_tokens"] == 128
+    assert captured["timeout"]["read"] == 1.5
     assert captured["auth"] == "Bearer sk-test"
 
     # 流式解析：delta 逐块；tool_calls 为**原始 delta 片段**（契约：harness 侧按
@@ -84,11 +89,58 @@ async def test_stream_chat_error_propagates():
 
 def test_openai_tools_conversion():
     assert openai_tools([]) is None
-    tools = openai_tools([p.Tool(name="bash", tool_schema={"type": "object", "properties": {}}, risk_class=2)])
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+    tools = openai_tools([p.Tool(name="knowledge_search", description="Find permitted knowledge", tool_schema=schema)])
     assert tools[0]["type"] == "function"
-    assert tools[0]["function"]["name"] == "bash"
-    assert "risk_class=2" in tools[0]["function"]["description"]
-    assert tools[0]["function"]["parameters"]["type"] == "object"
+    assert tools[0]["function"]["name"] == "knowledge_search"
+    assert tools[0]["function"]["description"] == "Find permitted knowledge"
+    assert tools[0]["function"]["parameters"] == schema
+
+
+async def test_full_assistant_calls_and_success_error_call_ids_are_forwarded():
+    captured = {}
+
+    def handler(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=(
+            'data: {"choices":[{"delta":{"content":"nonce accepted"}}]}\n\n'
+            'data: [DONE]\n\n'
+        ))
+
+    calls = [
+        {"id": "call_ok", "type": "function", "function": {"name": "knowledge_search", "arguments": '{"query":"x"}'}},
+        {"id": "call_bad", "type": "function", "function": {"name": "knowledge_search", "arguments": "{bad"}},
+    ]
+    req = p.RunRequest(run_id="r", session_id="s", step=1, model="m", messages=[
+        p.Message(role="assistant", content="checking", tool_calls=calls),
+        p.Message(role="tool", content='{"nonce":"never in initial prompt"}', tool_call_id="call_ok"),
+        p.Message(role="tool", content='{"error":"invalid arguments"}', tool_call_id="call_bad"),
+    ])
+    provider = make_provider(handler)
+    chunks = [c async for c in provider.stream(req)]
+    messages = captured["messages"]
+    assert messages[0]["tool_calls"] == calls
+    assert messages[1]["tool_call_id"] == "call_ok"
+    assert "never in initial prompt" in messages[1]["content"]
+    assert messages[2]["tool_call_id"] == "call_bad"
+    assert "invalid arguments" in messages[2]["content"]
+    assert chunks[0].delta == "nonce accepted"
+
+
+async def test_sdk_does_not_retry_model_request():
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500, json={"error": {"message": "unavailable"}})
+
+    provider = make_provider(handler)
+    req = p.RunRequest(run_id="r", session_id="s", step=0, model="m", messages=[])
+    with pytest.raises(Exception):
+        async for _ in provider.stream(req):
+            pass
+    assert calls == 1
 
 
 async def test_fake_provider_script_turns():
@@ -114,9 +166,8 @@ async def test_fake_provider_script_turns():
     assert any(c.usage for c in chunks2)
 
 
-async def test_fake_provider_inline_tool_advances_within_request():
-    """同一 /runs 内多次 stream()（内联工具场景）：调用序推进脚本轮次；
-    重发（同 run_id+step）从头开始（确定性重放）。"""
+async def test_fake_provider_same_step_replays_without_advancing():
+    """同 run/step 重发保持同一段；只有 worker 推进 step 才到下一轮。"""
     from app.llm import FakeProvider
 
     provider = FakeProvider(script=[
@@ -127,19 +178,31 @@ async def test_fake_provider_inline_tool_advances_within_request():
         protocol="1.0", run_id="r_1", session_id="s_1", step=0, model="m",
         messages=[p.Message(role="user", content="x")],
     )
-    # 第 1 次调用（同请求）：工具轮
+    # 重放同一步三次都必须返回同一个工具轮。
     c1 = [c async for c in provider.stream(req0)]
     assert c1[-1].tool_calls[0]["function"]["name"] == "http_request"
-    # 第 2 次调用（同请求，内联工具后继续）：终答轮
     c2 = [c async for c in provider.stream(req0)]
-    assert "".join(c.delta for c in c2 if c.delta) == "完成"
-    # 重发同 (run_id, step)：重新从头（工具轮）——确定性重放
+    assert c2 == c1
     c3 = [c async for c in provider.stream(req0)]
-    assert c3[-1].tool_calls[0]["function"]["name"] == "http_request"
+    assert c3 == c1
     # 新 step：step 偏移进下一轮
     req1 = req0.model_copy(update={"step": 1})
     c4 = [c async for c in provider.stream(req1)]
     assert "".join(c.delta for c in c4 if c.delta) == "完成"
+
+
+async def test_fake_provider_multiple_tool_calls_keep_ids_and_bad_json():
+    from app.llm import FakeProvider
+
+    provider = FakeProvider(script=[{"tool_calls": [
+        {"id": "a", "name": "knowledge_search", "arguments": {"query": "q"}},
+        {"id": "b", "name": "knowledge_remember", "raw_arguments": "{invalid"},
+    ]}])
+    req = p.RunRequest(run_id="r", session_id="s", step=0, model="m", messages=[])
+    chunks = [c async for c in provider.stream(req)]
+    assert [tc["id"] for tc in chunks[0].tool_calls] == ["a", "b"]
+    assert chunks[0].tool_calls[1]["function"]["arguments"] == "{invalid"
+    assert chunks[0].usage is not None
 
 
 def test_build_provider_empty_reply_env_falls_back():

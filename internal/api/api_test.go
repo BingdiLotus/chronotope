@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -32,47 +33,57 @@ import (
 // --- fakes ---
 
 type fakeStore struct {
-	mu               sync.Mutex
-	orgs             map[string]bool
-	orgRows          map[string]*store.Org
-	agents           map[string]*store.Agent
-	sessions         map[string]*store.Session
-	runs             map[string]*store.Run
-	msgs             []store.Message
-	apiKeys          []*store.APIKeyRow
-	deliverables     []*store.DeliverableRow
-	subs             []map[string]string
-	staleQueued      []*store.Run
-	checkpoints      map[string]store.Checkpoint
-	forks            []map[string]any
-	rollbacks        []map[string]any
-	watermark        int64
-	usageBuckets     map[string]store.UsageRow
-	archives         map[string]store.Archive
-	users            map[string]store.User
-	approvalPolicies map[string]store.ApprovalPolicy
-	mcpAllowlists    map[string][]string
-	knowledge        map[string]store.KnowledgeItem
-	members          map[string]store.Member
-	runStarted       map[string]time.Time
-	pendingOutbox    []*store.PendingOutboxRow
-	pendingType      string
-	pendingPayload   []byte
-	deliveredIDs     []int64
-	retriedIDs       []int64
-	events           []store.EventRow
-	usage            []store.UsageRow
-	summaries        []store.Summary
-	memoryItems      []store.MemoryItem
-	seq              int64
+	mu                   sync.Mutex
+	orgs                 map[string]bool
+	orgRows              map[string]*store.Org
+	agents               map[string]*store.Agent
+	sessions             map[string]*store.Session
+	runs                 map[string]*store.Run
+	agentRequestHashes   map[string]string
+	sessionRequestHashes map[string]string
+	admissions           map[string]store.AdmissionPending
+	admissionStates      map[string]string
+	runTriggers          map[string]json.RawMessage
+	msgs                 []store.Message
+	apiKeys              []*store.APIKeyRow
+	deliverables         []*store.DeliverableRow
+	subs                 []map[string]string
+	staleQueued          []*store.Run
+	checkpoints          map[string]store.Checkpoint
+	forks                []map[string]any
+	rollbacks            []map[string]any
+	watermark            int64
+	usageBuckets         map[string]store.UsageRow
+	archives             map[string]store.Archive
+	users                map[string]store.User
+	approvalPolicies     map[string]store.ApprovalPolicy
+	mcpAllowlists        map[string][]string
+	knowledge            map[string]store.KnowledgeItem
+	members              map[string]store.Member
+	runStarted           map[string]time.Time
+	pendingOutbox        []*store.PendingOutboxRow
+	pendingType          string
+	pendingPayload       []byte
+	deliveredIDs         []int64
+	retriedIDs           []int64
+	events               []store.EventRow
+	usage                []store.UsageRow
+	summaries            []store.Summary
+	memoryItems          []store.MemoryItem
+	seq                  int64
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		orgs:     map[string]bool{},
-		agents:   map[string]*store.Agent{},
-		sessions: map[string]*store.Session{},
-		runs:     map[string]*store.Run{},
+		orgs:                 map[string]bool{},
+		agents:               map[string]*store.Agent{},
+		sessions:             map[string]*store.Session{},
+		runs:                 map[string]*store.Run{},
+		agentRequestHashes:   map[string]string{},
+		sessionRequestHashes: map[string]string{},
+		admissions:           map[string]store.AdmissionPending{},
+		admissionStates:      map[string]string{},
+		runTriggers:          map[string]json.RawMessage{},
 	}
 }
 
@@ -95,6 +106,22 @@ func (f *fakeStore) CreateAgent(_ context.Context, id, orgID, name string, cfg *
 	return nil
 }
 
+func (f *fakeStore) CreateAgentRequest(_ context.Context, id, orgID, name string, cfg *sessionapi.AgentConfig, hash string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if existing, ok := f.agents[id]; ok {
+		if existing.OrgID != orgID || f.agentRequestHashes[id] != hash {
+			return false, store.ErrIdempotencyConflict
+		}
+		return false, nil
+	}
+	config := *cfg
+	config.Version = 1
+	f.agents[id] = &store.Agent{ID: id, OrgID: orgID, Name: name, Config: config, Version: 1, SpecDigest: store.SpecDigestOf(&config)}
+	f.agentRequestHashes[id] = hash
+	return true, nil
+}
+
 func (f *fakeStore) GetAgent(_ context.Context, id string) (*store.Agent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -110,6 +137,20 @@ func (f *fakeStore) CreateSession(_ context.Context, id, orgID, agentID string) 
 	defer f.mu.Unlock()
 	f.sessions[id] = &store.Session{ID: id, OrgID: orgID, AgentID: agentID, Status: sessionapi.PhaseCreated}
 	return nil
+}
+
+func (f *fakeStore) CreateSessionRequest(_ context.Context, id, orgID, agentID, subjectRef, scopeID, hash string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if existing, ok := f.sessions[id]; ok {
+		if existing.OrgID != orgID || existing.AgentID != agentID || f.sessionRequestHashes[id] != hash {
+			return false, store.ErrIdempotencyConflict
+		}
+		return false, nil
+	}
+	f.sessions[id] = &store.Session{ID: id, OrgID: orgID, AgentID: agentID, SubjectRef: subjectRef, ScopeID: scopeID, Status: sessionapi.PhaseCreated}
+	f.sessionRequestHashes[id] = hash
+	return true, nil
 }
 
 func (f *fakeStore) GetSession(_ context.Context, id string) (*store.Session, error) {
@@ -133,6 +174,15 @@ func (f *fakeStore) UpdateSessionStatus(_ context.Context, id string, status ses
 	return nil
 }
 
+func (f *fakeStore) CompleteSessionInitialization(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if sess, ok := f.sessions[id]; ok && sess.Status == sessionapi.PhaseCreated {
+		sess.Status = sessionapi.PhaseReady
+	}
+	return nil
+}
+
 func (f *fakeStore) SoftDeleteSession(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -148,8 +198,14 @@ func (f *fakeStore) ListCallsForRun(_ context.Context, _ string) ([]map[string]a
 	return nil, nil
 }
 
-func (f *fakeStore) AdmissionState(_ context.Context, _ string) (string, error) {
-	return "dispatched", nil
+func (f *fakeStore) AdmissionState(_ context.Context, id string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	state, ok := f.admissionStates[id]
+	if !ok {
+		return "", store.ErrNotFound
+	}
+	return state, nil
 }
 
 func (f *fakeStore) UpsertGoal(_ context.Context, id, orgID, objective, scope, owner string) (*store.GoalRow, error) {
@@ -274,10 +330,56 @@ func (f *fakeStore) ListEventsWithChain(_ context.Context, _ string, _ int) ([]m
 
 func (f *fakeStore) SetAuditHold(_ context.Context, _ string) error { return nil }
 
-func (f *fakeStore) MarkAdmissionDispatched(_ context.Context, _ string) error { return nil }
+func (f *fakeStore) MarkAdmissionDispatched(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.admissionStates[id] = "dispatched"
+	return nil
+}
 
-func (f *fakeStore) ListPendingAdmissions(_ context.Context, _ time.Duration, _ int) ([]store.AdmissionPending, error) {
-	return nil, nil
+func (f *fakeStore) ListPendingAdmissions(_ context.Context, _ time.Duration, limit int) ([]store.AdmissionPending, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []string
+	for id := range f.admissions {
+		if f.admissionStates[id] == "pending" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	var pending []store.AdmissionPending
+	for _, id := range ids {
+		if limit > 0 && len(pending) == limit {
+			break
+		}
+		pending = append(pending, f.admissions[id])
+	}
+	return pending, nil
+}
+
+func (f *fakeStore) AdmitRun(_ context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any, hash string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if existing, ok := f.runs[id]; ok {
+		if existing.SessionID != sessionID || existing.RequestHash != hash {
+			return false, store.ErrIdempotencyConflict
+		}
+		return false, nil
+	}
+	for _, run := range f.runs {
+		if run.SessionID != sessionID {
+			continue
+		}
+		switch run.Status {
+		case sessionapi.RunQueued, sessionapi.RunRunning, sessionapi.RunPaused, sessionapi.RunAwaitingApproval, sessionapi.RunFrozen:
+			return false, store.ErrSessionBusy
+		}
+	}
+	f.runs[id] = &store.Run{ID: id, SessionID: sessionID, Input: input, Topic: topic, Status: sessionapi.RunQueued, Bound: bound, RequestHash: hash}
+	f.runTriggers[id] = append(json.RawMessage(nil), trigger...)
+	f.admissions[id] = store.AdmissionPending{RunID: id, SessionID: sessionID, Input: input, Topic: topic}
+	f.admissionStates[id] = "pending"
+	return true, nil
 }
 
 func (f *fakeStore) CreateRunWithCommand(_ context.Context, id, sessionID, input, topic string, trigger json.RawMessage, bound map[string]any) (bool, error) {
@@ -684,17 +786,17 @@ func (f *fakeStore) addEvent(sessionID string, typ event.Type) int64 {
 type fakeIngress struct {
 	mu      sync.Mutex
 	calls   []string
+	bodies  map[string]json.RawMessage
 	failErr error
-	runOut  struct {
-		Final    string `json:"final"`
-		Steps    int    `json:"steps"`
-		Canceled bool   `json:"canceled"`
-	}
 }
 
 func (f *fakeIngress) Call(_ context.Context, path, method string, body any, out any) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, method+" "+path)
+	if f.bodies == nil {
+		f.bodies = map[string]json.RawMessage{}
+	}
+	f.bodies[path], _ = json.Marshal(body)
 	f.mu.Unlock()
 	if f.failErr != nil {
 		return f.failErr
@@ -706,16 +808,12 @@ func (f *fakeIngress) Call(_ context.Context, path, method string, body any, out
 		}); ok {
 			m.Phase = "ready"
 		}
-	case strings.HasPrefix(path, "/run_workflow/"):
-		if m, ok := out.(*struct {
-			Final    string `json:"final"`
-			Steps    int    `json:"steps"`
-			Canceled bool   `json:"canceled"`
-		}); ok {
-			m.Final, m.Steps, m.Canceled = f.runOut.Final, f.runOut.Steps, f.runOut.Canceled
-		}
 	}
 	return nil
+}
+
+func (f *fakeIngress) Send(ctx context.Context, path string, body any) error {
+	return f.Call(ctx, path+"/send", http.MethodPost, body, nil)
 }
 
 func (f *fakeIngress) allCalls() []string {
@@ -744,11 +842,7 @@ func (f *fakeIngress) callCount() int {
 func setup(t *testing.T) (*Handler, *fakeStore, *fakeIngress) {
 	t.Helper()
 	fs := newFakeStore()
-	ing := &fakeIngress{runOut: struct {
-		Final    string `json:"final"`
-		Steps    int    `json:"steps"`
-		Canceled bool   `json:"canceled"`
-	}{Final: "你好，我是助手。", Steps: 1}}
+	ing := &fakeIngress{}
 	h := New(fs, events.NewHub(), ing)
 	return h, fs, ing
 }
@@ -768,6 +862,11 @@ func seedAgentSession(t *testing.T, h *Handler, fs *fakeStore) (agentID, session
 func doJSON(t *testing.T, h http.Handler, method, path string, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	// 普通创建用例显式使用稳定测试键；缺 key 用例传空 header 覆盖。
+	if method == http.MethodPost && ((strings.HasPrefix(path, "/orgs/") && strings.HasSuffix(path, "/agents")) ||
+		(strings.HasPrefix(path, "/agents/") && strings.HasSuffix(path, "/sessions"))) {
+		req.Header.Set("Idempotency-Key", "test-create")
+	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -824,8 +923,8 @@ func TestSubmitRunIdempotency(t *testing.T) {
 	headers := map[string]string{"Idempotency-Key": "k-1", "Content-Type": "application/json"}
 
 	rec1 := doJSON(t, h.Router(), http.MethodPost, path, body, headers)
-	if rec1.Code != http.StatusCreated {
-		t.Fatalf("首次提交应 201，得 %d: %s", rec1.Code, rec1.Body.String())
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("首次提交应 202，得 %d: %s", rec1.Code, rec1.Body.String())
 	}
 	var r1 struct {
 		RunID  string `json:"run_id"`
@@ -833,11 +932,25 @@ func TestSubmitRunIdempotency(t *testing.T) {
 		Final  string `json:"final"`
 	}
 	_ = json.Unmarshal(rec1.Body.Bytes(), &r1)
-	if r1.RunID == "" || r1.Status != "completed" || r1.Final == "" {
+	if r1.RunID == "" || r1.Status != "queued" || r1.Final != "" {
 		t.Fatalf("run 响应不符: %+v", r1)
 	}
-	if got := ing.callCount(); got != 1 {
-		t.Fatalf("ingress 应只触发 1 次 run_workflow，得 %d", got)
+	if rec1.Header().Get("Location") != "/runs/"+r1.RunID {
+		t.Fatalf("202 应提供稳定查询位置: %v", rec1.Header())
+	}
+	if got := ing.callCount(); got != 0 {
+		t.Fatalf("接纳响应不应等待/派发 workflow，得 %d", got)
+	}
+	queued := doJSON(t, h.Router(), http.MethodGet, "/runs/"+r1.RunID, "", nil)
+	queuedResult := responseObject(t, queued)
+	if queued.Code != http.StatusOK || queuedResult["status"] != "queued" {
+		t.Fatalf("已接纳run应可查询: %d %s", queued.Code, queued.Body.String())
+	}
+	for _, field := range []string{"final", "error", "usage"} {
+		value, exists := queuedResult[field]
+		if !exists || value != nil {
+			t.Fatalf("未完成run的%s应显式未知: %s", field, queued.Body.String())
+		}
 	}
 
 	// 同幂等键重放：返回同一 run_id，不重复触发
@@ -853,12 +966,25 @@ func TestSubmitRunIdempotency(t *testing.T) {
 	if r2.RunID != r1.RunID || !r2.Idempotent {
 		t.Fatalf("幂等键应返回同一 run_id 且标记幂等: %+v", r2)
 	}
-	if got := ing.callCount(); got != 1 {
+	if got := ing.callCount(); got != 0 {
 		t.Fatalf("幂等重放不应重复触发 run_workflow，得 %d", got)
 	}
 
-	// 不同幂等键 → 新 run_id
+	// 未完成时新键仍受 busy 约束；原请求重试已在上面先命中幂等。
 	rec3 := doJSON(t, h.Router(), http.MethodPost, path, body, map[string]string{"Idempotency-Key": "k-2", "Content-Type": "application/json"})
+	if rec3.Code != http.StatusConflict {
+		t.Fatalf("活跃 run 时新键应 409: %d %s", rec3.Code, rec3.Body.String())
+	}
+	fs.runs[r1.RunID].Status = sessionapi.RunCompleted
+	fs.runs[r1.RunID].Result = json.RawMessage(`{"final":"hello world","usage":{"tokens_in":12,"tokens_out":4}}`)
+	query := doJSON(t, h.Router(), http.MethodGet, "/runs/"+r1.RunID, "", nil)
+	if query.Code != http.StatusOK || !strings.Contains(query.Body.String(), `"final":"hello world"`) || !strings.Contains(query.Body.String(), `"status":"completed"`) {
+		t.Fatalf("终态应由 GET 查询且包含同次提交的结果: %d %s", query.Code, query.Body.String())
+	}
+	rec3 = doJSON(t, h.Router(), http.MethodPost, path, body, map[string]string{"Idempotency-Key": "k-2"})
+	if rec3.Code != http.StatusAccepted {
+		t.Fatalf("原run完成后新键应202: %d %s", rec3.Code, rec3.Body.String())
+	}
 	var r3 struct {
 		RunID string `json:"run_id"`
 	}
@@ -1463,9 +1589,9 @@ func TestDelivererPass(t *testing.T) {
 // TestAdmissionRecovery 评审 #6：queued 遗留重投（崩溃窗口接纳屏障）。
 func TestAdmissionRecovery(t *testing.T) {
 	h, fs, ing := setup(t)
-	fs.staleQueued = []*store.Run{
-		{ID: "r_stale1", SessionID: "s_seed"},
-		{ID: "r_stale2", SessionID: "s_seed"},
+	for _, id := range []string{"r_stale1", "r_stale2"} {
+		fs.admissions[id] = store.AdmissionPending{RunID: id, SessionID: "s_seed", Input: "original " + id, Topic: "original topic"}
+		fs.admissionStates[id] = "pending"
 	}
 	rec := &AdmissionRecovery{Store: fs, Ingress: h.Ingress, Stale: 5 * time.Minute}
 	if err := rec.pass(context.Background()); err != nil {
@@ -1474,12 +1600,23 @@ func TestAdmissionRecovery(t *testing.T) {
 	calls := ing.allCalls()
 	var redelivered int
 	for _, c := range calls {
-		if strings.Contains(c, "/run_workflow/r_stale") {
+		if strings.HasPrefix(c, "POST /run_workflow/r_stale") && strings.HasSuffix(c, "/run/send") {
 			redelivered++
 		}
 	}
 	if redelivered != 2 {
 		t.Fatalf("应重投 2 个遗留 run: %v", calls)
+	}
+	for id, state := range fs.admissionStates {
+		if state != "dispatched" {
+			t.Fatalf("%s未标记派发: %s", id, state)
+		}
+	}
+	if err := rec.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ing.callCount() != 2 {
+		t.Fatalf("已派发outbox不应再次扫描: %v", ing.allCalls())
 	}
 }
 
@@ -1489,7 +1626,7 @@ func TestSubmitRunBindsConfigSnapshot(t *testing.T) {
 	seedAgentSession(t, h, fs)
 	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/s_seed/runs",
 		`{"input":"x"}`, map[string]string{"Idempotency-Key": "k-snap"})
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusAccepted {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("提交应成功: %d %s", rec.Code, rec.Body.String())
 	}
 	wantID := runIDFromIdempotency("s_seed", "k-snap")
@@ -1642,49 +1779,74 @@ func TestApprovalPolicyAndAuditEndpoints(t *testing.T) {
 	}
 }
 
-// TestSubmitRunCanceledCanonical 审计 #9：workflow canceled 的返回写 canonical
-// canceled（此前无条件 completed——HTTP 返回覆盖 workflow 权威状态的反例关闭）。
+// 异步提交不推断终态；GET 读取 worker 已写入的 canonical canceled/result。
 func TestSubmitRunCanceledCanonical(t *testing.T) {
 	h, fs, ing := setup(t)
 	_, sessionID := seedAgentSession(t, h, fs)
-	ing.runOut.Canceled = true
-	ing.runOut.Final = "已取消"
 	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs",
 		`{"input":"hi"}`, map[string]string{"Idempotency-Key": "k-cancel", "Content-Type": "application/json"})
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("提交应 201，得 %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("提交应 202，得 %d: %s", rec.Code, rec.Body.String())
 	}
+	if ing.callCount() != 0 {
+		t.Fatal("HTTP 接纳不得等待模型终态")
+	}
+	id := runIDFromIdempotency(sessionID, "k-cancel")
+	fs.runs[id].Status = sessionapi.RunCanceled
+	fs.runs[id].Result = json.RawMessage(`{"final":"已取消","error":null,"usage":{"tokens_in":3,"tokens_out":1}}`)
+	rec = doJSON(t, h.Router(), http.MethodGet, "/runs/"+id, "", nil)
 	var resp struct {
 		Status string `json:"status"`
+		Final  string `json:"final"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Status != "canceled" {
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Status != "canceled" || resp.Final != "已取消" {
 		t.Fatalf("canceled workflow 应返回 canceled 状态: %+v err=%v", resp, err)
 	}
 }
 
-// TestSubmitRunIngressErrorKeepsRunning 审计 #4：ingress 错误（同步超时/断开）
-// 不再无条件写 failed——workflow 可能已被接纳继续运行（长审批反例：写
-// failed 释放 active 唯一约束让另一 Run 进入）。
+// 派发响应未知时保留 queued/outbox，恢复重投不能伪造 failed 或完成状态。
 func TestSubmitRunIngressErrorKeepsRunning(t *testing.T) {
 	h, fs, ing := setup(t)
 	ing.failErr = fmt.Errorf("context deadline exceeded")
 	_, sessionID := seedAgentSession(t, h, fs)
 	rec := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs",
-		`{"input":"hi"}`, map[string]string{"Idempotency-Key": "k-ingress", "Content-Type": "application/json"})
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("ingress 错误应 502，得 %d", rec.Code)
+		`{"input":"original-input","topic":"original-topic","origin_command_id":"origin-unknown"}`, map[string]string{"Idempotency-Key": "k-ingress", "Content-Type": "application/json"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("ingress 离线仍应耐久接纳202，得 %d %s", rec.Code, rec.Body.String())
 	}
-	// canonical 状态仍 running（未被 HTTP 错误覆盖为 failed）——fakeStore 的
-	// run 由 CreateRun 建为 queued、submit 置 running；失败覆盖会写 failed
-	failed := false
-	fs.mu.Lock()
-	for _, r := range fs.runs {
-		if r.Status == sessionapi.RunFailed {
-			failed = true
-		}
+	id := runIDFromIdempotency(sessionID, "k-ingress")
+	recovery := &AdmissionRecovery{Store: fs, Ingress: ing}
+	if err := recovery.pass(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	fs.mu.Unlock()
-	if failed {
-		t.Fatal("ingress 错误不得把 run 写 failed（worker terminal 写是权威）")
+	if fs.runs[id].Status != sessionapi.RunQueued || fs.admissionStates[id] != "pending" {
+		t.Fatalf("未知派发不得写failed或释放outbox: %+v %v", fs.runs[id], fs.admissionStates)
+	}
+	firstCalls := ing.allCalls()
+	if len(firstCalls) != 1 || firstCalls[0] != "POST /run_workflow/"+id+"/run/send" {
+		t.Fatalf("应使用短接纳send路径: %v", firstCalls)
+	}
+	path := "/run_workflow/" + id + "/run/send"
+	firstPayload := append(json.RawMessage(nil), ing.bodies[path]...)
+	var command map[string]any
+	if err := json.Unmarshal(firstPayload, &command); err != nil {
+		t.Fatal(err)
+	}
+	if command["input"] != "original-input" || command["topic"] != "original-topic" || command["session_id"] != sessionID || fs.runs[id].Bound["origin_command_id"] != "origin-unknown" {
+		t.Fatalf("重投必须保留原始command及bound origin: %s %+v", firstPayload, fs.runs[id])
+	}
+	ing.failErr = nil
+	if err := recovery.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fs.runs[id].Status != sessionapi.RunQueued || fs.admissionStates[id] != "dispatched" {
+		t.Fatalf("重投只完成技术派发，不能伪造业务终态: %+v %v", fs.runs[id], fs.admissionStates)
+	}
+	calls := ing.allCalls()
+	if len(calls) != 2 || calls[0] != calls[1] {
+		t.Fatalf("重投必须保持workflow身份: %v", calls)
+	}
+	if !bytes.Equal(firstPayload, ing.bodies[path]) {
+		t.Fatalf("重投不得修改command: %s -> %s", firstPayload, ing.bodies[path])
 	}
 }

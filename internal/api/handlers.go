@@ -34,221 +34,6 @@ func notImplemented(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, 501, "not_implemented: "+r.URL.Path+"（后续周迭代实现，契约规范 §2）")
 }
 
-// POST /orgs/{orgID}/agents —— 创建 agent（config 全量，version+1 由 store 落库）。
-func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
-	orgID := chi.URLParam(r, "orgID")
-	var req sessionapi.CreateAgentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		writeError(w, http.StatusUnprocessableEntity, 422, "invalid agent config")
-		return
-	}
-	// org 幂等建立（多租户已落地——quota 键 daily_token/compute_seconds）
-	if err := h.Store.CreateOrg(r.Context(), orgID, orgID); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	id := genID("a_")
-	cfg := req.Config
-	if err := h.Store.CreateAgent(r.Context(), id, orgID, req.Name, &cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": req.Name, "config": cfg})
-}
-
-// POST /agents/{agentID}/sessions —— 创建 session → ready（session_object 初始化）。
-func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
-	agentID := chi.URLParam(r, "agentID")
-	var req sessionapi.CreateSessionRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req) // 空体/旧客户端：普通会话
-	}
-	agent, err := h.Store.GetAgent(r.Context(), agentID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, 404, "agent not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	id := genID("s_")
-	if err := h.Store.CreateSession(r.Context(), id, agent.OrgID, agentID); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	// 会话状态机初始化（worker 控制面：session_object.Create，幂等）
-	var state struct {
-		Phase string `json:"phase"`
-	}
-	if err := h.Ingress.Call(r.Context(), "/session_object/"+id+"/Create", http.MethodPost, agent.Config, &state); err != nil {
-		writeError(w, http.StatusServiceUnavailable, 503, "session_object unavailable: "+err.Error())
-		return
-	}
-	if len(req.Participants) > 0 {
-		// 群聊成员（moderator 主持循环依据；同侪共享消息日志）
-		if err := h.Ingress.Call(r.Context(), "/session_object/"+id+"/SetParticipants",
-			http.MethodPost, req.Participants, &state); err != nil {
-			writeError(w, http.StatusServiceUnavailable, 503, "set participants failed: "+err.Error())
-			return
-		}
-	}
-	if err := h.Store.UpdateSessionStatus(r.Context(), id, sessionapi.PhaseReady); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"id": id, "agent_id": agentID, "status": "ready",
-		"participants": req.Participants,
-	})
-}
-
-// POST /sessions/{sessionID}/runs —— 提交任务（Idempotency-Key 必带，幂等链第一跳）。
-func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
-	sessionID := chi.URLParam(r, "sessionID")
-	idem := r.Header.Get("Idempotency-Key")
-	if idem == "" {
-		writeError(w, http.StatusBadRequest, 400, "Idempotency-Key header required（契约规范 §2）")
-		return
-	}
-	sess, err := h.Store.GetSession(r.Context(), sessionID)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && sess.DeletedAt != nil) {
-		writeError(w, http.StatusNotFound, 404, "session not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	// 准入 ①：三层限流（边界语义设计 §6：429 + Retry-After）——
-	// principal 桶（期 3 §A：key 绑定的技术主体；空 = 租户级）+ session 桶
-	if h.Limiter != nil {
-		if principal := PrincipalFrom(r.Context()); principal != "" {
-			if ok, retry := h.Limiter.Take("user", principal); !ok {
-				w.Header().Set("Retry-After", retry.String())
-				writeError(w, http.StatusTooManyRequests, 429, "too many runs for this user, retry later")
-				return
-			}
-		}
-		if ok, retry := h.Limiter.Take("session", sessionID); !ok {
-			w.Header().Set("Retry-After", retry.String())
-			writeError(w, http.StatusTooManyRequests, 429, "too many runs for this session, retry later")
-			return
-		}
-	}
-	// 准入 ②：同 session 双开 → 409 + active_run_id（边界语义设计 §6）
-	if active, err := h.Store.GetActiveRun(r.Context(), sessionID); err == nil && active != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"code": 409, "error": "session already has an active run",
-			"active_run_id": active.ID,
-		})
-		return
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	agent, err := h.Store.GetAgent(r.Context(), sess.AgentID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	var req sessionapi.SubmitRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Input == "" {
-		writeError(w, http.StatusUnprocessableEntity, 422, "invalid run request（input 必填）")
-		return
-	}
-
-	runID := runIDFromIdempotency(sessionID, idem)
-	bound := map[string]any{
-		"agent_config_version": agent.Version,
-		"spec_digest":          agent.SpecDigest,
-		"agent_config":         agent.Config, // 全量快照：旧 run 永远用启动时 config（正确性二期 ⑩）
-		"protocol_version":     "1.0",
-		"model":                agent.Config.Model,
-	}
-	// 凭据服务阶段 ①：bound 冻结引用名（值永不过快照——解析在 worker 侧）
-	if agent.Config.CredentialRef != "" {
-		bound["credential_ref"] = agent.Config.CredentialRef
-	}
-	// B2：扩展绑定快照（bound 冻结扩展清单——装配合并后置标注）
-	if len(agent.Config.Extensions) > 0 {
-		bound["extensions"] = agent.Config.Extensions
-	}
-	// Harness 装配阶段 3：API 路径的 harness 快照冻结（agent 绑定 → active
-	// endpoint → bound；升级后旧 run 沿旧）
-	if agent.Config.HarnessRef != nil && agent.Config.HarnessRef.Name != "" {
-		if hh, hErr := h.Store.GetActiveHarness(r.Context(), sess.OrgID, agent.Config.HarnessRef.Name); hErr == nil {
-			bound["harness_endpoint"] = hh.Endpoint
-			bound["harness_version"] = hh.Version
-			// B1 能力校验：agent 声明的 sandbox 预设不在 harness 能力内
-			// → bound 的显式降级标注（诚实——run 可审计声明与能力的
-			// 不匹配；拒绝语义后置标注）
-			if agent.Config.Sandbox != "" && !hh.Capabilities.Has(agent.Config.Sandbox) {
-				bound["capability_mismatch"] = "sandbox:" + agent.Config.Sandbox
-			}
-		}
-	}
-	trigger, _ := json.Marshal(req.Trigger)
-	created, err := h.Store.CreateRunWithCommand(r.Context(), runID, sessionID, req.Input, req.Topic, trigger, bound)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-	if !created {
-		// 幂等命中：返回既有 run，不重复触发（契约规范 §2）
-		run, err := h.Store.GetRun(r.Context(), runID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, 500, err.Error())
-			return
-		}
-		// 审计 #3：同幂等 key 不同 input 曾返回 200——必须 409（command 不可变）
-		if run.Input != "" && run.Input != req.Input {
-			writeError(w, http.StatusConflict, 409, "idempotency key 与输入不匹配")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "status": run.Status, "idempotent": true})
-		return
-	}
-
-	if err := h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunRunning); err != nil {
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
-	}
-
-	// worker 控制面：run_workflow/{run_id}/run（W1 为同步对话闭环）
-	var out struct {
-		Final    string `json:"final"`
-		Steps    int    `json:"steps"`
-		Canceled bool   `json:"canceled"`
-	}
-	err = h.Ingress.Call(r.Context(), "/run_workflow/"+runID+"/run", http.MethodPost,
-		map[string]any{"session_id": sessionID, "input": req.Input, "topic": req.Topic}, &out)
-	if err == nil {
-		_ = h.Store.MarkAdmissionDispatched(r.Context(), runID) // B1：派发确认
-	}
-	if err != nil {
-		// 审计 #4：HTTP 未知 ≠ canonical 失败——ingress 超时/断开时 workflow
-		// 可能已被 Restate 接纳并继续运行（长审批的 DeadlineExceeded 反例：
-		// 写 failed 释放 active 唯一约束会让另一 Run 进入同 Session）。worker
-		// 的 terminal 写是唯一权威——这里只回 502，状态按 GetRun 查询。
-		writeError(w, http.StatusBadGateway, 502, "run_workflow 提交后无法同步确认（按 run_id 查询状态）: "+err.Error())
-		return
-	}
-	// 审计 #9：workflow canceled 曾无条件被写 completed——按 Canceled 写
-	// canonical 状态（HTTP 返回不得覆盖 workflow 的权威状态）
-	if out.Canceled {
-		_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunCanceled)
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"run_id": runID, "status": "canceled", "final": out.Final, "steps": out.Steps,
-		})
-		return
-	}
-	_ = h.Store.UpdateRunStatus(r.Context(), runID, sessionapi.RunCompleted)
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"run_id": runID, "status": "completed", "final": out.Final, "steps": out.Steps,
-	})
-}
-
 // GET /sessions/{sessionID} —— session 状态 + 最近事件。
 func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
@@ -637,12 +422,18 @@ func firstNonEmpty(vals ...string) string {
 func (h *Handler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
 	if _, err := h.Store.GetOrg(r.Context(), orgID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) && AdminFrom(r.Context()) {
+			if err := h.Store.CreateOrg(r.Context(), orgID, orgID); err != nil {
+				controlError(w, err)
+				return
+			}
+		} else if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, 404, "org not found")
 			return
+		} else {
+			writeError(w, http.StatusInternalServerError, 500, err.Error())
+			return
 		}
-		writeError(w, http.StatusInternalServerError, 500, err.Error())
-		return
 	}
 	var req struct {
 		UserID string `json:"user_id"` // 可选：绑 principal（期 3 §A）

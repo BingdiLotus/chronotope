@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 )
 
 // genID 生成带前缀的资源 id（MVP：8 字节随机 hex）。
@@ -18,6 +19,11 @@ func genID(prefix string) string {
 // runIDFromIdempotency 实现幂等链第一跳（契约规范 §6）：
 // Idempotency-Key(api) → run_id(worker)；同 (session_id, key) 恒得同一 run_id。
 func runIDFromIdempotency(sessionID, idempotencyKey string) string {
-	sum := sha256.Sum256([]byte(sessionID + ":" + idempotencyKey))
-	return "r_" + hex.EncodeToString(sum[:6])
+	return resourceID("r_", sessionID, idempotencyKey)
+}
+
+func resourceID(prefix, namespace, key string) string {
+	raw, _ := json.Marshal([]string{namespace, key})
+	sum := sha256.Sum256(raw)
+	return prefix + hex.EncodeToString(sum[:16])
 }

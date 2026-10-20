@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bingdilotus/chronotope/internal/appconfig"
 	"github.com/bingdilotus/chronotope/internal/policy"
 	"github.com/bingdilotus/chronotope/internal/restate"
 	"github.com/bingdilotus/chronotope/internal/store"
@@ -47,6 +48,18 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+	applications, err := appconfig.Load()
+	if err != nil {
+		log.Fatalf("application configuration: %v", err)
+	}
+	bridges := map[string]restate.ApplicationBridgeConfig{}
+	for _, bridge := range applications.Bridges {
+		bridges[bridge.Ref] = restate.ApplicationBridgeConfig{TenantID: bridge.TenantID, URL: bridge.URL, BearerToken: bridge.BearerToken}
+	}
+	applicationClient, err := restate.NewApplicationToolClient(bridges)
+	if err != nil {
+		log.Fatalf("application bridges: %v", err)
+	}
 
 	consolidateThreshold := 40
 	if v := os.Getenv("CONSOLIDATE_THRESHOLD"); v != "" {
@@ -55,9 +68,11 @@ func main() {
 		}
 	}
 	deps := &restate.Deps{
-		Store:           st,
-		Harness:         restate.NewHarnessClient(*harnessURL),
-		HarnessEndpoint: *harnessURL,
+		ApplicationTools: applicationClient,
+		Timers:           &restate.TimerDeps{Store: st, Targets: applications.TimerTargets},
+		Store:            st,
+		Harness:          restate.NewHarnessClient(*harnessURL),
+		HarnessEndpoint:  *harnessURL,
 		// 装配阶段 2：解析链（agent 绑定 → org active → 全局 fallback）
 		HarnessForRun: func(ctx context.Context, runID string) restate.Harness {
 			r, err := st.GetRun(ctx, runID)

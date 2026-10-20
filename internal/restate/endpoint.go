@@ -28,5 +28,8 @@ func BuildEndpoint(deps *Deps) (http.Handler, error) {
 		Bind(schedulerDef(deps)).
 		Bind(webhookDef(deps)).
 		Bind(sessionOpsDef(deps))
+	if deps.Timers != nil {
+		ep.Bind(ApplicationTimerDefinition(*deps.Timers))
+	}
 	return ep.Handler()
 }

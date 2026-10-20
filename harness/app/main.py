@@ -1,11 +1,6 @@
-"""chronotope-harness：无状态单段执行器（POST /runs → SSE）。
+"""无状态单段执行器：每次 /runs 只请求一次模型，输出全部 calls 和 done。
 
-纪律（mvp-落地方案 §9）：
-- harness 不拥有 loop 所有权之持久面——每次 /runs 调用跑「一段」agent 循环
-  （模型调用 + API 工具内联），遇到代码类工具即停下交棒（tool_call 帧）；
-- 无 Session、无本地存储（OpenAI Agents SDK 的 Session 特性故意不用）；
-- 模型调用永远走 LiteLLM 网关（OpenAI 协议）；密钥只在 LiteLLM 侧；
-- 三种返回：done（终答）/ tool_call（交棒）/ error（max_turns）。
+历史、工具执行与下一轮派发由 Go worker 持有；harness 从不执行应用/API 工具。
 """
 
 from __future__ import annotations
@@ -14,13 +9,14 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from contextlib import aclosing, suppress
 
 from fastapi import FastAPI
 from sse_starlette.sse import EventSourceResponse
 
 from . import protocol as p
 from .llm import LLMProvider, build_provider
-from .tools import run_api_tool
+from .tools import decode_arguments
 
 # 应用日志直通根 logger（uvicorn 默认不配置根 logger，否则 INFO 记录被丢弃）
 logging.basicConfig(level=logging.INFO)
@@ -74,27 +70,42 @@ async def _misconfigured(message: str) -> AsyncIterator[dict[str, str]]:
     yield _sse(p.error("harness_misconfigured", message))
 
 
-async def _stream_frames(stream_iter, p, beat_interval: float):
+async def _stream_frames(stream_iter, p, beat_interval: float, timeout_ms: int | None = None):
     """流帧循环（beat 保任务——wait_for 取消语义修复，审计 #6）：
     产出 delta/tool_call/beat 帧；错误帧产出后由调用方处理。"""
     next_task = None
-    while True:
-        if next_task is None:
-            next_task = asyncio.create_task(anext(stream_iter))
-        heartbeat = asyncio.create_task(asyncio.sleep(beat_interval))
-        done, _ = await asyncio.wait({next_task, heartbeat}, return_when=asyncio.FIRST_COMPLETED)
-        if next_task in done:
-            heartbeat.cancel()
-            try:
-                chunk = next_task.result()
-            except StopAsyncIteration:
-                break
-            next_task = None
-        else:
-            heartbeat.cancel()  # sleep 已到点——anext 任务保持（模型挂起恢复后继续）
-            yield _sse(p.frame("beat", 0, {}))
-            continue
-        yield chunk
+    heartbeat = None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_ms / 1000 if timeout_ms is not None else None
+    try:
+        while True:
+            remaining = deadline - loop.time() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError(f"model stream timed out after {timeout_ms} ms")
+            if next_task is None:
+                next_task = asyncio.create_task(anext(stream_iter))
+            heartbeat = asyncio.create_task(asyncio.sleep(beat_interval))
+            ready, _ = await asyncio.wait({next_task, heartbeat}, timeout=remaining,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if not ready:
+                raise TimeoutError(f"model stream timed out after {timeout_ms} ms")
+            if next_task in ready:
+                heartbeat.cancel()
+                try:
+                    chunk = next_task.result()
+                except StopAsyncIteration:
+                    break
+                next_task = None
+            else:
+                yield _sse(p.frame("beat", 0, {}))
+                continue
+            yield chunk
+    finally:
+        for task in (heartbeat, next_task):
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await task
 
 
 async def _safe_stream(req: p.RunRequest, llm: LLMProvider):
@@ -102,15 +113,18 @@ async def _safe_stream(req: p.RunRequest, llm: LLMProvider):
     worker 收到 unexpected EOF → restate 僵尸 invocation 无限重试；此处转
     error 帧让 worker 显式失败）。"""
     try:
-        async for chunk in llm.stream(req):
-            yield chunk
+        async with aclosing(llm.stream(req)) as stream:
+            async for chunk in stream:
+                yield chunk
+    except TimeoutError:
+        yield llm.stream_error_chunk(f"model stream timed out after {req.timeout_ms} ms")
     except Exception as exc:  # noqa: BLE001——流异常统一转 error 帧
         logger.exception("stream error run_id=%s", req.run_id)
         yield llm.stream_error_chunk(f"model stream failed: {exc}")
 
 
 async def _run(req: p.RunRequest, llm: LLMProvider, beat_interval: float = 30.0) -> AsyncIterator[dict[str, str]]:
-    """执行一段 agent 循环：模型流式调用 → delta 帧 → 工具分流 → done/交棒/error。"""
+    """一次模型推理；有工具时完整交棒，再以 done 结束本段。"""
 
     if req.protocol not in p.SUPPORTED_PROTOCOLS:
         # 错误码稳定（契约规范 §6）；worker 按协议版本路由本不会送错版本，此分支是防御
@@ -121,107 +135,82 @@ async def _run(req: p.RunRequest, llm: LLMProvider, beat_interval: float = 30.0)
     # 模型挂起 196s 实证期间无帧违反契约；worker 侧 30s 无帧即超时）
     yield _sse(p.frame("beat", 0, {}))
 
-    async def beat_timer(stream):
-        """流迭代期间每 30s 无产出补一帧 beat（与流并发；流结束即停）。"""
-        while True:
-            await asyncio.sleep(30)
-            yield _sse(p.frame("beat", 0, {}))
-
-    messages = [m.model_dump(exclude_none=True) for m in req.messages]
     seq = 1
     total_bytes = 0
     truncated = False
+    deltas: list[str] = []
+    tool_calls: dict[int, dict] = {}
+    usage = p.LLMUsage()
+    usage_received = False
 
-    for turn in range(req.max_turns):
-        deltas: list[str] = []
-        tool_calls: dict[int, dict] = {}
-        usage = p.LLMUsage()
-
-        stream_iter = _safe_stream(req, llm)
-        async for chunk in _stream_frames(stream_iter, p, beat_interval):
-            if isinstance(chunk, dict):
-                # 心跳帧（_stream_frames 的 beat 产出 SSE dict）——直接透传，
-                # 不得按 StreamChunk 解引用（审计 #1：chunk.delta 曾 AttributeError）
-                yield chunk
-                continue
-            if getattr(chunk, "error", None):
-                yield _sse(p.error("model_stream_failed", str(chunk.error)))
-                return
-            if chunk.delta:
-                total_bytes += len(chunk.delta.encode("utf-8"))
-                if total_bytes > req.max_output_bytes:
-                    # 输出限额：截断 + done{truncated:true}——截断是 journaled 事实（契约规范 §3）
-                    truncated = True
-                    break
-                deltas.append(chunk.delta)
-                yield _sse(p.delta(chunk.delta, seq))
-                seq += 1
-            for tc in chunk.tool_calls:
-                # 流式片段按 index 累计合并（首个片段参数常为空——setdefault 首片段
-                # 会丢后续参数，真实模型 e2e 实证 arguments={}）
-                idx = tc.get("index", 0)
-                cur = tool_calls.setdefault(idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                if tc.get("id"):
-                    cur["id"] = tc["id"]
-                fn = tc.get("function") or {}
-                if fn.get("name"):
-                    cur["function"]["name"] += fn["name"]
-                if fn.get("arguments"):
-                    cur["function"]["arguments"] += fn["arguments"]
-            if chunk.usage:
-                usage.tokens_in += chunk.usage.get("tokens_in", 0)
-                usage.tokens_out += chunk.usage.get("tokens_out", 0)
-
-        if truncated:
-            # 截断时 usage 不完整——契约要求标 usage_partial:true（预设落地）
-            usage.usage_partial = True
-            yield _sse(p.done("".join(deltas), usage, truncated=True, seq=seq))
-            return
-
-        if tool_calls:
-            # 本轮产生了工具调用：assistant 消息（含 tool_calls）入历史
-            ordered = [tool_calls[i] for i in sorted(tool_calls)]
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "".join(deltas) or None,
-                    "tool_calls": ordered,
-                }
-            )
-            for tc in ordered:
-                name = tc["function"]["name"]
-                if name in p.CODE_TOOLS or name in p.CONTROL_TOOLS or name.startswith("mcp:"):
-                    # 代码类工具 → worker 转 executor；控制类工具 → worker awakeable/子 Agent。
-                    # 两者皆交棒（tool_call 帧），本段循环结束。
-                    # 契约样例（runs-protocol.md）：arguments 为 JSON 对象（OpenAI 字符串形态在此转换）
-                    try:
-                        arguments = json.loads(tc["function"]["arguments"] or "{}")
-                    except json.JSONDecodeError:
-                        arguments = {}
-                    yield _sse(
-                        p.frame("tool_call", seq, {
-                            "id": tc["id"], "name": name, "arguments": arguments,
-                        })
+    async with aclosing(_safe_stream(req, llm)) as stream_iter:
+        async with aclosing(_stream_frames(stream_iter, p, beat_interval, req.timeout_ms)) as frames:
+            # Timeout belongs to this consumer, whose pending anext task changes
+            # between chunks. An asyncio.timeout inside a yielding provider would
+            # otherwise cancel the already-finished first anext task.
+            try:
+                async for chunk in frames:
+                    if isinstance(chunk, dict):
+                        yield chunk
+                        continue
+                    if getattr(chunk, "error", None):
+                        yield _sse(p.error("model_stream_failed", str(chunk.error)))
+                        return
+                    if chunk.usage is not None:
+                        usage_received = True
+                        usage.tokens_in = chunk.usage.get("tokens_in", 0)
+                        usage.tokens_out = chunk.usage.get("tokens_out", 0)
+                    # 工具参数同样受输出字节上限约束；不派发不完整的调用。
+                    generated = (chunk.delta or "") + "".join(
+                        (tc.get("function") or {}).get("name", "")
+                        + (tc.get("function") or {}).get("arguments", "")
+                        for tc in chunk.tool_calls
                     )
-                    return
-                # API 类工具：内联执行，结果作为 tool 消息回喂，继续循环
-                try:
-                    arguments = json.loads(tc["function"]["arguments"] or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
-                result = await run_api_tool(name, arguments)
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                yield _sse(p.frame("turn_end", seq, {"summary": f"{name} done"}))
-                seq += 1
-            continue  # 下一轮模型调用（携带工具结果）
+                    total_bytes += len(generated.encode("utf-8"))
+                    if total_bytes > req.max_output_bytes:
+                        truncated = True
+                        break
+                    if chunk.delta:
+                        deltas.append(chunk.delta)
+                        yield _sse(p.delta(chunk.delta, seq))
+                        seq += 1
+                    for tc in chunk.tool_calls:
+                        # provider 产出原始片段，仅在此按 index 合并一次。
+                        idx = tc.get("index", 0)
+                        cur = tool_calls.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                        if tc.get("id"):
+                            cur["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        cur["name"] += fn.get("name") or ""
+                        cur["arguments"] += fn.get("arguments") or ""
+                    if getattr(chunk, "finish_reason", None) == "length":
+                        truncated = True
+            except TimeoutError as exc:
+                yield _sse(p.error("model_stream_failed", str(exc), seq=seq))
+                return
 
-        # 无工具调用：终答
-        yield _sse(p.done("".join(deltas), usage, seq=seq))
+    usage.usage_partial = not usage_received
+    if truncated:
+        # 字节上限提前断流时通常无 usage；provider 的 length 终止可仍有完整计量。
+        yield _sse(p.done("".join(deltas), usage, truncated=True, seq=seq))
         return
 
-    # max_turns 封顶（无进展检测/熔断在 W5 完整落地，边界语义 §1）
-    yield _sse(p.error("max_turns", f"超过 {req.max_turns} 轮未产出终答"))
-    return
+    for idx in sorted(tool_calls):
+        tc = tool_calls[idx]
+        if not tc["id"] or not tc["name"]:
+            yield _sse(p.error("model_tool_call_invalid", "tool call is missing id or name", seq=seq))
+            return
+        arguments, arguments_error = decode_arguments(tc["arguments"])
+        payload = {
+            "id": tc["id"], "name": tc["name"], "arguments": arguments,
+            "raw_arguments": tc["arguments"],
+        }
+        if arguments_error:
+            payload["arguments_error"] = arguments_error
+        yield _sse(p.frame("tool_call", seq, payload))
+        seq += 1
+
+    yield _sse(p.done("".join(deltas), usage, seq=seq))
 
 
 def _sse(f: p.Frame) -> dict[str, str]:

@@ -73,8 +73,8 @@ func TestSubmitRunRateLimit429(t *testing.T) {
 	h.Limiter = NewLimiter(0.0001, 1)
 	rec1 := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs",
 		`{"input":"hi"}`, map[string]string{"Idempotency-Key": "rl-1"})
-	if rec1.Code != http.StatusCreated {
-		t.Fatalf("首次提交应 201，得 %d: %s", rec1.Code, rec1.Body.String())
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("首次提交应 202，得 %d: %s", rec1.Code, rec1.Body.String())
 	}
 	rec2 := doJSON(t, h.Router(), http.MethodPost, "/sessions/"+sessionID+"/runs",
 		`{"input":"hi"}`, map[string]string{"Idempotency-Key": "rl-2"})

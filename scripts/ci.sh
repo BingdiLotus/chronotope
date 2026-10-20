@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本地 CI 门禁（.github/workflows/ci.yml 的本地等价物）：
 #   gofmt → build → vet → test（store 集成 + golden journal 重放）→ harness → spike
-#   --e2e：追加 compose 全链路 e2e（scripts/demo.sh——W1–W8+期2/3/6 共 24 段）
+#   --e2e：追加当前应用执行门禁（W1 202/GET + application runtime 故障恢复）
 # 用法: bash scripts/ci.sh [--e2e]
 set -euo pipefail
 
@@ -45,8 +45,11 @@ step "go test（单测 + store 集成 + golden journal 重放）"
 if [ -n "${STORE_TEST_DATABASE_URL:-}" ]; then
   go test ./...
 elif docker exec chronotope-postgres-1 pg_isready -U chronotope > /dev/null 2>&1; then
-  # 本机 compose postgres 可达 → store 集成测试实跑（与 CI 服务容器一致）
-  STORE_TEST_DATABASE_URL='postgres://chronotope:chronotope_dev@localhost:5432/chronotope?sslmode=disable' \
+  # Keep integration-test outboxes away from the running application dispatcher.
+  if [ "$(docker exec chronotope-postgres-1 psql -U chronotope -d chronotope -tAc "SELECT 1 FROM pg_database WHERE datname='chronotope_test'")" != "1" ]; then
+    docker exec chronotope-postgres-1 createdb -U chronotope chronotope_test
+  fi
+  STORE_TEST_DATABASE_URL='postgres://chronotope:chronotope_dev@localhost:5432/chronotope_test?sslmode=disable' \
     go test ./...
 else
   echo "  未探测到 postgres：store 集成测试将自跳过（CI 中有服务容器，必跑）"
@@ -66,7 +69,7 @@ ok "spike"
 
 # --- e2e（可选，全链路）---
 if [ "${1:-}" = "--e2e" ]; then
-  step "e2e：compose 全链路（scripts/demo.sh，fake 模型无密钥）"
+  step "e2e：当前应用门禁（scripts/demo.sh，W1 + application runtime，fake 模型）"
   bash scripts/demo.sh
   ok "e2e"
 fi

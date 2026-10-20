@@ -30,6 +30,10 @@ import (
 
 // Store 是 api 侧 store 的最小接口（消费者侧定义；只读投影 + 控制面元数据）。
 type Store interface {
+	CreateAgentRequest(context.Context, string, string, string, *sessionapi.AgentConfig, string) (bool, error)
+	CreateSessionRequest(context.Context, string, string, string, string, string, string) (bool, error)
+	CompleteSessionInitialization(context.Context, string) error
+	AdmitRun(context.Context, string, string, string, string, json.RawMessage, map[string]any, string) (bool, error)
 	CreateOrg(ctx context.Context, id, name string) error
 	CreateAgent(ctx context.Context, id, orgID, name string, cfg *sessionapi.AgentConfig) error
 	GetAgent(ctx context.Context, id string) (*store.Agent, error)
@@ -136,6 +140,7 @@ type Store interface {
 // 生产实现是 HTTP 客户端；测试用 httptest 替身。
 type RestateIngress interface {
 	Call(ctx context.Context, path, method string, body any, out any) error
+	Send(ctx context.Context, path string, body any) error
 }
 
 // HarnessEmbedder 是嵌入门面（期 3 §D；harness /embed 的窄接口）。
@@ -145,6 +150,8 @@ type HarnessEmbedder interface {
 
 // Handler 是网关依赖集。
 type Handler struct {
+	ApplicationBridgeTenants map[string]string
+	Timers                   *TimerHandler
 	// AuthMode 认证模式（审计 #6：approvalWebhook 按模式 fail closed）。
 	AuthMode string
 	// Blob 是冷层归档的 S3 门面（期 2 §B；nil = 归档未启用）。
@@ -192,6 +199,9 @@ func (h *Handler) Router() chi.Router {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	if h.Timers != nil {
+		h.Timers.RegisterRoutes(r)
+	}
 
 	registerManagementRoutes(r, h) // 期 5 §A：管理面（成员/用量/配额/账单）
 	r.Route("/orgs/{orgID}", func(r chi.Router) {
@@ -214,9 +224,11 @@ func (h *Handler) Router() chi.Router {
 		r.Post("/knowledge", h.createKnowledge)           // 共享知识（期 3 §D：tenant 级）
 	})
 	r.Route("/agents/{agentID}", func(r chi.Router) {
+		r.Use(h.authorizeAgent)
 		r.Post("/sessions", h.createSession) // 创建 session → ready（沙箱懒创建）
 	})
 	r.Route("/sessions/{sessionID}", func(r chi.Router) {
+		r.Use(h.authorizeSession)
 		r.Get("/", h.getSession)                              // session 状态 + 最近事件
 		r.Get("/events", h.streamEvents)                      // SSE 时间轴，after=seq 断线续读
 		r.Post("/runs", h.submitRun)                          // 提交任务；Idempotency-Key 必带
@@ -247,8 +259,12 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/archive", h.getArchive)
 	})
 	// HITL 审批回调（worker-架构设计 §2：webhook 服务；api 为对外入口）
-	r.Get("/runs/{runID}/audit", h.runAudit) // journal 审计导出（期 1：重放轨迹 + dedupe 证据链）
-	r.Get("/runs/{runID}/calls", h.runCalls) // 效果账本对账（审计 A1/A2）
+	r.Route("/runs/{runID}", func(r chi.Router) {
+		r.Use(h.authorizeRun)
+		r.Get("/", h.getRun)
+		r.Get("/audit", h.runAudit)
+		r.Get("/calls", h.runCalls)
+	})
 	r.Post("/webhooks/approval/{runID}", h.approvalWebhook)
 	return r
 }

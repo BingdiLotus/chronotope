@@ -94,6 +94,12 @@ func execWithSandboxRecovery(ctx restate.Context, deps *Deps, in RunInput, cfg s
 // 计算秒（沙箱执行时长）在 journaled Run 闭包内测量并随结果一起记账——
 // 重放时回放同一时长（确定性），run 级预算熔断据此累加（边界语义 §1）。
 func dispatchTool(ctx restate.Context, deps *Deps, in RunInput, runID string, step int, cfg sessionapi.AgentConfig, tc ToolCall, emit *Emitter) (string, float64, error) {
+	if cfg.ApplicationProfile {
+		return dispatchApplicationTool(ctx, deps, in, runID, step, cfg, tc)
+	}
+	if tc.ArgumentsError != "" {
+		return toolErrorResult("invalid_arguments", tc.ArgumentsError), 0, nil
+	}
 	switch {
 	case tc.Name == runs.ToolBash || tc.Name == runs.ToolRunPython || tc.Name == runs.ToolListFiles:
 		input, inputErr := codeToolInput(tc)

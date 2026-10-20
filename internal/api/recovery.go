@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/commitment"
@@ -28,6 +27,12 @@ func (a *AdmissionRecovery) Run(ctx context.Context, interval time.Duration) {
 	if a.Stale <= 0 {
 		a.Stale = 5 * time.Minute
 	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if err := a.pass(ctx); err != nil && a.Logger != nil {
+		a.Logger.Warn("admission initial pass failed", "err", err)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -43,20 +48,21 @@ func (a *AdmissionRecovery) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (a *AdmissionRecovery) pass(ctx context.Context) error {
-	// 审计 5.1（八期）：pending outbox 是精确派发源（稳定 workflow key 重投）
-	if pending, pErr := a.Store.ListPendingAdmissions(ctx, 2*time.Minute, 20); pErr == nil {
-		for _, p := range pending {
-			var out struct {
-				RunID string `json:"run_id"`
+	// The durable admission outbox is the only run submission source. A lost
+	// HTTP acknowledgement is retried with the same workflow key.
+	pending, err := a.Store.ListPendingAdmissions(ctx, 0, 20)
+	if err != nil {
+		return err
+	}
+	for _, p := range pending {
+		if err := a.Ingress.Send(ctx, "/run_workflow/"+p.RunID+"/run", map[string]any{"session_id": p.SessionID, "input": p.Input, "topic": p.Topic}); err != nil {
+			if a.Logger != nil {
+				a.Logger.Warn("admission submission pending", "run_id", p.RunID, "err", err)
 			}
-			if err := a.Ingress.Call(ctx, "/run_workflow/"+p.RunID+"/run", "POST",
-				map[string]any{"session_id": p.SessionID, "input": p.Input, "topic": p.Topic}, &out); err != nil {
-				if a.Logger != nil {
-					a.Logger.Warn("admission pending redeliver failed", "run_id", p.RunID, "err", err)
-				}
-				continue
-			}
-			_ = a.Store.MarkAdmissionDispatched(ctx, p.RunID)
+			continue
+		}
+		if err := a.Store.MarkAdmissionDispatched(ctx, p.RunID); err != nil {
+			return err
 		}
 	}
 	// 审计 4.2（九期）：completed 事件的补交——终态已提交但事件写失败的
@@ -116,33 +122,6 @@ func (a *AdmissionRecovery) pass(ctx context.Context) error {
 			if ok && a.Logger != nil {
 				a.Logger.Warn("commitment expired（due_at 已过无兑现证据）", "id", c.ID, "agent", c.AgentID)
 			}
-		}
-	}
-	runs, err := a.Store.ListStaleQueuedRuns(ctx, time.Now().Add(-a.Stale), 20)
-	if err != nil {
-		return err
-	}
-	for _, run := range runs {
-		// 重投：幂等 ingress（worker 侧 run_id 幂等键；重复提交无害）
-		var out struct {
-			RunID string `json:"run_id"`
-		}
-		// 审计 #3：重投带不可变 command（input/topic 落 Run 行——丢输入反例关闭）
-		if err := a.Ingress.Call(ctx, "/run_workflow/"+run.ID+"/run", "POST",
-			map[string]any{"session_id": run.SessionID, "input": run.Input, "topic": run.Topic}, &out); err != nil {
-			// 409 already invoked = workflow 已调用（幂等命中——重投
-			// 成功语义；标记完成不再 stale 循环——api 忙的根源修复）
-			if strings.Contains(err.Error(), "already invoked") || strings.Contains(err.Error(), "409") {
-				_ = a.Store.MarkAdmissionDispatched(ctx, run.ID)
-				continue
-			}
-			if a.Logger != nil {
-				a.Logger.Warn("admission recovery redeliver failed", "run_id", run.ID, "err", err)
-			}
-			continue
-		}
-		if a.Logger != nil {
-			a.Logger.Info("admission recovery redelivered", "run_id", run.ID)
 		}
 	}
 	return nil

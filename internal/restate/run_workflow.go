@@ -14,6 +14,7 @@ import (
 	restate "github.com/restatedev/sdk-go"
 
 	"github.com/bingdilotus/chronotope/internal/core/event"
+	"github.com/bingdilotus/chronotope/internal/core/memory"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/observability"
@@ -77,6 +78,13 @@ func runWorkflowDef(deps *Deps) restate.ServiceDefinition {
 // runID 生产上来自 workflow key，与输入幂等键一致——契约规范 §6 幂等链）。
 func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out RunOutput, err error) {
 	defer func() {
+		if err != nil {
+			if row, getErr := deps.Store.GetRun(ctx, runID); getErr == nil && row != nil && row.Status != sessionapi.RunCompleted && row.Status != sessionapi.RunFailed && row.Status != sessionapi.RunCanceled {
+				if finalErr := finalizeTerminal(ctx, deps.Store, in.SessionID, runID, sessionapi.RunFailed, RunTerminalResult{Error: &RunError{Code: "run_error", Message: err.Error()}, Usage: RunUsage{UsageUnknown: true}}); finalErr != nil {
+					err = fmt.Errorf("%w; terminal persistence: %v", err, finalErr)
+				}
+			}
+		}
 		if r := recover(); r != nil {
 			// GitHub 诊断：panic 堆栈（recover 打栈后重抛——SDK 只记 error
 			// 不记堆栈，无法定位）
@@ -102,7 +110,6 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 	cfg := state.AgentConfig
 	// B2 装配合并：bound 冻结的 extensions 解析 → tools 合并 + prompt 拼接
 	// + hooks 清单进提示（快照语义——旧 run 沿旧扩展清单）
-	cfg = assembleExtensions(ctx, deps.Store, runID, cfg)
 	if runRow, gErr := deps.Store.GetRun(ctx, runID); gErr == nil && runRow != nil && len(runRow.Bound) > 0 {
 		raw, mErr := json.Marshal(runRow.Bound)
 		if mErr == nil {
@@ -114,6 +121,11 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			}
 		}
 	}
+
+	if cfg.ApplicationProfile {
+		return runApplicationLoop(ctx, deps, in, runID, cfg)
+	}
+	cfg = assembleExtensions(ctx, deps.Store, runID, cfg)
 
 	if err := emit.Emit(ctx, in.SessionID, runID, 0, event.RunStarted, "", "", map[string]any{
 		"input": in.Input, "model": cfg.Model, "topic": topicOf(in),
@@ -260,7 +272,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			if stepState.SandboxID != "" {
 				_ = deps.Executor.FreezeSandbox(ctx, stepState.SandboxID)
 			}
-			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+			failRun(ctx, emit, deps.Store, in.SessionID, runID, step, "session_paused", "session paused", "")
 			return RunOutput{}, restate.ToTerminalError(fmt.Errorf("会话已暂停（沙箱已冻结）"))
 		}
 		if err == nil && stepState.CancelRequested {
@@ -272,7 +284,9 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 			_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCanceled, "", "", map[string]any{
 				"step": step,
 			})
-			_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
+			if err := finalizeTerminal(ctx, deps.Store, in.SessionID, runID, sessionapi.RunCanceled, RunTerminalResult{Final: "已取消", Error: &RunError{Code: "canceled", Message: "run canceled"}, Usage: RunUsage{TokensTotal: accTokens, ComputeSeconds: accCompute, UsageUnknown: true}, Steps: step + 1}); err != nil {
+				return RunOutput{}, err
+			}
 			_ = deps.Sessions.ClearCancel(ctx, in.SessionID) // run 级一次性——审计 #9
 			return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
 		}
@@ -424,7 +438,9 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 						_ = emit.Emit(ctx, in.SessionID, runID, step, event.RunCanceled, "", "", map[string]any{
 							"step": step, "reason": "cancel_after_approval",
 						})
-						_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunCanceled)
+						if err := finalizeTerminal(ctx, deps.Store, in.SessionID, runID, sessionapi.RunCanceled, RunTerminalResult{Final: "已取消", Error: &RunError{Code: "canceled", Message: "run canceled"}, Usage: RunUsage{TokensTotal: accTokens, ComputeSeconds: accCompute, UsageUnknown: true}, Steps: step + 1}); err != nil {
+							return RunOutput{}, err
+						}
 						_ = deps.Sessions.ClearCancel(ctx, in.SessionID)
 						return RunOutput{Final: "已取消", Steps: step + 1, Canceled: true}, nil
 					}
@@ -484,7 +500,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 						// 十期 #7：持久化与运行中消息同路径（msgs 追加——
 						// 下一次 ModelRequest 的协议配对）
 						if aErr := deps.Store.AppendMessage(ctx, in.SessionID, runID, step, "tool", content); aErr == nil {
-							msgs = append(msgs, runs.Message{Role: "tool", Content: string(content), Source: "trusted"})
+							msgs = append(msgs, runs.Message{Role: "tool", Content: "工具执行 transient 失败：" + err.Error() + "（请决定重试或换策略）", Source: "trusted", ToolCallID: tc.ID})
 							_ = emit.Emit(ctx, in.SessionID, runID, step, event.ToolCall, "tool", tc.Name, map[string]any{
 								"step": step, "id": tc.ID, "name": tc.Name, "transient_error": err.Error(),
 							})
@@ -525,10 +541,7 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 		}
 	}
 
-	_ = emit.Emit(ctx, in.SessionID, runID, maxSteps, event.RunFailed, "", "", map[string]any{
-		"reason": "max_steps",
-	})
-	_ = deps.Store.UpdateRunStatus(ctx, runID, sessionapi.RunFailed)
+	failRun(ctx, emit, deps.Store, in.SessionID, runID, maxSteps, "max_steps", "maximum model steps reached", "")
 	return RunOutput{}, restate.ToTerminalError(fmt.Errorf("max steps (%d) exceeded", maxSteps))
 }
 
@@ -540,16 +553,8 @@ func failRun(ctx context.Context, emit *Emitter, st Store, sessionID, runID stri
 	}); eErr != nil {
 		slog.Default().Warn("run.failed 事件发射失败", "run", runID, "err", eErr)
 	}
-	// 修正方案 P1-5：终态写 journaled（重放回放同一 UPDATE——补偿动作
-	// 不重复执行外部效果）
-	if rctx, ok := ctx.(restate.Context); ok {
-		if _, uErr := restate.Run(rctx, func(rc2 restate.RunContext) (struct{}, error) {
-			return struct{}{}, st.UpdateRunStatus(rc2, runID, sessionapi.RunFailed)
-		}, restate.WithName(StepName("fail", step, runID))); uErr != nil {
-			slog.Default().Warn("run 终态写失败", "run", runID, "err", uErr)
-		}
-	} else if uErr := st.UpdateRunStatus(ctx, runID, sessionapi.RunFailed); uErr != nil {
-		slog.Default().Warn("run 终态写失败", "run", runID, "err", uErr)
+	if err := finalizeTerminal(ctx, st, sessionID, runID, sessionapi.RunFailed, RunTerminalResult{Error: &RunError{Code: reason, Message: detail}, Usage: RunUsage{UsageUnknown: true}, Steps: step + 1}); err != nil {
+		slog.Default().Warn("run terminal persistence failed", "run", runID, "error", err)
 	}
 	if detail != "" {
 		slog.Default().Warn("run failed", "run", runID, "reason", reason, "detail", detail)
@@ -573,6 +578,7 @@ func finalizeCompleted(ctx restate.Context, deps *Deps, emit *Emitter, in RunInp
 	payload, _ := json.Marshal(map[string]any{
 		"final": res.Final, "steps": step + 1, "truncated": res.Truncated,
 		"tokens_total": accTokens, "compute_seconds": accCompute,
+		"error": nil, "usage": RunUsage{TokensTotal: accTokens, ComputeSeconds: accCompute, UsageUnknown: res.Usage.UsagePartial},
 	})
 	if err := deps.Store.FinalizeRun(ctx, runID, in.SessionID, sessionapi.RunCompleted, "run_completed", payload); err != nil {
 		return RunOutput{}, restate.ToTerminalError(err)
@@ -583,7 +589,9 @@ func finalizeCompleted(ctx restate.Context, deps *Deps, emit *Emitter, in RunInp
 		return RunOutput{}, restate.ToTerminalError(fmt.Errorf("completed 事件写失败（终态已提交——恢复补发）: %w", eErr))
 	}
 	releaseLease()
-	_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
+	if !cfg.ApplicationProfile {
+		_ = consolidate(ctx, deps, in.SessionID, runID, topicOf(in), emit)
+	}
 	return RunOutput{Final: res.Final, Steps: step + 1}, nil
 }
 
@@ -636,29 +644,37 @@ func harnessCallClosure(rc restate.RunContext, deps *Deps, runID string, step in
 	if row.RequestHash != "" && row.RequestHash != reqHash {
 		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本请求 hash 不符（operation 冲突）"))
 	}
+	callCtx, cancel, deadlineErr := boundedCallContext(rc, deps, runID)
+	if deadlineErr != nil {
+		return nil, restate.ToTerminalError(deadlineErr)
+	}
+	defer cancel()
+	if req.TimeoutMS > 0 {
+		var timeoutCancel context.CancelFunc
+		callCtx, timeoutCancel = context.WithTimeout(callCtx, time.Duration(req.TimeoutMS)*time.Millisecond)
+		defer timeoutCancel()
+	}
 	if err := deps.Store.MarkLLMCallDispatched(rc, runID, step); err != nil {
 		return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 dispatched 失败（零派发）: %w", err))
 	}
-	r, err := harnessFor(deps, rc, runID).Call(rc, req)
+	r, err := harnessFor(deps, rc, runID).Call(callCtx, req)
 	// 结果落账（冻结结果引用 + usage——合同表的「同 operation 已有
 	// result」的回读源）
 	if r != nil {
-		unknown := r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0 && !r.Truncated
+		unknown := r.Usage.UsagePartial || (r.Usage.TokensIn == 0 && r.Usage.TokensOut == 0)
 		resultJSON, _ := json.Marshal(r)
-		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Truncated, unknown, "", string(resultJSON), credentialRefOf(rc, deps, runID)); lErr != nil {
+		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, int64(r.Usage.TokensIn), int64(r.Usage.TokensOut), r.Usage.UsagePartial || r.Truncated, unknown, "", string(resultJSON), credentialRefOf(rc, deps, runID)); lErr != nil {
 			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 result 失败（效果未知——不提交结果）: %w", lErr))
 		}
 	} else if err != nil {
-		// 调研②：transient（连接/超时/限流）→ 非 terminal（SDK 有限重试
-		// ——官方「LLM calls are costly」的成本纪律：有界而非无限）
-		if isTransientLLMError(err.Error()) {
-			return nil, fmt.Errorf("llm 调用 transient（有限重试）: %w", err)
-		}
 		if lErr := deps.Store.PutLLMCallResult(rc, runID, step, 0, 0, false, true, err.Error(), "", credentialRefOf(rc, deps, runID)); lErr != nil {
 			return nil, restate.ToTerminalError(fmt.Errorf("llm 账本 unknown 失败: %w", lErr))
 		}
 	}
-	return r, err
+	if err != nil {
+		return r, restate.ToTerminalError(err)
+	}
+	return r, nil
 }
 
 // requestHashOf 冻结请求的 hash（仲裁合同——同 operation 结果校验）。
@@ -703,8 +719,19 @@ func verifyCredential(ctx context.Context, deps *Deps, runID string) error {
 	if ref == "" {
 		return nil
 	}
+	run, err := deps.Store.GetRun(ctx, runID)
+	if err != nil || run == nil {
+		return restate.ToTerminalError(fmt.Errorf("credential run binding unavailable"))
+	}
+	session, err := deps.Store.GetSession(ctx, run.SessionID)
+	if err != nil || session == nil || session.OrgID == "" {
+		return restate.ToTerminalError(fmt.Errorf("credential tenant binding unavailable"))
+	}
 	// 吊销校验（阶段 ④：state=revoked 的显式失败）
-	rows, lErr := deps.Store.ListCredentials(ctx, "")
+	rows, lErr := deps.Store.ListCredentials(ctx, session.OrgID)
+	if lErr != nil {
+		return restate.ToTerminalError(fmt.Errorf("credential state unavailable"))
+	}
 	if lErr == nil {
 		for _, c := range rows {
 			if c.Ref == ref && c.State == "revoked" {
@@ -712,7 +739,7 @@ func verifyCredential(ctx context.Context, deps *Deps, runID string) error {
 			}
 		}
 	}
-	resolved, err := deps.CredentialResolver.Resolve(ctx, "", ref)
+	resolved, err := deps.CredentialResolver.Resolve(ctx, session.OrgID, ref)
 	if err != nil {
 		return restate.ToTerminalError(fmt.Errorf("凭据解析失败（引用 %s）: %w", ref, err))
 	}
@@ -794,84 +821,160 @@ func buildMessages(ctx context.Context, st Store, har Harness, in RunInput, runI
 	msgs := []runs.Message{{Role: "system", Content: cfg.Instructions, Source: "trusted"}}
 	// 期 6 ①：causal slice 注入——「上次为什么停 + 在等什么」（intent 一等
 	// 对象——恢复时模型无需从历史推导为什么停；决策蒸发关闭）
-	if waits, wErr := st.ActiveWaits(ctx, in.SessionID); wErr == nil && len(waits) > 0 {
-		var sb strings.Builder
-		sb.WriteString("当前等待中的意图（上次为什么停）：")
-		for _, w := range waits {
-			sb.WriteString(fmt.Sprintf(" [%s] 意图: %s；期待条件: %s",
-				w["kind"], w["intent"], w["expect"]))
+	if !cfg.ApplicationProfile {
+		if waits, wErr := st.ActiveWaits(ctx, in.SessionID); wErr == nil && len(waits) > 0 {
+			var sb strings.Builder
+			sb.WriteString("当前等待中的意图（上次为什么停）：")
+			for _, w := range waits {
+				sb.WriteString(fmt.Sprintf(" [%s] 意图: %s；期待条件: %s",
+					w["kind"], w["intent"], w["expect"]))
+			}
+			msgs = append(msgs, runs.Message{Role: "system", Content: sb.String(), Source: "trusted"})
 		}
-		msgs = append(msgs, runs.Message{Role: "system", Content: sb.String(), Source: "trusted"})
-	}
-	// 已装技能提示（§11：模型经 read_file 使用 skills/<name>/SKILL.md）
-	if len(skills) > 0 {
-		msgs = append(msgs, runs.Message{Role: "system", Source: "trusted",
-			Content: "【已安装技能】" + strings.Join(skills, "、") +
-				"。使用前先 read_file /workspace/skills/<name>/SKILL.md 获取用法说明。"})
-	}
-	// 共享知识注入（期 3 §D：tenant 级 pgvector 检索——基础数据服务；
-	// 查询嵌入经 harness /embed；检索失败静默降级不阻断 run）
-	if har != nil {
-		if sess, sErr := st.GetSession(ctx, in.SessionID); sErr == nil {
-			if emb, eErr := har.Embed(ctx, topicOf(in)); eErr == nil && len(emb) > 0 {
-				if items, kErr := st.RetrieveKnowledge(ctx, sess.OrgID, emb, 3); kErr == nil && len(items) > 0 {
-					var b strings.Builder
-					b.WriteString("【共享知识】")
-					for _, it := range items {
-						b.WriteString("\n- " + it.Content)
+		// 已装技能提示（§11：模型经 read_file 使用 skills/<name>/SKILL.md）
+		if len(skills) > 0 {
+			msgs = append(msgs, runs.Message{Role: "system", Source: "trusted",
+				Content: "【已安装技能】" + strings.Join(skills, "、") +
+					"。使用前先 read_file /workspace/skills/<name>/SKILL.md 获取用法说明。"})
+		}
+		// 共享知识注入（期 3 §D：tenant 级 pgvector 检索——基础数据服务；
+		// 查询嵌入经 harness /embed；检索失败静默降级不阻断 run）
+		if har != nil {
+			if sess, sErr := st.GetSession(ctx, in.SessionID); sErr == nil {
+				if emb, eErr := har.Embed(ctx, topicOf(in)); eErr == nil && len(emb) > 0 {
+					if items, kErr := st.RetrieveKnowledge(ctx, sess.OrgID, emb, 3); kErr == nil && len(items) > 0 {
+						var b strings.Builder
+						b.WriteString("【共享知识】")
+						for _, it := range items {
+							b.WriteString("\n- " + it.Content)
+						}
+						msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
 					}
-					msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
 				}
 			}
 		}
-	}
-	// 分层记忆注入（边界语义 §7 组装函数）：主题滚动摘要 + 检索片段（topic 作用域优先）
-	topic := topicOf(in)
-	if sum, err := st.LatestSummary(ctx, in.SessionID, topic); err == nil && sum != nil {
-		msgs = append(msgs, runs.Message{Role: "system", Content: "【主题摘要】" + sum.Summary, Source: "trusted"})
-	}
-	if items, err := st.ListMemoryItems(ctx, in.SessionID, topic, memoryRetrieveK); err == nil && len(items) > 0 {
-		var b strings.Builder
-		b.WriteString("【相关记忆】")
-		for _, it := range items {
-			b.WriteString("\n- " + it.Content)
+		// 分层记忆注入（边界语义 §7 组装函数）：主题滚动摘要 + 检索片段（topic 作用域优先）
+		topic := topicOf(in)
+		if sum, err := st.LatestSummary(ctx, in.SessionID, topic); err == nil && sum != nil {
+			msgs = append(msgs, runs.Message{Role: "system", Content: "【主题摘要】" + sum.Summary, Source: "trusted"})
 		}
-		msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
-	}
-	for _, m := range history {
-		// tool 消息：还原 tool_call_id 配对（Anthropic 硬校验；历史旧数据无
-		// 该结构时降级为纯文本 tool 消息——研发期清库后不再出现）
-		if m.Role == "tool" {
-			var tr struct {
-				ToolCallID string `json:"tool_call_id"`
-				Content    string `json:"content"`
+		if items, err := st.ListMemoryItems(ctx, in.SessionID, topic, memoryRetrieveK); err == nil && len(items) > 0 {
+			var b strings.Builder
+			b.WriteString("【相关记忆】")
+			for _, it := range items {
+				b.WriteString("\n- " + it.Content)
 			}
-			if err := json.Unmarshal(m.Content, &tr); err == nil && tr.ToolCallID != "" {
-				msgs = append(msgs, runs.Message{Role: "tool", Content: tr.Content, ToolCallID: tr.ToolCallID, Source: "trusted"})
-				continue
-			}
-			var text string
-			if err := json.Unmarshal(m.Content, &text); err == nil {
-				msgs = append(msgs, runs.Message{Role: "tool", Content: text, Source: "trusted"})
-			}
-			continue
-		}
-		var text string
-		if err := json.Unmarshal(m.Content, &text); err == nil {
-			msgs = append(msgs, runs.Message{Role: m.Role, Content: text, Source: "trusted"})
-			continue
-		}
-		// assistant 工具调用消息：还原 tool_calls（tool 消息必须成对引用——
-		// Anthropic 兼容 API 硬校验；跳过会破坏消息形状）
-		var tc struct {
-			ToolCalls []json.RawMessage `json:"tool_calls"`
-		}
-		if err := json.Unmarshal(m.Content, &tc); err == nil && len(tc.ToolCalls) > 0 {
-			msgs = append(msgs, runs.Message{Role: m.Role, Content: "", ToolCalls: tc.ToolCalls, Source: "trusted"})
+			msgs = append(msgs, runs.Message{Role: "system", Content: b.String(), Source: "trusted"})
 		}
 	}
+	msgs = append(msgs, restoreHistoryMessages(history)...)
 	// 用户输入已写回历史（每 run 一次），此处不再注入——重复注入会随轮次复读
 	return msgs, nil
+}
+
+// restoreHistoryMessages reconstructs complete assistant/tool groups for the
+// provider. The bounded database window may begin inside an older group, and a
+// failed run may have committed its assistant before all tool receipts were saved.
+// This changes only the model view: it never writes a receipt or repeats a tool.
+func restoreHistoryMessages(history []memory.Message) []runs.Message {
+	var messages []runs.Message
+	var assistant *runs.Message
+	var callIDs []string
+	var groupRun string
+	var groupStep int
+	results := map[string]runs.Message{}
+	flush := func() {
+		if assistant == nil {
+			return
+		}
+		messages = append(messages, *assistant)
+		for _, id := range callIDs {
+			if result, ok := results[id]; ok {
+				messages = append(messages, result)
+				continue
+			}
+			content, _ := json.Marshal(map[string]any{
+				"error":          map[string]string{"code": "history_result_unconfirmed", "message": "No durable result was found for this historical tool call. Its effect may have occurred; do not infer success or failure, or repeat it without reconciliation."},
+				"result_unknown": true,
+			})
+			messages = append(messages, runs.Message{Role: "tool", ToolCallID: id, Content: string(content), Source: "untrusted"})
+		}
+		assistant = nil
+		callIDs = nil
+		results = map[string]runs.Message{}
+	}
+	for _, row := range history {
+		if row.Role == "tool" {
+			// An orphaned prefix, foreign group, malformed result or duplicate never
+			// becomes an unpaired tool message in the next model request.
+			if assistant == nil || row.RunID != groupRun || row.Step != groupStep {
+				continue
+			}
+			var result struct {
+				ToolCallID string `json:"tool_call_id"`
+				Content    string `json:"content"`
+				Source     string `json:"source"`
+			}
+			if err := json.Unmarshal(row.Content, &result); err != nil || result.ToolCallID == "" {
+				continue
+			}
+			if _, duplicate := results[result.ToolCallID]; duplicate {
+				continue
+			}
+			for _, id := range callIDs {
+				if id == result.ToolCallID {
+					results[id] = runs.Message{Role: "tool", ToolCallID: id, Content: result.Content, Source: messageSource(result.Source)}
+					break
+				}
+			}
+			continue
+		}
+		flush()
+		var text string
+		if err := json.Unmarshal(row.Content, &text); err == nil {
+			messages = append(messages, runs.Message{Role: row.Role, Content: text, Source: "trusted"})
+			continue
+		}
+		if row.Role != "assistant" {
+			continue
+		}
+		var stored struct {
+			Content   string            `json:"content"`
+			ToolCalls []json.RawMessage `json:"tool_calls"`
+		}
+		if err := json.Unmarshal(row.Content, &stored); err != nil {
+			continue
+		}
+		ids := make([]string, 0, len(stored.ToolCalls))
+		seen := map[string]bool{}
+		valid := len(stored.ToolCalls) > 0
+		for _, raw := range stored.ToolCalls {
+			var call struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			}
+			if err := json.Unmarshal(raw, &call); err != nil || call.ID == "" || seen[call.ID] || call.Type != "function" || call.Function.Name == "" {
+				valid = false
+				break
+			}
+			seen[call.ID] = true
+			ids = append(ids, call.ID)
+		}
+		if !valid {
+			if stored.Content != "" {
+				messages = append(messages, runs.Message{Role: "assistant", Content: stored.Content, Source: "trusted"})
+			}
+			continue
+		}
+		assistant = &runs.Message{Role: "assistant", Content: stored.Content, ToolCalls: stored.ToolCalls, Source: "trusted"}
+		callIDs, groupRun, groupStep = ids, row.RunID, row.Step
+	}
+	flush()
+	return messages
 }
 
 // protocolToolCall 把工具调用转成 /runs 协议形状（id/type/function）。
@@ -893,6 +996,9 @@ func protocolToolCall(tc ToolCall) struct {
 	}{ID: tc.ID, Type: "function"}
 	ptc.Function.Name = tc.Name
 	ptc.Function.Arguments = string(tc.Arguments)
+	if tc.RawArguments != "" {
+		ptc.Function.Arguments = tc.RawArguments
+	}
 	return ptc
 }
 
@@ -900,7 +1006,7 @@ func protocolToolCall(tc ToolCall) struct {
 // next_speaker（moderator 决策发言顺序；落地方案 §14）。
 func groupAwareTools(cfg sessionapi.AgentConfig, state SessionState) []runs.Tool {
 	tools := toolsFromConfig(cfg)
-	if len(state.Participants) > 0 {
+	if !cfg.ApplicationProfile && len(state.Participants) > 0 {
 		tools = append(tools, groupTools()...)
 	}
 	return tools
@@ -908,6 +1014,9 @@ func groupAwareTools(cfg sessionapi.AgentConfig, state SessionState) []runs.Tool
 
 // toolsFromConfig 把 agent.config.tools 映射为 /runs 协议的工具清单（风险分级 W5 细化）。
 func toolsFromConfig(cfg sessionapi.AgentConfig) []runs.Tool {
+	if cfg.ApplicationProfile {
+		return applicationToolsForModel(cfg)
+	}
 	tools := make([]runs.Tool, 0, len(cfg.Tools))
 	for _, name := range cfg.Tools {
 		if !runs.IsVocabularyName(name) {

@@ -4,11 +4,11 @@
 
 > **时空可组合持久运行时** — An agent runtime that persists. Any time, any space, composably.
 
-> 当前是未上生产的 MVP。下一里程碑只建设[应用执行闭环](./docs/期8-细化落地方案.md)；Bots 是首个参考应用，其产品范围和 G0/G1/G2 在 [Bots MVP](../bots/docs/MVP设计.md)维护。允许破坏性 API/schema 调整和开发全栈重建，历史完成记录不代表生产就绪。
+> 当前是未上生产的 MVP。已完成并验证供 Bots 接入的[应用执行闭环](./docs/期8-细化落地方案.md)，证据见[开发进展](./docs/期8-开发进展.md)；Bots 是首个参考应用，其产品范围和 G0/G1/G2 在 [Bots MVP](../bots/docs/MVP设计.md)维护。允许破坏性 API/schema 调整和开发全栈重建，历史完成记录不代表生产就绪。
 
 Chronotope（chrono 时间 + tope 空间）是一个**基础设施底座的 Agent 持久运行时**：以「只追加事件日志 + journal 重放」为地基，以「可插拔 Executor 协议」为空间边界，以「会话生命周期（创建→任务→休眠→唤醒→续跑）」为主轴。harness、模型、沙箱、记忆四者可替换；业务语义（计费/审批）经**策略缝**注入，默认无业务 = 无限/全过。
 
-配套 ToB 设计中，**Bingdi Bots 治理组织 Bot，并提供原生知识、经验/技能、任务/计划、工作承诺与调度能力**；其资产可存于 Bots 或 Chronotope。管理员配置人格、策略、应用账号、session 和 loop/SOP，Bot 可在授权内自主积累知识、建待办或闹钟。成员通过 Slack、GitHub、Linear 等外部应用交互；外部系统保有自己对象、规则及权限的权威。Chronotope 提供耐久执行与通用存储。当前待实施范围见[职责边界](../bots/docs/Chronotope与Bingdi-Bots职责边界.md)。
+配套 ToB 设计中，**Bingdi Bots 治理组织 Bot，并提供原生知识、经验/技能、任务/计划、工作承诺与调度能力**；Bots 拥有这些应用对象和最终验收。管理员配置人格、策略、应用账号、session 和 loop/SOP，Bot 可在授权内自主积累知识、建待办或闹钟。成员通过 Slack、GitHub、Linear 等外部应用交互；外部系统保有自己对象、规则及权限的权威。Chronotope 提供耐久执行、模型/工具效果记录和通用 timer。职责划分见[职责边界](../bots/docs/Chronotope与Bingdi-Bots职责边界.md)。
 
 ## 快速开始
 
@@ -16,14 +16,18 @@ Chronotope（chrono 时间 + tope 空间）是一个**基础设施底座的 Agen
 git clone git@github.com:BingdiLotus/chronotope.git && cd chronotope
 cp .env.example .env                              # fake 模式无需真实模型密钥
 docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
-bash scripts/demo.sh                              # 20 阶段全链路演示（一条命令）
+bash scripts/demo.sh                              # 当前 fake 门禁：W1 202/GET + 应用执行恢复
 bash scripts/ci.sh --e2e                          # 本地 CI 门禁（与 GitHub Actions 同源）
 ```
 
 架构与路线：`docs/正式版架构.md`（三期规划）、`docs/期2-实施进度.md` / `docs/期3-实施进度.md`
 （进度跟踪）、`mvp-落地方案.md`（架构决策）、`边界语义设计.md`（产品语义）、`docs/contracts/`（契约规范）。
 
-## 项目状态：期 1 / 2 / 3 全部落地 ✅
+## 历史实现记录与当前验收范围
+
+下表记录已有模块和历史验收；本期 API/schema 已调整，旧完整场景保留在
+`scripts/demo-legacy.sh`，尚未全量适配，不属于当前门禁。当前默认门禁只运行
+W1 异步接纳/结果查询和应用工具/timer/进程恢复；fake 结果不等于真实模型或 Slack 最终送达。
 
 | 期 | 内容 | 验收 |
 |---|---|---|
@@ -46,10 +50,11 @@ bash scripts/ci.sh --e2e                          # 本地 CI 门禁（与 GitHu
 
 | 层 | 命令 | 规模 |
 |---|---|---|
-| **fake CI** | `bash scripts/ci.sh --e2e` | 单测 + vet + harness pytest 25 + demo **20 阶段** |
+| **当前 fake CI** | `bash scripts/ci.sh --e2e` | 单测 + vet + harness pytest + W1 202/GET + application runtime 故障恢复 |
+| **历史场景** | `scripts/demo-legacy.sh`、旧 `test/e2e/` | 未全量适配当前创建幂等/异步 run/工具 alias，不计入当前通过证据 |
 | **控制台 e2e** | `bash scripts/console-e2e.sh <console\|tt\|runtree>` | Playwright 5 用例 |
-| **真实模型** | `bash scripts/real-e2e.sh`（需 `.env` 密钥） | **9 组 36 断言**全特性 |
-| **缺陷回归** | demo 阶段 19（w14）+ pytest | 8 项 fake 绿真实红缺口固化 |
+| **当前真实模型路径** | `python3 test/e2e/application-runtime.py --mode real`（需有效 provider 配置） | 工具结果回喂/恢复；具体通过以实际报告为准 |
+| **历史真实模型/回归** | `scripts/real-e2e.sh`、w14 | 保留历史 fixture，尚未重新验收当前合同 |
 
 纪律：**fake 绿真实红**——真实 e2e 曾挖出 8 项单测/fake 测不可见的缺陷（快照双缺陷、
 fork 初始化、流异常僵尸、tool_call_id 配对等），全部修复并固化为 w14 回归断言。
@@ -91,9 +96,10 @@ make register-worker
 make e2e
 
 # 手动闭环：
-curl -X POST localhost:8080/orgs/org-demo/agents -H 'content-type: application/json' \
+curl -X POST localhost:8080/orgs/org-demo/agents -H 'content-type: application/json' -H 'Idempotency-Key: demo-agent-v1' \
   -d '{"name":"demo","config":{"model":"claude-sonnet-4-6","instructions":"你是演示助手。","tools":[],"version":1}}'
-# → 取 agent id 建 session → 取 session id 提交任务（Idempotency-Key 必带）→ SSE 收事件
+# → 取 agent id 建 session（Idempotency-Key 必带）→ 提交 run（同样必带 key，返回202）
+# → GET /runs/{run_id} 查询 canonical 结果；SSE 仅作观察
 ```
 
 一键容器化：`HARNESS_FAKE_MODEL=1 docker compose -f deploy/docker-compose.yml up -d --build`
@@ -114,9 +120,9 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 ├─ internal/
 │  ├─ api/                      # 网关实现（REST + SSE hub/poller + ingress + 限流/认证）
 │  ├─ core/                     # 共享契约：事件 schema、/runs 协议、Session API 类型
-│  ├─ store/                    # Postgres 访问层 + migrations 001–018（幂等，启动自动迁移）
+│  ├─ store/                    # Postgres 访问层 + migrations 001–038（幂等，启动自动迁移）
 │  ├─ events/                   # 事件投影：SSE hub、outbox 投递
-│  ├─ restate/                  # worker 服务层：五 Restate 服务、agent 主循环、策略缝装配
+│  ├─ restate/                  # worker 服务层：六 Restate 服务、应用执行循环、策略缝装配
 │  ├─ execproto/                # execute 协议：Driver 接口（docker / e2b）
 │  ├─ policy/                   # 策略缝：BudgetPolicy / ApprovalRouter + 参考实现
 │  └─ blobstore/                # RustFS S3 门面（归档 + 工作区内容寻址）
@@ -124,12 +130,12 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 ├─ harness/                     # Python 服务（uv + FastAPI）：POST /runs → SSE · /embed
 ├─ web/                         # Next.js 控制台（compose profile "web"）
 ├─ deploy/                      # docker-compose.yml + Dockerfile×5 + litellm 配置
-├─ scripts/                     # demo.sh（20 阶段）/ ci.sh / console-e2e.sh / real-e2e.sh
+├─ scripts/                     # demo.sh（当前门禁）/ demo-legacy.sh（历史）/ ci.sh
 ├─ docs/
 │  ├─ contracts/                # 三协议契约定义 + events.schema（与契约测试同源）
 │  └─ 期2-*.md / 期3-*.md       # 细化方案 + 实施进度（含审计/复审记录）
 └─ test/
-   ├─ e2e/                      # w1–w14 + real-*（9 组真实模型）
+   ├─ e2e/                      # W1 / application-runtime 当前门禁；其余历史场景
    ├─ contract/                 # 契约测试
    └─ chaos/                    # kill -9 恢复验证
 ```
@@ -139,7 +145,8 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 | 文档 | 内容 |
 |---|---|
 | [期8-细化落地方案.md](./docs/期8-细化落地方案.md) | Chronotope 通用 runtime P0：工具回喂、异步接纳、身份隔离、durable timer 与故障验收 |
-| [应用接入契约](./docs/应用接入契约.md) | 应用工具 bridge、opaque context、run 查询及 timer/fire 的目标合同（待实施） |
+| [期8-开发进展](./docs/期8-开发进展.md) | C0–C3 交付、真实/fake 恢复证据和遗留边界 |
+| [应用接入契约](./docs/应用接入契约.md) | 已实现的应用工具 bridge、可信 context、异步 run 查询及 timer/fire 合同 |
 | [多Agent持久协作方案横评](./docs/调研-多Agent持久协作方案横评.md) | runtime/framework、MCP/A2A、持久邮箱与 child 机制研究，非 MVP 全量前置 |
 | [Bots 产品设计入口](../bots/README.md) | Bot 原生知识/任务/治理、联合 MVP、身份/RSI、承诺与产品调研的唯一维护仓库 |
 | [Bots 职责边界](../bots/docs/Chronotope与Bingdi-Bots职责边界.md) | 消费方、执行 infra 与外部应用的语义 owner；本地并列仓库引用 |

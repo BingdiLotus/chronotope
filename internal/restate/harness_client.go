@@ -36,9 +36,11 @@ type Result struct {
 
 // ToolCall 是交棒的工具调用（name 必须是词汇表规范名，契约规范 §3）。
 type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments json.RawMessage
+	ID             string
+	Name           string
+	Arguments      json.RawMessage
+	RawArguments   string
+	ArgumentsError string
 	// ApprovalContext 是 harness 侧 hook 注入的审批上下文（A1——Claude
 	// PreToolUse 等 hook 的观察注入：工具参数摘要/风险提示——进 HITL
 	// digest 的 context 字段，审批者可见）。
@@ -110,6 +112,9 @@ func ParseFrames(r io.Reader) (*Result, error) {
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &f); err != nil {
 			return nil, fmt.Errorf("harness: bad frame %q: %w", line, err)
 		}
+		if res.Done || res.ErrCode != "" {
+			return nil, fmt.Errorf("harness: frame after terminal")
+		}
 		switch f.Type {
 		case runs.FrameDelta:
 			var p struct {
@@ -126,14 +131,21 @@ func ParseFrames(r io.Reader) (*Result, error) {
 				Arguments json.RawMessage `json:"arguments"`
 				// A1：harness 侧 hook 注入的审批上下文（可选）
 				ApprovalContext json.RawMessage `json:"approval_context,omitempty"`
+				RawArguments    string          `json:"raw_arguments,omitempty"`
+				ArgumentsError  string          `json:"arguments_error,omitempty"`
 			}
 			if err := json.Unmarshal(f.Payload, &p); err != nil {
 				return nil, fmt.Errorf("harness: bad tool_call payload: %w", err)
 			}
-			if !runs.IsVocabularyName(p.Name) {
-				return nil, fmt.Errorf("harness: tool name %q 不是词汇表规范名（契约规范 §3 硬约束）", p.Name)
+			if p.ID == "" || p.Name == "" {
+				return nil, fmt.Errorf("harness: tool call requires id and name")
 			}
-			res.ToolCalls = append(res.ToolCalls, ToolCall{ID: p.ID, Name: p.Name, Arguments: p.Arguments, ApprovalContext: p.ApprovalContext})
+			for _, existing := range res.ToolCalls {
+				if existing.ID == p.ID {
+					return nil, fmt.Errorf("harness: duplicate tool call id %q", p.ID)
+				}
+			}
+			res.ToolCalls = append(res.ToolCalls, ToolCall{ID: p.ID, Name: p.Name, Arguments: p.Arguments, RawArguments: p.RawArguments, ArgumentsError: p.ArgumentsError, ApprovalContext: p.ApprovalContext})
 		case runs.FrameDone:
 			var p runs.DonePayload
 			if err := json.Unmarshal(f.Payload, &p); err != nil {
@@ -142,6 +154,7 @@ func ParseFrames(r io.Reader) (*Result, error) {
 			res.Done = true
 			res.Final = p.Final
 			res.Usage = p.Usage
+			res.Usage.UsagePartial = res.Usage.UsagePartial || (p.UsagePartial != nil && *p.UsagePartial)
 			res.Truncated = p.Truncated != nil && *p.Truncated
 		case runs.FrameError:
 			var p runs.ErrorPayload
@@ -158,10 +171,10 @@ func ParseFrames(r io.Reader) (*Result, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("harness: read stream: %w", err)
 	}
-	// 契约 §3 三种返回：done（终答）/ tool_call（交棒）/ error（失败）。
-	// 三者皆无 = 未完成（连接断开未见终态 → 调用方幂等重发）。
-	if !res.Done && res.ErrCode == "" && len(res.ToolCalls) == 0 {
-		return nil, fmt.Errorf("harness: stream ended without done/error/tool_call terminal frame（契约规范 §3：连接断开未见 done = 未完成）")
+	// A tool batch is complete only after done. A dropped stream may contain
+	// only the first of several calls, so a tool frame alone never grants dispatch.
+	if !res.Done && res.ErrCode == "" {
+		return nil, fmt.Errorf("harness: stream ended without done/error terminal frame（契约规范 §3：连接断开未见 done = 未完成）")
 	}
 	return res, nil
 }

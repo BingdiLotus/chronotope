@@ -65,13 +65,15 @@ func TestParseFramesToolCallVocabularyGuard(t *testing.T) {
 		t.Fatalf("arguments 应原样保留: %s", res.ToolCalls[0].Arguments)
 	}
 
-	// 非词汇表名：硬约束拒绝（框架自有工具名必须映射后发出）
-	_, err := ParseFrames(strings.NewReader(
-		`data: {"type":"tool_call","seq":0,"payload":{"id":"t_1","name":"run_shell","arguments":{}}}` + "\n",
-	))
-	if err == nil || !strings.Contains(err.Error(), "词汇表") {
-		t.Fatalf("非规范名应被拒绝: %v", err)
+	// Application aliases are accepted by the parser; the worker registry grants authority.
+	custom := frames(t,
+		`data: {"type":"tool_call","seq":0,"payload":{"id":"t_app","name":"remember","arguments":{"content":"x"}}}`,
+		`data: {"type":"done","seq":1,"payload":{"final":"","usage":{"tokens_in":1,"tokens_out":1}}}`,
+	)
+	if len(custom.ToolCalls) != 1 || custom.ToolCalls[0].Name != "remember" {
+		t.Fatalf("application alias lost: %+v", custom)
 	}
+
 }
 
 func TestParseFramesMissingTerminalFrame(t *testing.T) {
@@ -81,13 +83,10 @@ func TestParseFramesMissingTerminalFrame(t *testing.T) {
 	}
 }
 
-func TestParseFramesToolCallIsTerminalHandoff(t *testing.T) {
-	// 交棒是合法终态（契约 §3 三种返回）：无 done 但有 tool_call → 有效结果
-	res := frames(t,
-		`data: {"type":"tool_call","seq":0,"payload":{"id":"t_1","name":"bash","arguments":{"command":"pytest"}}}`,
-	)
-	if res.Done || res.ErrCode != "" || len(res.ToolCalls) != 1 {
-		t.Fatalf("tool_call 交棒应解析为有效结果: %+v", res)
+func TestParseFramesRejectsPartialToolBatch(t *testing.T) {
+	_, err := ParseFrames(strings.NewReader(`data: {"type":"tool_call","seq":0,"payload":{"id":"t_1","name":"bash","arguments":{"command":"pytest"}}}` + "\n"))
+	if err == nil || !strings.Contains(err.Error(), "未见 done") {
+		t.Fatalf("partial batch must not dispatch: %v", err)
 	}
 }
 

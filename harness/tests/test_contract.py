@@ -5,6 +5,7 @@
 
 import json
 import os
+import pytest
 
 # 契约测试走 FakeProvider（无模型密钥；真实 LiteLLM 路径由 test_llm_provider 覆盖）
 os.environ.setdefault("HARNESS_FAKE_MODEL", "1")
@@ -23,7 +24,6 @@ SAMPLE_REQUEST = {
     "model": "claude-sonnet-4-6",
     "messages": [{"role": "user", "content": "hello"}],
     "tools": [{"type": "function", "name": "bash", "schema": {}, "risk_class": 1}],
-    "max_turns": 8,
     "max_output_bytes": 524288,
 }
 
@@ -63,10 +63,22 @@ def test_runs_unsupported_protocol_errors():
     assert frames[-1]["payload"]["code"] == "protocol_unsupported"
 
 
-def test_vocabulary_names():
-    """工具名词汇表硬约束（契约规范 §3）。"""
-    from app import protocol
+@pytest.mark.parametrize("name", ["mcp:github:search", "a b", "", "x" * 65])
+def test_invalid_model_alias_rejected(name):
+    bad = {**SAMPLE_REQUEST, "tools": [{"name": name}]}
+    assert client.post("/runs", json=bad).status_code == 422
 
-    for name in ["bash", "write_file", "request_approval", "mcp:github:search"]:
-        assert protocol.is_vocabulary_name(name), name
-    assert not protocol.is_vocabulary_name("run_shell")
+
+def test_registered_application_alias_is_accepted():
+    req = {**SAMPLE_REQUEST, "tools": [{"name": "knowledge_search", "description": "Search knowledge", "schema": {"type": "object"}}]}
+    assert client.post("/runs", json=req).status_code == 200
+
+
+def test_duplicate_model_alias_rejected():
+    bad = {**SAMPLE_REQUEST, "tools": [{"name": "same"}, {"name": "same"}]}
+    assert client.post("/runs", json=bad).status_code == 422
+
+
+@pytest.mark.parametrize("field", ["max_output_tokens", "max_output_bytes", "timeout_ms"])
+def test_nonpositive_limits_rejected(field):
+    assert client.post("/runs", json={**SAMPLE_REQUEST, field: 0}).status_code == 422

@@ -82,6 +82,29 @@ type AgentConfig struct {
 	// class 2（危险）→ 强制 request_approval，永不自动执行。
 	ToolClasses map[string]int `json:"tool_classes,omitempty"`
 	Version     int            `json:"version"` // 每次变更 +1
+	// ApplicationProfile exposes only the fixed application registry and disables
+	// tenant knowledge injection, consolidation and legacy executor adapters.
+	ApplicationProfile   bool              `json:"application_profile,omitempty"`
+	ApplicationBridgeRef string            `json:"application_bridge_ref,omitempty"`
+	ApplicationTools     []ApplicationTool `json:"application_tools,omitempty"`
+	MaxOutputTokens      int               `json:"max_output_tokens,omitempty"`
+	MaxSteps             int               `json:"max_steps,omitempty"`
+	MaxDurationMS        int64             `json:"max_duration_ms,omitempty"`
+}
+
+const (
+	DefaultMaxOutputTokens = 4096
+	DefaultMaxSteps        = 16
+	DefaultMaxDurationMS   = 300000
+)
+
+// ApplicationTool maps a model-visible alias to one application-owned operation.
+// Bridge addresses and credential values are worker configuration, never agent data.
+type ApplicationTool struct {
+	ModelAlias  string          `json:"model_alias"`
+	ToolRef     string          `json:"tool_ref"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 // Environment 是 agent.config.environment（契约规范 §1：environment{sandbox{...}}）。
@@ -101,11 +124,11 @@ type SandboxSpec struct {
 
 // SubmitRunRequest 是 POST /sessions/:id/runs 的请求体（幂等键必带）。
 type SubmitRunRequest struct {
-	IdempotencyKey string         `json:"-" header:"Idempotency-Key"` // → run_id 去重
-	Input          string         `json:"input"`
-	Topic          string         `json:"topic,omitempty"` // 记忆 topic 标签（分层记忆）
-	Trigger        map[string]any `json:"trigger,omitempty"`
-	Queue          bool           `json:"queue,omitempty"` // true 时双开改排队
+	IdempotencyKey  string         `json:"-" header:"Idempotency-Key"` // → run_id 去重
+	Input           string         `json:"input"`
+	Topic           string         `json:"topic,omitempty"` // 记忆 topic 标签（分层记忆）
+	Trigger         map[string]any `json:"trigger,omitempty"`
+	OriginCommandID string         `json:"origin_command_id,omitempty"`
 }
 
 // Participant 是群聊成员（边界语义/落地方案 §14 水平黑板拓扑：同侪共享日志）。
@@ -118,6 +141,8 @@ type Participant struct {
 // （participants 非空 = 群聊会话：moderator 主持循环 + 成员 child run）。
 type CreateSessionRequest struct {
 	Participants []Participant `json:"participants,omitempty"`
+	SubjectRef   string        `json:"subject_ref,omitempty"`
+	ScopeID      string        `json:"scope_id,omitempty"`
 }
 
 // ActionRequest 是 POST /sessions/:id/actions 的请求体。
