@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/timer"
+	"github.com/bingdilotus/chronotope/internal/targets"
+	"github.com/bingdilotus/chronotope/test/contract/fakeapp"
 	restate "github.com/restatedev/sdk-go"
 	"github.com/restatedev/sdk-go/x/mocks"
 	"github.com/stretchr/testify/mock"
@@ -39,12 +41,13 @@ func (s *timerWorkerStore) BeginApplicationTimerCallback(context.Context, timer.
 	s.row.State = "firing"
 	return nil
 }
-func (s *timerWorkerStore) RecordApplicationTimerCallbackError(_ context.Context, _ timer.Handle, blocked bool, message string) error {
+func (s *timerWorkerStore) RecordApplicationTimerCallbackError(_ context.Context, _ timer.Handle, blocked bool, code, message string) error {
 	s.row.State = "retrying"
 	if blocked {
 		s.row.State = "blocked"
 	}
 	s.row.LastError = message
+	s.row.LastErrorCode = code
 	return nil
 }
 func (s *timerWorkerStore) ConfirmApplicationTimer(context.Context, timer.Handle) error {
@@ -261,5 +264,71 @@ func TestApplicationTimerCrashBeforeSleepUsesAbsoluteDeadline(t *testing.T) {
 	}
 	if called.Load() != 1 {
 		t.Fatalf("recovered callback count %d", called.Load())
+	}
+}
+
+type dynamicTimerResolver struct {
+	target *timer.Target
+	digest string
+	err    error
+}
+
+func (r dynamicTimerResolver) ResolveTimerTargetByRef(context.Context, string, string) (*timer.Target, string, error) {
+	return r.target, r.digest, r.err
+}
+
+func TestDynamicTimerTargetUpdateBlocksOldTimer(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	st, deps := timerWorkerScenario(server.URL)
+	oldDigest := st.row.TargetDigest
+	moved := timer.Target{Ref: st.row.TargetRef, TenantID: st.row.TenantID, SubjectRef: st.row.SubjectRef,
+		ScopeID: st.row.ScopeID, CallbackURL: "http://moved.example/fire", BearerToken: "callback-token"}
+	deps.Targets = nil
+	deps.Resolver = dynamicTimerResolver{target: &moved, digest: moved.Digest()}
+	if err := deliverApplicationTimer(context.Background(), deps, st.row); err == nil {
+		t.Fatal("changed dynamic target must block the old timer")
+	}
+	if calls.Load() != 0 || st.row.State != "blocked" || st.row.LastErrorCode != "timer_target_changed" {
+		t.Fatalf("old timer was silently redirected: calls=%d row=%+v", calls.Load(), st.row)
+	}
+	if moved.Digest() == oldDigest {
+		t.Fatal("test setup must change the target digest")
+	}
+	// Delete/revocation is also explicit and blocked.
+	deps.Resolver = dynamicTimerResolver{err: targets.ErrTimerTargetUnavailable}
+	if err := deliverApplicationTimer(context.Background(), deps, st.row); err == nil {
+		t.Fatal("revoked target must remain blocked")
+	}
+	if calls.Load() != 0 || st.row.LastErrorCode != "timer_target_unavailable" {
+		t.Fatalf("revoked target outcome: calls=%d row=%+v", calls.Load(), st.row)
+	}
+}
+
+func TestDynamicTimerTargetMatchingDigestDeliversFire(t *testing.T) {
+	receiver := fakeapp.New("callback-token")
+	server := httptest.NewServer(receiver.Handler())
+	defer server.Close()
+	st, deps := timerWorkerScenario(server.URL + "/timer-fires")
+	target := deps.Targets[0]
+	deps.Targets = nil
+	deps.Resolver = dynamicTimerResolver{target: &target, digest: st.row.TargetDigest}
+	if err := deliverApplicationTimer(context.Background(), deps, st.row); err != nil {
+		t.Fatal(err)
+	}
+	fires := receiver.Fires()
+	if len(fires) != 1 {
+		t.Fatalf("fire not delivered: %+v", fires)
+	}
+	fire := fires[0]
+	if fire.Payload != st.row.Fire() || fire.IdempotencyKey != st.row.FireID || fire.Authorization != "Bearer callback-token" {
+		t.Fatalf("timer callback contract drift: %+v", fire)
+	}
+	if st.row.State != "acknowledged" || st.row.LastErrorCode != "" {
+		t.Fatalf("timer ACK state: %+v", st.row)
 	}
 }

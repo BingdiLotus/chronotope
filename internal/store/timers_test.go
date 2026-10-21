@@ -75,14 +75,14 @@ func TestApplicationTimerAdmissionAndRecovery(t *testing.T) {
 	if err := s.BeginApplicationTimerCallback(ctx, req.Handle()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordApplicationTimerCallbackError(ctx, req.Handle(), false, "response lost"); err != nil {
+	if err := s.RecordApplicationTimerCallbackError(ctx, req.Handle(), false, "timer_callback_unknown", "response lost"); err != nil {
 		t.Fatal(err)
 	}
 	row, err := s.GetApplicationTimer(ctx, req.Handle())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.State != "retrying" || row.CallbackAttempts != 1 || row.LastError != "response lost" {
+	if row.State != "retrying" || row.CallbackAttempts != 1 || row.LastError != "response lost" || row.LastErrorCode != "timer_callback_unknown" {
 		t.Fatalf("callback failure missing: %+v", row)
 	}
 	if err := s.ConfirmApplicationTimer(ctx, req.Handle()); err != nil {
@@ -91,14 +91,14 @@ func TestApplicationTimerAdmissionAndRecovery(t *testing.T) {
 	if err := s.MarkApplicationTimerSubmitted(ctx, req.Handle()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordApplicationTimerCallbackError(ctx, req.Handle(), true, "late error"); err != nil {
+	if err := s.RecordApplicationTimerCallbackError(ctx, req.Handle(), true, "timer_target_changed", "late error"); err != nil {
 		t.Fatal(err)
 	}
 	row, err = s.GetApplicationTimer(ctx, req.Handle())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.State != "acknowledged" || row.AcknowledgedAt == nil || row.LastError != "" {
+	if row.State != "acknowledged" || row.AcknowledgedAt == nil || row.LastError != "" || row.LastErrorCode != "" {
 		t.Fatalf("late submission/error overwrote ACK: %+v", row)
 	}
 	unknown := req.Handle()

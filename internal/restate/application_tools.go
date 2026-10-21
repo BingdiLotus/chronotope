@@ -9,16 +9,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/observability"
 	restate "github.com/restatedev/sdk-go"
 )
 
-var ErrApplicationResultUnknown = errors.New("application tool result unknown")
+var (
+	ErrApplicationResultUnknown        = errors.New("application tool result unknown")
+	ErrApplicationBridgeUnavailable    = errors.New("application bridge unavailable")
+	ErrApplicationBridgeTenantMismatch = errors.New("application bridge tenant mismatch")
+)
 
 type ApplicationCallContext struct {
 	TenantID        string `json:"tenant_id"`
@@ -47,33 +53,69 @@ type ApplicationBridgeConfig struct {
 	BearerToken string
 }
 
+// ApplicationBridgeSource resolves the current bridge configuration on every
+// call. The dynamic registry uses this seam; a static map is the bootstrap and
+// test implementation.
+type ApplicationBridgeSource interface {
+	ResolveBridge(context.Context, string) (ApplicationBridgeConfig, error)
+}
+
+type staticBridgeSource map[string]ApplicationBridgeConfig
+
+func (s staticBridgeSource) ResolveBridge(_ context.Context, ref string) (ApplicationBridgeConfig, error) {
+	bridge, ok := s[ref]
+	if !ok {
+		return ApplicationBridgeConfig{}, ErrApplicationBridgeUnavailable
+	}
+	return bridge, nil
+}
+
 type applicationToolClient struct {
-	bridges map[string]ApplicationBridgeConfig
-	client  *http.Client
+	source ApplicationBridgeSource
+	client *http.Client
+}
+
+func validateApplicationBridge(ref string, bridge ApplicationBridgeConfig) error {
+	u, err := url.Parse(bridge.URL)
+	if ref == "" || bridge.TenantID == "" || err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" || bridge.BearerToken == "" {
+		return fmt.Errorf("invalid application bridge configuration for %q", ref)
+	}
+	return nil
 }
 
 func NewApplicationToolClient(bridges map[string]ApplicationBridgeConfig) (ApplicationToolCaller, error) {
-	copyOf := make(map[string]ApplicationBridgeConfig, len(bridges))
+	copyOf := make(staticBridgeSource, len(bridges))
 	for ref, bridge := range bridges {
-		u, err := url.Parse(bridge.URL)
-		if ref == "" || bridge.TenantID == "" || err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" || bridge.BearerToken == "" {
-			return nil, fmt.Errorf("invalid application bridge configuration for %q", ref)
+		if err := validateApplicationBridge(ref, bridge); err != nil {
+			return nil, err
 		}
 		copyOf[ref] = bridge
 	}
-	return &applicationToolClient{bridges: copyOf, client: &http.Client{
+	return NewApplicationToolClientWithSource(copyOf)
+}
+
+// NewApplicationToolClientWithSource wires a dynamic bridge source. The source
+// is consulted per call, so target revocation/rotation needs no worker restart.
+func NewApplicationToolClientWithSource(source ApplicationBridgeSource) (ApplicationToolCaller, error) {
+	if source == nil {
+		return nil, fmt.Errorf("application bridge source is required")
+	}
+	return &applicationToolClient{source: source, client: &http.Client{
 		Timeout:       30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}, nil
 }
 
 func (c *applicationToolClient) Call(ctx context.Context, bridgeRef string, call ApplicationToolCall) (json.RawMessage, error) {
-	bridge, ok := c.bridges[bridgeRef]
-	if !ok {
-		return nil, fmt.Errorf("application bridge %q is not configured", bridgeRef)
+	bridge, err := c.source.ResolveBridge(ctx, bridgeRef)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrApplicationBridgeUnavailable, err)
+	}
+	if err := validateApplicationBridge(bridgeRef, bridge); err != nil {
+		return nil, ErrApplicationBridgeUnavailable
 	}
 	if call.Context.TenantID == "" || call.Context.TenantID != bridge.TenantID {
-		return nil, fmt.Errorf("application bridge tenant mismatch")
+		return nil, ErrApplicationBridgeTenantMismatch
 	}
 	body, err := json.Marshal(call)
 	if err != nil {
@@ -171,13 +213,27 @@ func dispatchApplicationTool(ctx restate.Context, deps *Deps, in RunInput, runID
 			return outcome{}, restate.ToTerminalError(dErr)
 		}
 		defer cancel()
+		bridgeStarted := time.Now()
 		response, callErr := deps.ApplicationTools.Call(callCtx, cfg.ApplicationBridgeRef, ApplicationToolCall{Context: bound, ToolRef: tool.ToolRef, Arguments: tc.Arguments})
+		elapsed := time.Since(bridgeStarted)
 		if callErr != nil {
+			code, outcomeName := "application_tool_error", "error"
+			if errors.Is(callErr, ErrApplicationResultUnknown) {
+				code, outcomeName = "application_tool_result_unknown", "unknown"
+			}
+			observability.RecordToolBridge(outcomeName, code, elapsed)
+			slog.Default().Warn("tool.bridge", "run_id", runID, "tenant_id", bound.TenantID,
+				"operation_id", bound.OperationID, "tool_ref", tool.ToolRef,
+				"outcome", outcomeName, "error_code", code, "duration_ms", elapsed.Milliseconds())
 			if errors.Is(callErr, ErrApplicationResultUnknown) {
 				return outcome{Result: toolErrorResult("result_unknown", "application result is unknown; do not assume failure or create a replacement operation"), Unknown: true}, nil
 			}
 			return outcome{}, restate.ToTerminalError(callErr)
 		}
+		observability.RecordToolBridge("success", "", elapsed)
+		slog.Default().Info("tool.bridge", "run_id", runID, "tenant_id", bound.TenantID,
+			"operation_id", bound.OperationID, "tool_ref", tool.ToolRef,
+			"outcome", "success", "duration_ms", elapsed.Milliseconds(), "result_bytes", len(response))
 		return outcome{Result: string(response)}, nil
 	}, restate.WithName(StepName("application", step, tc.ID)))
 	if err != nil {

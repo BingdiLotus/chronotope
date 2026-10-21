@@ -26,6 +26,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/events"
 	"github.com/bingdilotus/chronotope/internal/store"
+	"github.com/bingdilotus/chronotope/internal/targets"
 )
 
 // Store 是 api 侧 store 的最小接口（消费者侧定义；只读投影 + 控制面元数据）。
@@ -154,6 +155,11 @@ type Handler struct {
 	Timers                   *TimerHandler
 	// AuthMode 认证模式（审计 #6：approvalWebhook 按模式 fail closed）。
 	AuthMode string
+	// TargetRegistry resolves dynamic/static application targets. Nil keeps the
+	// legacy static map/slice behavior for tests and older callers.
+	TargetRegistry *targets.Registry
+	// ApplicationTargets is the dynamic target management store (nil = disabled).
+	ApplicationTargets ApplicationTargetStore
 	// Blob 是冷层归档的 S3 门面（期 2 §B；nil = 归档未启用）。
 	Blob *blobstore.BlobStore
 	// Embedder 文本嵌入（期 3 §D：共享知识写入的向量来源；nil = 需显式向量）。
@@ -195,6 +201,7 @@ func New(st Store, hub *events.Hub, ingress RestateIngress) *Handler {
 // Router 挂载 Session API 路由（契约规范 §2）。
 func (h *Handler) Router() chi.Router {
 	r := chi.NewRouter()
+	r.Use(ContractVersionMiddleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
@@ -222,6 +229,9 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/audit", h.orgAudit)                       // 审计导出（期 3 §B/C）
 		r.Put("/mcp-allowlist", h.upsertMCPAllowlist)     // MCP 网关工具白名单（期 3 §C）
 		r.Post("/knowledge", h.createKnowledge)           // 共享知识（期 3 §D：tenant 级）
+		r.Post("/application-targets", h.upsertApplicationTarget)
+		r.Get("/application-targets", h.listApplicationTargets)
+		r.Delete("/application-targets/{kind}/{ref}", h.deleteApplicationTarget)
 	})
 	r.Route("/agents/{agentID}", func(r chi.Router) {
 		r.Use(h.authorizeAgent)

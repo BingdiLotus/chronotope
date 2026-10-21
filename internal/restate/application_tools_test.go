@@ -3,6 +3,7 @@ package restate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bingdilotus/chronotope/internal/core/contract"
 	"github.com/bingdilotus/chronotope/internal/core/runs"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/store"
@@ -249,5 +251,40 @@ func TestApplicationBridgeTenantAndRedirectAreFenced(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatal("redirect forwarded authenticated tool call")
+	}
+}
+
+func TestApplicationProviderFailuresAreClassifiedAndEffectFenced(t *testing.T) {
+	t.Run("before any tool effect retryable", func(t *testing.T) {
+		s, se, _ := applicationFixture(t)
+		h := &fakeHarness{err: errors.New("harness: POST /runs status 502")}
+		_, err := runLoop(newMockedLoop(t), &Deps{Store: s, Sessions: se, Harness: h, ApplicationTools: &countingApplicationCaller{}}, RunInput{SessionID: "s_app", Input: "x"}, "r_app")
+		if err == nil || s.terminal.Error == nil {
+			t.Fatalf("provider failure not terminal: %v %+v", err, s.terminal)
+		}
+		if s.terminal.Error.Code != "provider_error" || s.terminal.Error.Category != contract.CategoryProvider || !s.terminal.Error.Retryable {
+			t.Fatalf("provider failure classification: %+v", s.terminal.Error)
+		}
+	})
+	t.Run("after tool effect not retryable", func(t *testing.T) {
+		s, se, _ := applicationFixture(t)
+		h := &fakeHarness{script: []*Result{
+			{Done: true, ToolCalls: []ToolCall{{ID: "one", Name: "remember", Arguments: json.RawMessage(`{"content":"x"}`)}}},
+			{ErrCode: "provider_unavailable", ErrMsg: "upstream unavailable"},
+		}}
+		_, err := runLoop(newMockedLoop(t), &Deps{Store: s, Sessions: se, Harness: h, ApplicationTools: &countingApplicationCaller{}}, RunInput{SessionID: "s_app", Input: "x"}, "r_app")
+		if err == nil || s.terminal.Error == nil {
+			t.Fatalf("provider failure not terminal: %v %+v", err, s.terminal)
+		}
+		if s.terminal.Error.Code != "provider_error" || s.terminal.Error.Category != contract.CategoryProvider || s.terminal.Error.Retryable {
+			t.Fatalf("effect fencing must clear retryable: %+v", s.terminal.Error)
+		}
+	})
+}
+
+func TestRunErrorForUnknownCodeFailsClosed(t *testing.T) {
+	got := runErrorFor("some_future_code", "diagnostic", false)
+	if got.Code != "run_error" || got.Category != contract.CategoryRuntime || got.Retryable {
+		t.Fatalf("unknown code must fail closed: %+v", got)
 	}
 }

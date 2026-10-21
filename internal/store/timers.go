@@ -13,13 +13,13 @@ var ErrTimerConflict = errors.New("timer identity already has a different reques
 
 const applicationTimerColumns = `tenant_id,timer_id,revision,subject_ref,scope_id,due_at,opaque_action_ref,
 request_digest,workflow_key,fire_id,target_ref,target_digest,state,submit_attempts,callback_attempts,
-last_error,created_at,submitted_at,acknowledged_at`
+last_error,last_error_code,created_at,submitted_at,acknowledged_at`
 
 func scanApplicationTimer(row pgx.Row) (*timer.Record, error) {
 	var r timer.Record
 	if err := row.Scan(&r.TenantID, &r.TimerID, &r.Revision, &r.SubjectRef, &r.ScopeID, &r.DueAt, &r.OpaqueActionRef,
 		&r.RequestDigest, &r.WorkflowKey, &r.FireID, &r.TargetRef, &r.TargetDigest, &r.State,
-		&r.SubmitAttempts, &r.CallbackAttempts, &r.LastError, &r.CreatedAt, &r.SubmittedAt, &r.AcknowledgedAt); err != nil {
+		&r.SubmitAttempts, &r.CallbackAttempts, &r.LastError, &r.LastErrorCode, &r.CreatedAt, &r.SubmittedAt, &r.AcknowledgedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -94,14 +94,17 @@ func (s *Store) MarkApplicationTimerSubmitted(ctx context.Context, h timer.Handl
 	return s.updateApplicationTimer(ctx, h, `UPDATE application_timers SET
 submitted_at=COALESCE(submitted_at,now()),submit_attempts=submit_attempts+1,
 state=CASE WHEN state='pending' THEN 'scheduled' ELSE state END,
-last_error=CASE WHEN state='pending' THEN '' ELSE last_error END
+last_error=CASE WHEN state='pending' THEN '' ELSE last_error END,
+last_error_code=CASE WHEN state='pending' THEN '' ELSE last_error_code END
 WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`)
 }
 
-func (s *Store) RecordApplicationTimerSubmitError(ctx context.Context, h timer.Handle, message string) error {
+func (s *Store) RecordApplicationTimerSubmitError(ctx context.Context, h timer.Handle, code, message string) error {
 	return s.updateApplicationTimer(ctx, h, `UPDATE application_timers SET submit_attempts=submit_attempts+1,
-last_error=CASE WHEN state='pending' THEN $4 ELSE last_error END,next_submit_at=now()+interval '5 seconds'
-WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`, message)
+last_error=CASE WHEN state='pending' THEN $4 ELSE last_error END,
+last_error_code=CASE WHEN state='pending' THEN $5 ELSE last_error_code END,
+next_submit_at=now()+interval '5 seconds'
+WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`, message, code)
 }
 
 func (s *Store) BeginApplicationTimerCallback(ctx context.Context, h timer.Handle) error {
@@ -111,20 +114,21 @@ callback_attempts=callback_attempts+CASE WHEN state='acknowledged' THEN 0 ELSE 1
 WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`)
 }
 
-func (s *Store) RecordApplicationTimerCallbackError(ctx context.Context, h timer.Handle, blocked bool, message string) error {
+func (s *Store) RecordApplicationTimerCallbackError(ctx context.Context, h timer.Handle, blocked bool, code, message string) error {
 	state := "retrying"
 	if blocked {
 		state = "blocked"
 	}
 	return s.updateApplicationTimer(ctx, h, `UPDATE application_timers SET
 state=CASE WHEN state='acknowledged' THEN state ELSE $4 END,
-last_error=CASE WHEN state='acknowledged' THEN last_error ELSE $5 END
-WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`, state, message)
+last_error=CASE WHEN state='acknowledged' THEN last_error ELSE $5 END,
+last_error_code=CASE WHEN state='acknowledged' THEN last_error_code ELSE $6 END
+WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`, state, message, code)
 }
 
 func (s *Store) ConfirmApplicationTimer(ctx context.Context, h timer.Handle) error {
 	return s.updateApplicationTimer(ctx, h, `UPDATE application_timers SET
-state='acknowledged',acknowledged_at=COALESCE(acknowledged_at,now()),last_error=''
+state='acknowledged',acknowledged_at=COALESCE(acknowledged_at,now()),last_error='',last_error_code=''
 WHERE tenant_id=$1 AND timer_id=$2 AND revision=$3`)
 }
 

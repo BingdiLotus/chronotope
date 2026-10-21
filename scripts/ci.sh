@@ -41,6 +41,10 @@ step "go vet"
 go vet ./...
 ok "vet"
 
+step "application contract（fixture + fake receiver）"
+go test ./test/contract/... ./internal/targets/... -count=1
+ok "application contract"
+
 step "go test（单测 + store 集成 + golden journal 重放）"
 if [ -n "${STORE_TEST_DATABASE_URL:-}" ]; then
   go test ./...

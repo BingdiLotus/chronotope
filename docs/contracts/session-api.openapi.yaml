@@ -1,7 +1,9 @@
 openapi: 3.0.3
 info:
   title: Chronotope Session API
-  version: 1.0.0
+  version: 1.1.0
+  x-application-contract-version: 1.0.0
+  x-contract-version-header: X-Chronotope-Application-Contract
   description: |
     Session API（契约规范 §2，权威定义见仓库根目录 契约规范.md）。
     当前开发代次允许破坏性变更，不提供旧协议兼容层；版本绑定在 run。
@@ -15,6 +17,10 @@ info:
                → completed / failed / canceled
 
     幂等键传递链路：Idempotency-Key(api) → run_id(worker) → (run_id, step)(harness/executor)。
+
+    应用契约版本以 `x-application-contract-version` 声明，并随每个响应返回
+    `X-Chronotope-Application-Contract`。错误响应必须同时包含 `error_code`、
+    `category`、`retryable`；`error` 仅用于诊断，调用方不得解析其文本。
 paths:
   /orgs/{orgId}/agents:
     post:
@@ -137,6 +143,48 @@ paths:
         "400": { description: 缺少查询上下文或 revision 非法 }
         "403": { description: 租户不符 }
         "404": { description: timer 不存在或不属于该 subject/scope }
+  /orgs/{orgId}/application-targets:
+    post:
+      summary: 注册或更新动态应用 bridge/timer target（仅平台 operator）
+      operationId: upsertApplicationTarget
+      description: |
+        动态 target 不替代部署 env bootstrap。bridge 的 tenant/ref/url 路由不可变，
+        凭据轮换只更新 token_env；timer target 的 url/subject/scope 变更会递增
+        revision，并使旧 timer 在回调前 blocked 而不是改投新地址。
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplicationTargetRequest" }
+      responses:
+        "201": { description: target 已创建；返回 revision/digest，不返回 token }
+        "200": { description: target 已更新；revision+1 }
+        "400": { description: 请求体非法或包含内联凭据 }
+        "403": { description: 非平台 operator 或租户归属不符 }
+        "409": { description: ref 与 static env 冲突、timer scope 冲突，或 bridge 路由字段被修改 }
+        "422": { description: URL/subject/scope/token_env 校验失败 }
+    get:
+      summary: 列出当前租户的动态 target（不含凭据）
+      operationId: listApplicationTargets
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200": { description: target 列表（token_env 是引用名，不是 token） }
+        "403": { description: 非平台 operator 或租户归属不符 }
+  /orgs/{orgId}/application-targets/{kind}/{ref}:
+    delete:
+      summary: 撤销动态 target；旧 timer 将 blocked，不会改投
+      operationId: deleteApplicationTarget
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [bridge, timer] } }
+        - { name: ref, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: target 已撤销并写入审计 }
+        "403": { description: 非平台 operator 或租户归属不符 }
+        "404": { description: target 不存在 }
   /sessions/{sessionId}/events:
     get:
       summary: SSE 时间轴；断线重连按 after=seq 续读；seq 允许 gap
@@ -258,15 +306,30 @@ components:
   schemas:
     Error:
       type: object
-      required: [code, error]
+      required: [code, error_code, error, category, retryable]
       properties:
-        code: { type: integer }
-        error: { type: string }
+        code: { type: integer, description: HTTP status（兼容旧字段） }
+        error_code:
+          type: string
+          description: |
+            稳定机器码；完整集合见 docs/contracts/application-contract.v1.json。
+            常见值：invalid_request、unauthorized、tenant_mismatch、not_found、
+            idempotency_conflict、session_busy、validation_failed、rate_limited、
+            application_bridge_unavailable、timer_target_unavailable、internal_error。
+          example: idempotency_conflict
+        error: { type: string, description: 诊断文本；不得作为分支依据 }
+        category:
+          type: string
+          enum: [validation, auth, not_found, conflict, rate_limit, provider, tool, timer, runtime, limit, policy, canceled]
+        retryable:
+          type: boolean
+          description: |
+            仅表示同一逻辑操作在稳定幂等键下可否安全重试；不表示 run 可恢复。
+            session_busy / rate_limited / 5xx 可退避重试；idempotency_conflict 必须修正请求。
         detail: { type: string }
       description: |
-        错误码（契约规范 §6）：输入/权限错误 400/401/403/404/422 不盲目重试；
-        409 idempotency_conflict 必须修正逻辑请求，session_busy 则由应用持久排队后重试；
-        429 幂等重试 + 指数退避 + Retry-After；500/502/503 幂等重试；504 幂等重试（≤3 次后失败事件）。
+        应用契约 v1.0.0 错误信封。输入/权限 4xx 不盲目重试；409 idempotency_conflict
+        必须修正逻辑请求；session_busy 由应用持久排队后重试；429/5xx 幂等退避重试。
     AgentConfig:
       type: object
       required: [model]
@@ -314,7 +377,7 @@ components:
       type: object
       required: [context, tool_ref, arguments]
       description: |
-        Worker POST 到部署固定 bridge URL；Bearer 服务认证来自部署配置，
+        Worker POST 到受信 bridge target（静态 env 或动态注册）；Bearer 服务认证来自 token_env，
         Idempotency-Key 为稳定 operation_id。应用验证主体、scope 及参数，
         持久保存业务写入和原返回值；2xx/4xx JSON 都可作为原 call 的工具结果回喂。
       properties:
@@ -372,7 +435,9 @@ components:
         session_id: { type: string }
         status: { type: string, enum: [queued, running, paused, awaiting_approval, frozen, completed, failed, canceled] }
         final: { type: string, nullable: true }
-        error: { type: object, nullable: true, additionalProperties: true }
+        error:
+          allOf: [{ $ref: "#/components/schemas/RunError" }]
+          nullable: true
         usage:
           type: object
           nullable: true
@@ -381,9 +446,21 @@ components:
             tokens_out: { type: integer, format: int64 }
             tokens_total: { type: integer, format: int64 }
             usage_unknown: { type: boolean, description: 仅计量未知；不把已知模型结果当作 result_unknown 重做 }
-        bound: { type: object, description: 不可变 agent/config/protocol/model 与 tenant/subject/scope/origin 引用 }
+        bound: { type: object, description: 不可变 agent/config/protocol/model、application_contract_version 与 tenant/subject/scope/origin 引用 }
         steps: { type: integer }
         truncated: { type: boolean }
+    RunError:
+      type: object
+      required: [code, message, category, retryable]
+      properties:
+        code: { type: string, description: 稳定 run 错误码 }
+        message: { type: string, description: 诊断文本 }
+        category:
+          type: string
+          enum: [validation, auth, not_found, conflict, rate_limit, provider, tool, timer, runtime, limit, policy, canceled]
+        retryable:
+          type: boolean
+          description: 仅当没有已发生的外部工具效果且可安全重提同一逻辑操作时为 true
     TimerRequest:
       type: object
       additionalProperties: false
@@ -412,7 +489,10 @@ components:
         state: { type: string, enum: [pending, scheduled, firing, retrying, blocked, acknowledged] }
         submit_attempts: { type: integer }
         callback_attempts: { type: integer }
-        last_error: { type: string }
+        last_error: { type: string, description: 诊断文本 }
+        last_error_code:
+          type: string
+          description: 稳定 timer 错误码；blocked/retrying 的机器可读原因
         created_at: { type: string, format: date-time }
         submitted_at: { type: string, format: date-time, nullable: true }
         acknowledged_at: { type: string, format: date-time, nullable: true }
@@ -420,7 +500,8 @@ components:
       type: object
       required: [tenant_id, timer_id, revision, fire_id, opaque_action_ref]
       description: |
-        Worker POST 到固定回调目标；Bearer 服务认证与 Idempotency-Key=fire_id。
+        Worker POST 到冻结的 timer target（静态 env 或动态注册，digest fencing）；
+        Bearer 服务认证与 Idempotency-Key=fire_id。
         只有应用耐久接纳后才返回 2xx；网络/响应未知可重投同一 payload/fire_id。
         这一跳的 ACK 不证明最终发送或应用动作完成，改期/取消由应用检查 revision/status。
       properties:
@@ -429,6 +510,33 @@ components:
         revision: { type: integer, format: int64 }
         fire_id: { type: string }
         opaque_action_ref: { type: string }
+    ApplicationTargetRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, ref, url, token_env]
+      properties:
+        kind: { type: string, enum: [bridge, timer] }
+        ref: { type: string, minLength: 1, maxLength: 256 }
+        url: { type: string, format: uri, description: bridge URL 或 timer callback URL；必须 http(s) }
+        subject_ref: { type: string, description: "timer target 必填；bridge 禁止", maxLength: 256 }
+        scope_id: { type: string, description: "timer target 必填；bridge 禁止", maxLength: 256 }
+        token_env: { type: string, description: 服务凭据环境变量名；不接受内联 token }
+    ApplicationTarget:
+      type: object
+      required: [kind, ref, tenant_id, url, token_env, revision, state, digest, updated_at]
+      properties:
+        kind: { type: string, enum: [bridge, timer] }
+        ref: { type: string }
+        tenant_id: { type: string }
+        url: { type: string }
+        subject_ref: { type: string }
+        scope_id: { type: string }
+        token_env: { type: string, description: 引用名，不含 token 值 }
+        revision: { type: integer, format: int64 }
+        state: { type: string, enum: [active] }
+        digest: { type: string, description: 路由摘要；timer 冻结此值用于 fencing }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     ActionRequest:
       type: object
       required: [action]

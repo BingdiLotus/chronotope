@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"strings"
+
+	"github.com/bingdilotus/chronotope/internal/core/contract"
 )
 
 // corsMiddleware 控制台跨源（web 是独立源直连 API；SSE 事件流不能经代理缓冲——
@@ -26,8 +28,8 @@ func CorsMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
-				w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, Authorization")
+				w.Header().Set("Access-Control-Expose-Headers", "Retry-After, "+contract.VersionHeader)
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

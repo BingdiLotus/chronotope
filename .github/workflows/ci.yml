@@ -41,6 +41,8 @@ jobs:
         run: go build ./...
       - name: vet
         run: go vet ./...
+      - name: application contract（fixture + Bots-like receiver）
+        run: go test ./test/contract/... ./internal/targets/... -count=1
       - name: test（单测 + 独立 PG 集成 + golden journal 重放）
         env:
           STORE_TEST_DATABASE_URL: postgres://chronotope:chronotope_dev@localhost:5432/chronotope_test?sslmode=disable

@@ -1,0 +1,13 @@
+{
+  "context": {
+    "tenant_id": "tenant-example",
+    "subject_ref": "bot-example",
+    "scope_id": "scope-example",
+    "origin_command_id": "command-example",
+    "run_id": "run-example",
+    "operation_id": "app_operation_example",
+    "tool_call_id": "call-example"
+  },
+  "tool_ref": "knowledge.search",
+  "arguments": {"query": "contract example"}
+}

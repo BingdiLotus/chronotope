@@ -63,9 +63,9 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 					row, err := h.Store.GetAPIKeyByHash(r.Context(), sha256Hex(key))
 					if err != nil {
 						if errors.Is(err, store.ErrNotFound) {
-							writeError(w, http.StatusUnauthorized, 401, "invalid api key")
+							writeErrorCode(w, http.StatusUnauthorized, "unauthorized", "invalid api key")
 						} else {
-							writeError(w, http.StatusInternalServerError, 500, err.Error())
+							writeErrorCode(w, http.StatusInternalServerError, "internal_error", err.Error())
 						}
 						return
 					}
@@ -79,11 +79,11 @@ func (h *Handler) AuthMiddleware(mode, adminKey string) func(http.Handler) http.
 			if mode == "on" {
 				// 匿名路径（healthz/webhooks）与 admin key 在 on 模式下放行
 				if !anonymousPath(r) && !admin && org == "" {
-					writeError(w, http.StatusUnauthorized, 401, "missing api key（API_AUTH_MODE=on）")
+					writeErrorCode(w, http.StatusUnauthorized, "unauthorized", "missing api key（API_AUTH_MODE=on）")
 					return
 				}
 				if !admin && org != "" && !resourceOwnedBy(r, org) {
-					writeError(w, http.StatusForbidden, 403, "org 归属不符")
+					writeErrorCode(w, http.StatusForbidden, "tenant_mismatch", "org 归属不符")
 					return
 				}
 			}

@@ -13,25 +13,50 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/bingdilotus/chronotope/internal/core/contract"
 	"github.com/bingdilotus/chronotope/internal/core/extension"
 	"github.com/bingdilotus/chronotope/internal/core/harness"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
+	"github.com/bingdilotus/chronotope/internal/observability"
 	"github.com/bingdilotus/chronotope/internal/store"
 )
 
+// ContractVersionMiddleware advertises the application contract version on every
+// API response, including authentication failures handled outside Handler.Router.
+func ContractVersionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(contract.VersionHeader, contract.ApplicationContractVersion)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // writeJSON 统一响应格式；错误码稳定（契约规范 §6）。
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set(contract.VersionHeader, contract.ApplicationContractVersion)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError keeps the historical signature but always returns a stable
+// machine-readable error_code/category/retryable envelope.
 func writeError(w http.ResponseWriter, status int, code int, msg string) {
-	writeJSON(w, status, map[string]any{"code": code, "error": msg})
+	if code <= 0 {
+		code = status
+	}
+	writeErrorCode(w, status, "", msg)
+}
+
+// writeErrorCode returns an explicit stable error code. Unknown codes or codes
+// whose declared HTTP status differs from status fall back to the status map.
+func writeErrorCode(w http.ResponseWriter, status int, errorCode, msg string) {
+	body := contract.HTTPError(status, errorCode, msg)
+	observability.RecordHTTPError(status, body.ErrorCode)
+	writeJSON(w, status, body)
 }
 
 func notImplemented(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, 501, "not_implemented: "+r.URL.Path+"（后续周迭代实现，契约规范 §2）")
+	writeErrorCode(w, http.StatusNotImplemented, "not_implemented", "not_implemented: "+r.URL.Path+"（后续周迭代实现，契约规范 §2）")
 }
 
 // GET /sessions/{sessionID} —— session 状态 + 最近事件。

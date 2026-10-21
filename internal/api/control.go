@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bingdilotus/chronotope/internal/core/contract"
 	"github.com/bingdilotus/chronotope/internal/core/sessionapi"
 	"github.com/bingdilotus/chronotope/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -39,11 +40,11 @@ func requestKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 func controlError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrIdempotencyConflict):
-		writeJSON(w, 409, map[string]any{"code": 409, "error_code": "idempotency_conflict", "error": err.Error()})
+		writeErrorCode(w, 409, "idempotency_conflict", err.Error())
 	case errors.Is(err, store.ErrSessionBusy):
-		writeJSON(w, 409, map[string]any{"code": 409, "error_code": "session_busy", "error": err.Error()})
+		writeErrorCode(w, 409, "session_busy", err.Error())
 	default:
-		writeError(w, 500, 500, err.Error())
+		writeErrorCode(w, http.StatusInternalServerError, "internal_error", err.Error())
 	}
 }
 
@@ -58,16 +59,23 @@ func (h *Handler) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	var req sessionapi.CreateAgentRequest
 	if err := decodeRequest(w, r, &req); err != nil || strings.TrimSpace(req.Name) == "" || req.Config.Model == "" {
-		writeError(w, 422, 422, "invalid agent configuration")
+		writeErrorCode(w, 422, "validation_failed", "invalid agent configuration")
 		return
 	}
 	if err := req.Config.ValidateApplication(); err != nil {
-		writeError(w, 422, 422, err.Error())
+		writeErrorCode(w, 422, "validation_failed", err.Error())
 		return
 	}
-	if req.Config.ApplicationProfile && h.ApplicationBridgeTenants[req.Config.ApplicationBridgeRef] != orgID {
-		writeError(w, 422, 422, "application bridge is not configured for this tenant")
-		return
+	if req.Config.ApplicationProfile {
+		tenant, ok, err := h.applicationBridgeTenant(r.Context(), req.Config.ApplicationBridgeRef)
+		if err != nil {
+			writeErrorCode(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		if !ok || tenant != orgID {
+			writeErrorCode(w, 422, "application_bridge_unavailable", "application bridge is not configured for this tenant")
+			return
+		}
 	}
 	req.Config.Version = 1
 	hash, err := store.RequestHash(req)
@@ -105,7 +113,7 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 	agent, err := h.Store.GetAgent(r.Context(), agentID)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, 404, 404, "agent not found")
+		writeErrorCode(w, 404, "not_found", "agent not found")
 		return
 	}
 	if err != nil {
@@ -117,11 +125,11 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var req sessionapi.CreateSessionRequest
 	if err := decodeRequest(w, r, &req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, 422, 422, "invalid session request")
+		writeErrorCode(w, 422, "validation_failed", "invalid session request")
 		return
 	}
 	if agent.Config.ApplicationProfile && (req.SubjectRef == "" || req.ScopeID == "" || len(req.Participants) > 0) {
-		writeError(w, 422, 422, "application sessions require subject_ref/scope_id and do not accept participants")
+		writeErrorCode(w, 422, "validation_failed", "application sessions require subject_ref/scope_id and do not accept participants")
 		return
 	}
 	hash, err := store.RequestHash(req)
@@ -141,17 +149,17 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.DeletedAt != nil {
-		writeError(w, 409, 409, "original session was deleted")
+		writeErrorCode(w, 409, "conflict", "original session was deleted")
 		return
 	}
 	if sess.Status == sessionapi.PhaseCreated {
 		if err := h.Ingress.Call(r.Context(), "/session_object/"+id+"/Create", http.MethodPost, agent.Config, nil); err != nil {
-			writeError(w, 503, 503, "session initialization pending; retry with the same key")
+			writeErrorCode(w, 503, "initialization_pending", "session initialization pending; retry with the same key")
 			return
 		}
 		if len(req.Participants) > 0 {
 			if err := h.Ingress.Call(r.Context(), "/session_object/"+id+"/SetParticipants", http.MethodPost, req.Participants, nil); err != nil {
-				writeError(w, 503, 503, "participant initialization pending; retry with the same key")
+				writeErrorCode(w, 503, "initialization_pending", "participant initialization pending; retry with the same key")
 				return
 			}
 		}
@@ -180,7 +188,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
 	sess, err := h.Store.GetSession(r.Context(), sessionID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && sess.DeletedAt != nil) {
-		writeError(w, 404, 404, "session not found")
+		writeErrorCode(w, 404, "not_found", "session not found")
 		return
 	}
 	if err != nil {
@@ -192,7 +200,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	}
 	var req sessionapi.SubmitRunRequest
 	if err := decodeRequest(w, r, &req); err != nil || strings.TrimSpace(req.Input) == "" {
-		writeError(w, 422, 422, "invalid run request (input required)")
+		writeErrorCode(w, 422, "validation_failed", "invalid run request (input required)")
 		return
 	}
 	hash, err := store.RequestHash(req)
@@ -213,7 +221,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.Status == sessionapi.PhaseCreated || sess.Status == sessionapi.PhasePaused || sess.Status == sessionapi.PhaseArchived {
-		writeError(w, 409, 409, "session is not accepting new runs")
+		writeErrorCode(w, 409, "conflict", "session is not accepting new runs")
 		return
 	}
 	agent, err := h.Store.GetAgent(r.Context(), sess.AgentID)
@@ -222,7 +230,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if agent.Config.ApplicationProfile && (sess.OrgID == "" || sess.SubjectRef == "" || sess.ScopeID == "" || req.OriginCommandID == "") {
-		writeError(w, 422, 422, "application run requires bound tenant/subject/scope and origin_command_id")
+		writeErrorCode(w, 422, "validation_failed", "application run requires bound tenant/subject/scope and origin_command_id")
 		return
 	}
 	if h.Limiter != nil {
@@ -232,7 +240,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 			}
 			if ok, retry := h.Limiter.Take(bucket.kind, bucket.key); !ok {
 				w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retry.Seconds()+1))
-				writeError(w, 429, 429, "run admission rate limited")
+				writeErrorCode(w, 429, "rate_limited", "run admission rate limited")
 				return
 			}
 		}
@@ -245,7 +253,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	if origin == "" {
 		origin = id
 	}
-	bound := map[string]any{"agent_config_version": agent.Version, "spec_digest": agent.SpecDigest, "agent_config": agent.Config, "protocol_version": "1.0", "model": agent.Config.Model, "tenant_id": sess.OrgID, "subject_ref": sess.SubjectRef, "scope_id": sess.ScopeID, "origin_command_id": origin, "deadline_at": time.Now().Add(time.Duration(maxDuration) * time.Millisecond).UTC().Format(time.RFC3339Nano)}
+	bound := map[string]any{"agent_config_version": agent.Version, "spec_digest": agent.SpecDigest, "agent_config": agent.Config, "protocol_version": "1.0", "application_contract_version": contract.ApplicationContractVersion, "model": agent.Config.Model, "tenant_id": sess.OrgID, "subject_ref": sess.SubjectRef, "scope_id": sess.ScopeID, "origin_command_id": origin, "deadline_at": time.Now().Add(time.Duration(maxDuration) * time.Millisecond).UTC().Format(time.RFC3339Nano)}
 	if agent.Config.CredentialRef != "" {
 		bound["credential_ref"] = agent.Config.CredentialRef
 	}
@@ -255,7 +263,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	if ref := agent.Config.HarnessRef; ref != nil && ref.Name != "" {
 		harness, err := h.Store.GetActiveHarness(r.Context(), sess.OrgID, ref.Name)
 		if err != nil {
-			writeError(w, 422, 422, "configured harness is unavailable")
+			writeErrorCode(w, 422, "validation_failed", "configured harness is unavailable")
 			return
 		}
 		bound["harness_endpoint"] = harness.Endpoint
@@ -268,7 +276,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := h.Store.AdmitRun(r.Context(), id, sessionID, req.Input, req.Topic, trigger, bound, hash)
 	if errors.Is(err, store.ErrSessionBusy) {
-		response := map[string]any{"code": 409, "error_code": "session_busy", "error": err.Error()}
+		response := map[string]any{"code": 409, "error_code": "session_busy", "error": err.Error(), "category": "conflict", "retryable": true}
 		if active, getErr := h.Store.GetActiveRun(r.Context(), sessionID); getErr == nil && active != nil {
 			response["active_run_id"] = active.ID
 		}
@@ -297,7 +305,7 @@ func (h *Handler) submitRun(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 	run, err := h.Store.GetRun(r.Context(), chi.URLParam(r, "runID"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, 404, 404, "run not found")
+		writeErrorCode(w, 404, "not_found", "run not found")
 		return
 	}
 	if err != nil {

@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
 	"github.com/bingdilotus/chronotope/internal/core/timer"
+	"github.com/bingdilotus/chronotope/internal/observability"
 	"github.com/bingdilotus/chronotope/internal/store"
+	"github.com/bingdilotus/chronotope/internal/targets"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -21,14 +24,21 @@ type TimerStore interface {
 	GetApplicationTimer(context.Context, timer.Handle) (*timer.Record, error)
 	ListPendingApplicationTimers(context.Context, int) ([]timer.Record, error)
 	MarkApplicationTimerSubmitted(context.Context, timer.Handle) error
-	RecordApplicationTimerSubmitError(context.Context, timer.Handle, string) error
+	RecordApplicationTimerSubmitError(context.Context, timer.Handle, string, string) error
+}
+
+// TimerTargetResolver selects the trusted receiver for a timer admission.
+type TimerTargetResolver interface {
+	ResolveTimerTarget(context.Context, timer.Request) (*timer.Target, string, error)
 }
 
 // TimerHandler is mounted behind the same authentication middleware as Handler.
 // Targets are operator configuration, not an application/model request field.
+// Resolver (dynamic registry) takes precedence over the static bootstrap slice.
 type TimerHandler struct {
-	Store   TimerStore
-	Targets []timer.Target
+	Store    TimerStore
+	Targets  []timer.Target
+	Resolver TimerTargetResolver
 }
 
 func (h *TimerHandler) RegisterRoutes(r chi.Router) {
@@ -41,50 +51,82 @@ func (h *TimerHandler) create(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		writeError(w, 400, 400, "invalid timer request")
+		observability.RecordTimerAdmission("invalid")
+		writeErrorCode(w, 400, "invalid_request", "invalid timer request")
 		return
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		writeError(w, 400, 400, "expected one timer request")
+		writeErrorCode(w, 400, "invalid_request", "expected one timer request")
 		return
 	}
 	in = in.Normalize()
 	if err := in.Validate(); err != nil {
-		writeError(w, 400, 400, err.Error())
+		observability.RecordTimerAdmission("invalid")
+		writeErrorCode(w, 400, "invalid_request", err.Error())
 		return
 	}
 	if !requireOrg(w, r, in.TenantID) {
 		return
 	}
 	var selected *timer.Target
-	for _, target := range h.Targets {
-		if !target.Matches(in) {
-			continue
-		}
-		if target.Validate() != nil || selected != nil {
-			writeError(w, 503, 503, "invalid or ambiguous configured timer target")
+	targetDigest := ""
+	if h.Resolver != nil {
+		target, digest, err := h.Resolver.ResolveTimerTarget(r.Context(), in)
+		if err != nil {
+			observability.RecordTimerAdmission("target_unavailable")
+			if errors.Is(err, targets.ErrAmbiguousTarget) {
+				writeErrorCode(w, 503, "service_unavailable", "invalid or ambiguous configured timer target")
+				return
+			}
+			writeErrorCode(w, 403, "timer_target_unavailable", "timer subject/scope is not configured for tenant")
 			return
 		}
-		t := target
-		selected = &t
+		selected, targetDigest = target, digest
+	} else {
+		for _, target := range h.Targets {
+			if !target.Matches(in) {
+				continue
+			}
+			if target.Validate() != nil || selected != nil {
+				observability.RecordTimerAdmission("target_unavailable")
+				writeErrorCode(w, 503, "service_unavailable", "invalid or ambiguous configured timer target")
+				return
+			}
+			t := target
+			selected = &t
+		}
+		if selected != nil {
+			targetDigest = selected.Digest()
+		}
 	}
 	if selected == nil {
-		writeError(w, 403, 403, "timer subject/scope is not configured for tenant")
+		observability.RecordTimerAdmission("target_unavailable")
+		writeErrorCode(w, 403, "timer_target_unavailable", "timer subject/scope is not configured for tenant")
+		return
+	}
+	if selected.Validate() != nil || targetDigest == "" {
+		observability.RecordTimerAdmission("target_unavailable")
+		writeErrorCode(w, 503, "service_unavailable", "invalid or ambiguous configured timer target")
 		return
 	}
 	if h.Store == nil {
-		writeError(w, 503, 503, "timer store unavailable")
+		writeErrorCode(w, 503, "service_unavailable", "timer store unavailable")
 		return
 	}
-	record, _, err := h.Store.CreateApplicationTimer(r.Context(), in, selected.Ref, selected.Digest())
+	record, _, err := h.Store.CreateApplicationTimer(r.Context(), in, selected.Ref, targetDigest)
 	if err != nil {
 		if errors.Is(err, store.ErrTimerConflict) {
-			writeError(w, 409, 409, "timer key has a different request")
+			observability.RecordTimerAdmission("conflict")
+			writeErrorCode(w, 409, "idempotency_conflict", "timer key has a different request")
 			return
 		}
-		writeError(w, 500, 500, "timer admission failed")
+		observability.RecordTimerAdmission("store_error")
+		writeErrorCode(w, 500, "internal_error", "timer admission failed")
 		return
 	}
+	observability.RecordTimerAdmission("accepted")
+	slog.Default().Info("timer.admitted", "tenant_id", record.TenantID, "timer_id", record.TimerID,
+		"revision", record.Revision, "target_ref", record.TargetRef, "state", record.State)
 	query := url.Values{"tenant_id": {in.TenantID}, "subject_ref": {in.SubjectRef}, "scope_id": {in.ScopeID}, "revision": {strconv.FormatInt(in.Revision, 10)}}
 	w.Header().Set("Location", "/timers/"+url.PathEscape(in.TimerID)+"?"+query.Encode())
 	writeJSON(w, http.StatusAccepted, record)
@@ -95,31 +137,31 @@ func (h *TimerHandler) get(w http.ResponseWriter, r *http.Request) {
 	revision, err := strconv.ParseInt(q.Get("revision"), 10, 64)
 	tenantID, subjectRef, scopeID := q.Get("tenant_id"), q.Get("subject_ref"), q.Get("scope_id")
 	if err != nil || revision <= 0 || tenantID == "" || subjectRef == "" || scopeID == "" {
-		writeError(w, 400, 400, "tenant_id, subject_ref, scope_id and positive revision are required")
+		writeErrorCode(w, 400, "invalid_request", "tenant_id, subject_ref, scope_id and positive revision are required")
 		return
 	}
 	if !requireOrg(w, r, tenantID) {
 		return
 	}
 	if h.Store == nil {
-		writeError(w, 503, 503, "timer store unavailable")
+		writeErrorCode(w, 503, "service_unavailable", "timer store unavailable")
 		return
 	}
 	timerID := chi.URLParam(r, "timerID")
 	if r.URL.RawPath != "" {
 		timerID, err = url.PathUnescape(timerID)
 		if err != nil {
-			writeError(w, 400, 400, "invalid timer ID")
+			writeErrorCode(w, 400, "invalid_request", "invalid timer ID")
 			return
 		}
 	}
 	row, err := h.Store.GetApplicationTimer(r.Context(), timer.Handle{TenantID: tenantID, TimerID: timerID, Revision: revision})
 	if errors.Is(err, store.ErrNotFound) || (err == nil && (row.SubjectRef != subjectRef || row.ScopeID != scopeID)) {
-		writeError(w, 404, 404, "timer not found in scope")
+		writeErrorCode(w, 404, "not_found", "timer not found in scope")
 		return
 	}
 	if err != nil {
-		writeError(w, 500, 500, "timer query failed")
+		writeErrorCode(w, 500, "internal_error", "timer query failed")
 		return
 	}
 	writeJSON(w, 200, row)
@@ -169,9 +211,12 @@ func (a *TimerRecovery) Pass(ctx context.Context) error {
 		err = a.Ingress.Send(callCtx, "/"+timer.WorkflowName+"/"+row.WorkflowKey+"/run", row.Handle())
 		cancel()
 		if err != nil {
-			if recordErr := a.Store.RecordApplicationTimerSubmitError(ctx, row.Handle(), "workflow submission not confirmed"); recordErr != nil {
+			if recordErr := a.Store.RecordApplicationTimerSubmitError(ctx, row.Handle(), "timer_submit_failed", "workflow submission not confirmed"); recordErr != nil {
 				failures = append(failures, recordErr)
 			}
+			observability.RecordTimerAdmission("submit_failed")
+			slog.Default().Warn("timer.submit", "tenant_id", row.TenantID, "timer_id", row.TimerID,
+				"revision", row.Revision, "error_code", "timer_submit_failed", "retryable", true)
 			failures = append(failures, fmt.Errorf("timer %s submission not confirmed: %w", row.WorkflowKey, err))
 			continue
 		}

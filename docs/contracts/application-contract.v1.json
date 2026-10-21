@@ -1,0 +1,437 @@
+{
+  "compatibility": {
+    "additive_fields": "clients must ignore unknown fields and unknown error codes",
+    "breaking_change": "major",
+    "minimum_bots_version": "v0.1.0-mvp",
+    "policy": "semver",
+    "run_protocol_version": "1.0"
+  },
+  "contract_version": "1.0.0",
+  "error_envelope": {
+    "category_values": [
+      "validation",
+      "auth",
+      "not_found",
+      "conflict",
+      "rate_limit",
+      "provider",
+      "tool",
+      "timer",
+      "runtime",
+      "limit",
+      "policy",
+      "canceled"
+    ],
+    "notes": "category and retryable are stable; error text is diagnostic only",
+    "required": [
+      "code",
+      "error_code",
+      "error",
+      "category",
+      "retryable"
+    ]
+  },
+  "errors": [
+    {
+      "code": "admin_required",
+      "http_status": 403,
+      "category": "auth",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "application_bridge_unavailable",
+      "http_status": 422,
+      "category": "validation",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "application_tool_bridge_required",
+      "http_status": 0,
+      "category": "tool",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "application_tool_error",
+      "http_status": 0,
+      "category": "tool",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "application_tool_result_unknown",
+      "http_status": 0,
+      "category": "tool",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "approver_revoked",
+      "http_status": 0,
+      "category": "policy",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "budget_exceeded",
+      "http_status": 0,
+      "category": "limit",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "canceled",
+      "http_status": 0,
+      "category": "canceled",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "conflict",
+      "http_status": 409,
+      "category": "conflict",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "credential_error",
+      "http_status": 0,
+      "category": "validation",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "deadline_error",
+      "http_status": 0,
+      "category": "validation",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "deadline_exceeded",
+      "http_status": 0,
+      "category": "limit",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "event_error",
+      "http_status": 0,
+      "category": "runtime",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "forbidden",
+      "http_status": 403,
+      "category": "auth",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "harness_error",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": true,
+      "scope": "run"
+    },
+    {
+      "code": "harness_incomplete",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": true,
+      "scope": "run"
+    },
+    {
+      "code": "history_error",
+      "http_status": 0,
+      "category": "runtime",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "idempotency_conflict",
+      "http_status": 409,
+      "category": "conflict",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "initialization_pending",
+      "http_status": 503,
+      "category": "runtime",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "internal_error",
+      "http_status": 500,
+      "category": "runtime",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "invalid_application_config",
+      "http_status": 0,
+      "category": "validation",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "invalid_application_context",
+      "http_status": 0,
+      "category": "validation",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "invalid_request",
+      "http_status": 400,
+      "category": "validation",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "invalid_run_deadline",
+      "http_status": 0,
+      "category": "validation",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "max_steps",
+      "http_status": 0,
+      "category": "limit",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "model_output_truncated",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "no_progress",
+      "http_status": 0,
+      "category": "limit",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "not_found",
+      "http_status": 404,
+      "category": "not_found",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "not_implemented",
+      "http_status": 501,
+      "category": "validation",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "output_schema_violation",
+      "http_status": 0,
+      "category": "validation",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "provider_error",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": true,
+      "scope": "run"
+    },
+    {
+      "code": "provider_invalid_request",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "provider_rate_limited",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": true,
+      "scope": "run"
+    },
+    {
+      "code": "provider_timeout",
+      "http_status": 0,
+      "category": "provider",
+      "retryable": true,
+      "scope": "run"
+    },
+    {
+      "code": "rate_limited",
+      "http_status": 429,
+      "category": "rate_limit",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "run_error",
+      "http_status": 0,
+      "category": "runtime",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "service_unavailable",
+      "http_status": 503,
+      "category": "runtime",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "session_busy",
+      "http_status": 409,
+      "category": "conflict",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "session_error",
+      "http_status": 0,
+      "category": "runtime",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "session_paused",
+      "http_status": 0,
+      "category": "conflict",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "store_error",
+      "http_status": 0,
+      "category": "runtime",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "target_conflict",
+      "http_status": 409,
+      "category": "conflict",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "target_ref_static",
+      "http_status": 409,
+      "category": "conflict",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "target_route_immutable",
+      "http_status": 409,
+      "category": "conflict",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "tenant_mismatch",
+      "http_status": 403,
+      "category": "auth",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "timer_ack_persist_failed",
+      "http_status": 0,
+      "category": "timer",
+      "retryable": true,
+      "scope": "timer"
+    },
+    {
+      "code": "timer_callback_rejected",
+      "http_status": 0,
+      "category": "timer",
+      "retryable": true,
+      "scope": "timer"
+    },
+    {
+      "code": "timer_callback_unknown",
+      "http_status": 0,
+      "category": "timer",
+      "retryable": true,
+      "scope": "timer"
+    },
+    {
+      "code": "timer_configuration_error",
+      "http_status": 0,
+      "category": "timer",
+      "retryable": false,
+      "scope": "timer"
+    },
+    {
+      "code": "timer_submit_failed",
+      "http_status": 0,
+      "category": "timer",
+      "retryable": true,
+      "scope": "timer"
+    },
+    {
+      "code": "timer_target_changed",
+      "http_status": 0,
+      "category": "timer",
+      "retryable": false,
+      "scope": "timer"
+    },
+    {
+      "code": "timer_target_unavailable",
+      "http_status": 403,
+      "category": "timer",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "tool_denied",
+      "http_status": 0,
+      "category": "policy",
+      "retryable": false,
+      "scope": "run"
+    },
+    {
+      "code": "unauthorized",
+      "http_status": 401,
+      "category": "auth",
+      "retryable": false,
+      "scope": "http"
+    },
+    {
+      "code": "upstream_error",
+      "http_status": 502,
+      "category": "provider",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "upstream_timeout",
+      "http_status": 504,
+      "category": "provider",
+      "retryable": true,
+      "scope": "http"
+    },
+    {
+      "code": "validation_failed",
+      "http_status": 422,
+      "category": "validation",
+      "retryable": false,
+      "scope": "http"
+    }
+  ],
+  "status": "stable",
+  "version_header": "X-Chronotope-Application-Contract"
+}

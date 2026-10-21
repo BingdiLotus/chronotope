@@ -117,6 +117,7 @@ type Record struct {
 	SubmitAttempts   int        `json:"submit_attempts"`
 	CallbackAttempts int        `json:"callback_attempts"`
 	LastError        string     `json:"last_error,omitempty"`
+	LastErrorCode    string     `json:"last_error_code,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	SubmittedAt      *time.Time `json:"submitted_at,omitempty"`
 	AcknowledgedAt   *time.Time `json:"acknowledged_at,omitempty"`
