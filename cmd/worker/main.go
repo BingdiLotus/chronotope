@@ -24,6 +24,7 @@ import (
 	"github.com/bingdilotus/chronotope/internal/policy"
 	"github.com/bingdilotus/chronotope/internal/restate"
 	"github.com/bingdilotus/chronotope/internal/store"
+	"github.com/bingdilotus/chronotope/internal/targets"
 )
 
 func main() {
@@ -52,11 +53,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("application configuration: %v", err)
 	}
-	bridges := map[string]restate.ApplicationBridgeConfig{}
-	for _, bridge := range applications.Bridges {
-		bridges[bridge.Ref] = restate.ApplicationBridgeConfig{TenantID: bridge.TenantID, URL: bridge.URL, BearerToken: bridge.BearerToken}
-	}
-	applicationClient, err := restate.NewApplicationToolClient(bridges)
+	registry := targets.New(applications, st)
+	applicationClient, err := restate.NewApplicationToolClientWithSource(workerBridgeSource{registry: registry})
 	if err != nil {
 		log.Fatalf("application bridges: %v", err)
 	}
@@ -69,7 +67,7 @@ func main() {
 	}
 	deps := &restate.Deps{
 		ApplicationTools: applicationClient,
-		Timers:           &restate.TimerDeps{Store: st, Targets: applications.TimerTargets},
+		Timers:           &restate.TimerDeps{Store: st, Targets: applications.TimerTargets, Resolver: registry},
 		Store:            st,
 		Harness:          restate.NewHarnessClient(*harnessURL),
 		HarnessEndpoint:  *harnessURL,
@@ -125,6 +123,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "chronotope-worker"})
 	})
+	mux.Handle("GET /metrics", observability.MetricsHandler())
 	mux.Handle("/", handler)
 
 	srv := &http.Server{Addr: *addr, Handler: mux}
@@ -190,6 +189,18 @@ func budgetPolicyOf(st *store.Store) restate.BudgetPolicy {
 		Org:   st.GetOrgQuotas,
 		Usage: st.OrgDailyUsage,
 	}
+}
+
+// workerBridgeSource adapts the shared target registry to the worker's private
+// bridge configuration shape. It is consulted per tool call; no restart needed.
+type workerBridgeSource struct{ registry *targets.Registry }
+
+func (w workerBridgeSource) ResolveBridge(ctx context.Context, ref string) (restate.ApplicationBridgeConfig, error) {
+	bridge, err := w.registry.ResolveBridge(ctx, ref)
+	if err != nil {
+		return restate.ApplicationBridgeConfig{}, err
+	}
+	return restate.ApplicationBridgeConfig{TenantID: bridge.TenantID, URL: bridge.URL, BearerToken: bridge.BearerToken}, nil
 }
 
 func envOr(key, fallback string) string {

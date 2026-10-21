@@ -22,8 +22,10 @@ import (
 	"github.com/bingdilotus/chronotope/internal/appconfig"
 	"github.com/bingdilotus/chronotope/internal/blobstore"
 	"github.com/bingdilotus/chronotope/internal/events"
+	"github.com/bingdilotus/chronotope/internal/observability"
 	"github.com/bingdilotus/chronotope/internal/restate"
 	"github.com/bingdilotus/chronotope/internal/store"
+	"github.com/bingdilotus/chronotope/internal/targets"
 )
 
 func main() {
@@ -58,11 +60,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("application configuration: %v", err)
 	}
+	registry := targets.New(applications, st)
 	h.ApplicationBridgeTenants = map[string]string{}
 	for _, bridge := range applications.Bridges {
 		h.ApplicationBridgeTenants[bridge.Ref] = bridge.TenantID
 	}
-	h.Timers = &api.TimerHandler{Store: st, Targets: applications.TimerTargets}
+	h.TargetRegistry = registry
+	h.ApplicationTargets = st
+	h.Timers = &api.TimerHandler{Store: st, Targets: applications.TimerTargets, Resolver: registry}
 	timers := &api.TimerRecovery{Store: st, Ingress: h.Ingress, Logger: slog.Default()}
 	go timers.Run(ctx, time.Second)
 	// 嵌入门面（期 3 §D：共享知识写入的向量来源——harness /embed）
@@ -133,6 +138,7 @@ func main() {
 	go deliverer.Run(ctx, deliverInterval)
 
 	r := chi.NewRouter()
+	r.Use(api.ContractVersionMiddleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
@@ -146,6 +152,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","service":"chronotope-api"}`))
 	})
+	r.Get("/metrics", observability.MetricsHandler().ServeHTTP)
 	r.Mount("/", h.Router())
 
 	srv := &http.Server{Addr: *addr, Handler: r}

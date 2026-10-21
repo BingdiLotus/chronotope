@@ -73,7 +73,7 @@ Content-Type: application/json
 ## 固定工具表与执行权威
 
 应用 profile 的 `application_tools` 定义 alias → 内部 tool_ref、description、input_schema
-的一一映射。只有 worker 持有内部引用、固定 bridge URL 和服务认证；模型只提供业务参数。
+的一一映射。只有 worker 持有内部引用、受信 bridge target（静态 env 或动态注册）和服务认证；模型只提供业务参数。
 旧 executor 工具常量不构成应用工具白名单，带冒号的内部引用不能直接作为 provider function name。
 bridge context 从 bound run 派生，字段见[应用接入契约](../应用接入契约.md)。
 

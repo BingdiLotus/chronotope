@@ -67,12 +67,13 @@ func (s *timerAPIStore) MarkApplicationTimerSubmitted(ctx context.Context, h tim
 	s.submitted++
 	return nil
 }
-func (s *timerAPIStore) RecordApplicationTimerSubmitError(ctx context.Context, h timer.Handle, message string) error {
+func (s *timerAPIStore) RecordApplicationTimerSubmitError(ctx context.Context, h timer.Handle, code, message string) error {
 	r, err := s.GetApplicationTimer(ctx, h)
 	if err != nil {
 		return err
 	}
 	r.LastError = message
+	r.LastErrorCode = code
 	r.SubmitAttempts++
 	return nil
 }
@@ -114,6 +115,13 @@ func TestApplicationTimerAPIAdmissionAndScope(t *testing.T) {
 		if w.Code != want {
 			t.Fatalf("auth %q: %d %s", key, w.Code, w.Body)
 		}
+		body := responseObject(t, w)
+		if key == "" && body["error_code"] != "unauthorized" {
+			t.Fatalf("auth error code: %v", body)
+		}
+		if key == "key-b" && body["error_code"] != "tenant_mismatch" {
+			t.Fatalf("tenant error code: %v", body)
+		}
 	}
 	if len(st.rows) != 0 {
 		t.Fatal("unauthorized request persisted a timer")
@@ -121,6 +129,9 @@ func TestApplicationTimerAPIAdmissionAndScope(t *testing.T) {
 	w := timerAPIRequest(router, "POST", "/timers", "key-a", in)
 	if w.Code != 202 {
 		t.Fatalf("admit: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "callback_url") || strings.Contains(w.Body.String(), "Bearer ") {
+		t.Fatalf("timer admission leaked receiver configuration: %s", w.Body.String())
 	}
 	location := w.Header().Get("Location")
 	if !strings.Contains(location, "scope_id=channel") {
@@ -134,12 +145,16 @@ func TestApplicationTimerAPIAdmissionAndScope(t *testing.T) {
 	changed.OpaqueActionRef = "other"
 	if w := timerAPIRequest(router, "POST", "/timers", "key-a", changed); w.Code != 409 {
 		t.Fatalf("changed payload: %d", w.Code)
+	} else if responseObject(t, w)["error_code"] != "idempotency_conflict" {
+		t.Fatalf("timer conflict code: %s", w.Body.String())
 	}
 	if w := timerAPIRequest(router, "GET", location, "key-a", nil); w.Code != 200 {
 		t.Fatalf("query: %d %s", w.Code, w.Body)
 	}
 	if w := timerAPIRequest(router, "GET", location, "key-b", nil); w.Code != 403 {
 		t.Fatalf("cross tenant: %d", w.Code)
+	} else if responseObject(t, w)["error_code"] != "tenant_mismatch" {
+		t.Fatalf("cross tenant code: %s", w.Body.String())
 	}
 	wrongScope := strings.Replace(location, "scope_id=channel", "scope_id=private", 1)
 	if w := timerAPIRequest(router, "GET", wrongScope, "key-a", nil); w.Code != 404 {
@@ -153,6 +168,8 @@ func TestApplicationTimerAPIAdmissionAndScope(t *testing.T) {
 	changed.ScopeID = "private"
 	if w := timerAPIRequest(router, "POST", "/timers", "key-a", changed); w.Code != 403 {
 		t.Fatalf("unconfigured scope: %d", w.Code)
+	} else if responseObject(t, w)["error_code"] != "timer_target_unavailable" {
+		t.Fatalf("unconfigured target code: %s", w.Body.String())
 	}
 	var raw map[string]any
 	data, _ := json.Marshal(in)
@@ -160,6 +177,8 @@ func TestApplicationTimerAPIAdmissionAndScope(t *testing.T) {
 	raw["callback_url"] = "http://attacker/fire"
 	if w := timerAPIRequest(router, "POST", "/timers", "key-a", raw); w.Code != 400 {
 		t.Fatalf("model callback URL: %d", w.Code)
+	} else if responseObject(t, w)["error_code"] != "invalid_request" {
+		t.Fatalf("unknown callback field code: %s", w.Body.String())
 	}
 	encoded := in
 	encoded.TimerID = "timer/é?100%"
@@ -176,6 +195,8 @@ func TestApplicationTimerAPIAdmissionAndScope(t *testing.T) {
 	changed.Revision++
 	if w := timerAPIRequest(router, "POST", "/timers", "key-a", changed); w.Code != 500 {
 		t.Fatalf("false durable ACK: %d", w.Code)
+	} else if responseObject(t, w)["error_code"] != "internal_error" {
+		t.Fatalf("store failure code: %s", w.Body.String())
 	}
 }
 
@@ -195,15 +216,19 @@ func (s *timerSendFake) Send(_ context.Context, path string, body any) error {
 }
 
 func TestTimerRecoveryRetainsStableSubmissionAfterLostResponse(t *testing.T) {
-	st, _, in := timerAPIScenario(t)
+	st, router, in := timerAPIScenario(t)
 	_, _, _ = st.CreateApplicationTimer(context.Background(), in, "bots", "digest")
 	sender := &timerSendFake{fail: true}
 	r := &TimerRecovery{Store: st, Ingress: sender}
 	if err := r.Pass(context.Background()); err == nil {
 		t.Fatal("lost response must be visible")
 	}
-	if st.submitted != 0 || st.rows[in.Key()].LastError == "" {
+	if st.submitted != 0 || st.rows[in.Key()].LastError == "" || st.rows[in.Key()].LastErrorCode != "timer_submit_failed" {
 		t.Fatal("unknown submission was marked complete")
+	}
+	queryResponse := timerAPIRequest(router, "GET", "/timers/"+in.TimerID+"?tenant_id="+in.TenantID+"&subject_ref="+in.SubjectRef+"&scope_id="+in.ScopeID+"&revision=1", "key-a", nil)
+	if queryResponse.Code != 200 || responseObject(t, queryResponse)["last_error_code"] != "timer_submit_failed" {
+		t.Fatalf("timer query must expose machine error code: %d %s", queryResponse.Code, queryResponse.Body.String())
 	}
 	sender.fail = false
 	if err := r.Pass(context.Background()); err != nil {

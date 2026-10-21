@@ -13,7 +13,7 @@ import (
 // explicit development mode or the bootstrap administrator, not a body field.
 func requireOrg(w http.ResponseWriter, r *http.Request, orgID string) bool {
 	if org := OrgFrom(r.Context()); org != "" && org != orgID {
-		writeError(w, http.StatusForbidden, 403, "resource belongs to a different tenant")
+		writeErrorCode(w, http.StatusForbidden, "tenant_mismatch", "resource belongs to a different tenant")
 		return false
 	}
 	return true

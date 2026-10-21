@@ -1,0 +1,7 @@
+{
+  "tenant_id": "tenant-example",
+  "timer_id": "reminder-example",
+  "revision": 1,
+  "fire_id": "fire_e6b4348f49d7c3c6cf1ebe3b50fe10b1019c306e6657fc5c4189927269b26eb7",
+  "opaque_action_ref": "action:example"
+}

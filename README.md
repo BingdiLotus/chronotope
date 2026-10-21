@@ -50,7 +50,7 @@ W1 异步接纳/结果查询和应用工具/timer/进程恢复；fake 结果不�
 
 | 层 | 命令 | 规模 |
 |---|---|---|
-| **当前 fake CI** | `bash scripts/ci.sh --e2e` | 单测 + vet + harness pytest + W1 202/GET + application runtime 故障恢复 |
+| **当前 fake CI** | `bash scripts/ci.sh --e2e` | 单测 + vet + 契约测试 + harness pytest + W1 202/GET + application runtime 故障恢复 |
 | **历史场景** | `scripts/demo-legacy.sh`、旧 `test/e2e/` | 未全量适配当前创建幂等/异步 run/工具 alias，不计入当前通过证据 |
 | **控制台 e2e** | `bash scripts/console-e2e.sh <console\|tt\|runtree>` | Playwright 5 用例 |
 | **当前真实模型路径** | `python3 test/e2e/application-runtime.py --mode real`（需有效 provider 配置） | 工具结果回喂/恢复；具体通过以实际报告为准 |
@@ -120,7 +120,7 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 ├─ internal/
 │  ├─ api/                      # 网关实现（REST + SSE hub/poller + ingress + 限流/认证）
 │  ├─ core/                     # 共享契约：事件 schema、/runs 协议、Session API 类型
-│  ├─ store/                    # Postgres 访问层 + migrations 001–038（幂等，启动自动迁移）
+│  ├─ store/                    # Postgres 访问层 + migrations 001–040（幂等，启动自动迁移）
 │  ├─ events/                   # 事件投影：SSE hub、outbox 投递
 │  ├─ restate/                  # worker 服务层：六 Restate 服务、应用执行循环、策略缝装配
 │  ├─ execproto/                # execute 协议：Driver 接口（docker / e2b）
@@ -136,7 +136,7 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 │  └─ 期2-*.md / 期3-*.md       # 细化方案 + 实施进度（含审计/复审记录）
 └─ test/
    ├─ e2e/                      # W1 / application-runtime 当前门禁；其余历史场景
-   ├─ contract/                 # 契约测试
+   ├─ contract/                 # 应用/协议契约测试 + fakeapp（Bots-like receiver）
    └─ chaos/                    # kill -9 恢复验证
 ```
 
@@ -147,6 +147,9 @@ chronotope/                     # Go module：github.com/bingdilotus/chronotope�
 | [期8-细化落地方案.md](./docs/期8-细化落地方案.md) | Chronotope 通用 runtime P0：工具回喂、异步接纳、身份隔离、durable timer 与故障验收 |
 | [期8-开发进展](./docs/期8-开发进展.md) | C0–C3 交付、真实/fake 恢复证据和遗留边界 |
 | [应用接入契约](./docs/应用接入契约.md) | 已实现的应用工具 bridge、可信 context、异步 run 查询及 timer/fire 合同 |
+| [应用契约 v1.0.0](./docs/contracts/application-contract.md) | 契约版本/兼容边界、错误码、契约测试矩阵与 Bots 最小升级步骤 |
+| [错误分类与可观测性](./docs/错误分类与可观测性.md) | retryable/terminal 语义、结构化日志、指标与 Bots 错误映射 |
+| [动态 target 注册与 fencing](./docs/动态-target-注册与-fencing.md) | 运行时 bridge/timer target、静态 env 兼容、digest fencing 与审计 |
 | [多Agent持久协作方案横评](./docs/调研-多Agent持久协作方案横评.md) | runtime/framework、MCP/A2A、持久邮箱与 child 机制研究，非 MVP 全量前置 |
 | [Bots 产品设计入口](../bots/README.md) | Bot 原生知识/任务/治理、联合 MVP、身份/RSI、承诺与产品调研的唯一维护仓库 |
 | [Bots 职责边界](../bots/docs/Chronotope与Bingdi-Bots职责边界.md) | 消费方、执行 infra 与外部应用的语义 owner；本地并列仓库引用 |

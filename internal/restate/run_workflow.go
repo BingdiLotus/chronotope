@@ -80,8 +80,14 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 	defer func() {
 		if err != nil {
 			if row, getErr := deps.Store.GetRun(ctx, runID); getErr == nil && row != nil && row.Status != sessionapi.RunCompleted && row.Status != sessionapi.RunFailed && row.Status != sessionapi.RunCanceled {
-				if finalErr := finalizeTerminal(ctx, deps.Store, in.SessionID, runID, sessionapi.RunFailed, RunTerminalResult{Error: &RunError{Code: "run_error", Message: err.Error()}, Usage: RunUsage{UsageUnknown: true}}); finalErr != nil {
+				runErr := runErrorFor("run_error", err.Error(), true)
+				if finalErr := finalizeTerminal(ctx, deps.Store, in.SessionID, runID, sessionapi.RunFailed, RunTerminalResult{Error: runErr, Usage: RunUsage{UsageUnknown: true}}); finalErr != nil {
 					err = fmt.Errorf("%w; terminal persistence: %v", err, finalErr)
+				} else {
+					slog.Default().Warn("run.terminal", "run_id", runID, "session_id", in.SessionID,
+						"status", sessionapi.RunFailed, "error_code", runErr.Code,
+						"category", runErr.Category, "retryable", runErr.Retryable)
+					observability.RecordRunTerminal(string(sessionapi.RunFailed), runErr.Code, string(runErr.Category), runErr.Retryable, 0)
 				}
 			}
 		}
@@ -548,17 +554,25 @@ func runLoop(ctx restate.Context, deps *Deps, in RunInput, runID string) (out Ru
 // failRun 终态失败路径的显式记账（可信度专项 ③：事件发射与终态写失败不得
 // 静默——审计系统丢审计记录恰好摧毁价值主张；失败记 WARN 但流程继续终态）。
 func failRun(ctx context.Context, emit *Emitter, st Store, sessionID, runID string, step int, reason, detail, code string) {
-	if eErr := emit.Emit(ctx, sessionID, runID, step, event.RunFailed, "", "", map[string]any{
+	runErr := runErrorFor(reason, detail, true)
+	payload := map[string]any{
 		"reason": reason, "code": code,
-	}); eErr != nil {
+		"error_code": runErr.Code, "category": runErr.Category, "retryable": runErr.Retryable,
+	}
+	if eErr := emit.Emit(ctx, sessionID, runID, step, event.RunFailed, "", "", payload); eErr != nil {
 		slog.Default().Warn("run.failed 事件发射失败", "run", runID, "err", eErr)
 	}
-	if err := finalizeTerminal(ctx, st, sessionID, runID, sessionapi.RunFailed, RunTerminalResult{Error: &RunError{Code: reason, Message: detail}, Usage: RunUsage{UsageUnknown: true}, Steps: step + 1}); err != nil {
+	if err := finalizeTerminal(ctx, st, sessionID, runID, sessionapi.RunFailed, RunTerminalResult{Error: runErr, Usage: RunUsage{UsageUnknown: true}, Steps: step + 1}); err != nil {
 		slog.Default().Warn("run terminal persistence failed", "run", runID, "error", err)
 	}
-	if detail != "" {
-		slog.Default().Warn("run failed", "run", runID, "reason", reason, "detail", detail)
+	tenantID := ""
+	if sess, err := st.GetSession(ctx, sessionID); err == nil && sess != nil {
+		tenantID = sess.OrgID
 	}
+	slog.Default().Warn("run.terminal", "run_id", runID, "session_id", sessionID, "tenant_id", tenantID,
+		"status", sessionapi.RunFailed, "error_code", runErr.Code, "category", runErr.Category,
+		"retryable", runErr.Retryable, "steps", step+1)
+	observability.RecordRunTerminal(string(sessionapi.RunFailed), runErr.Code, string(runErr.Category), runErr.Retryable, 0)
 }
 
 // finalizeCompleted 完成终态提交（可信度专项 runLoop 拆分——Done 分支的
