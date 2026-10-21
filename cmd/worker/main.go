@@ -48,6 +48,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
+	// Keep schema initialization convergent regardless of whether API or worker
+	// starts first (dynamic target registry reads migrations 039/040 before the
+	// first bridge/timer operation).
+	if err := st.Migrate(ctx); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
 	defer st.Close()
 	applications, err := appconfig.Load()
 	if err != nil {
